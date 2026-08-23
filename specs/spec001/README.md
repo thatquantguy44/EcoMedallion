@@ -270,7 +270,7 @@ existing style.
 
 ### Phase 5: Manifest
 
-Add an inactive starter manifest: `manifests/ecb_rates.yml`.
+Add a starter manifest: `manifests/ecb_rates.yml`.
 
 Initial entries should be conservative, high-value, and easy to verify:
 
@@ -287,7 +287,7 @@ series:
     category: international
     frequency: d
     units: USD per EUR
-    active: false
+    active: true
     source: ecb
     load_type: incremental
     expected_update_frequency: daily
@@ -393,9 +393,8 @@ perform a network call.
 
 ### Phase 9: Optional Live Smoke Test
 
-After unit tests pass, temporarily set the starter ECB row to `active: true`
-locally, then run one live dry run manually. Revert the activation before
-committing unless the series has been deliberately approved for activation.
+After unit tests pass, run one live dry run manually. The starter ECB row is now
+deliberately active because the EXR series has been verified and cataloged.
 
 ```bash
 PYTHONPATH=src python -m fred_pipeline validate --manifests manifests
@@ -478,8 +477,8 @@ python -m pytest
   endpoints to generate manifests from verified dataflows.
 - Add `updatedAfter`-based incremental mode if the warehouse gains per-source
   update-timestamp watermarks.
-- Add curated ECB series to `config/series_catalog.yml` for presentation
-  semantics once the ingestion IDs are verified.
+- Add more curated ECB series to `config/series_catalog.yml` for presentation
+  semantics once additional ingestion IDs are verified.
 - Add cross-source reconciliation pairs where ECB overlaps with FRED/BIS
   market rates or exchange rates.
 - Consider a generic SDMX CSV normalizer shared by BIS and ECB if a third SDMX

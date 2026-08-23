@@ -49,6 +49,7 @@ series:
   - {series_id: PCEPI,    econ_category: INFLATION, polarity: -1, default_transform: pc1,   notes: PCE headline}
   - {series_id: PCEPILFE, econ_category: INFLATION, polarity: -1, default_transform: pc1,   notes: PCE core}
   - {series_id: CORESTICKM159SFRBATL, econ_category: INFLATION, polarity: -1, default_transform: level, notes: Atlanta Fed sticky core CPI (YoY rate)}
+  - {series_id: STICKCPIM159SFRBATL, econ_category: INFLATION, polarity: -1, default_transform: level, notes: Atlanta Fed sticky headline CPI (YoY rate)}
   - {series_id: PCETRIM12M159SFRBDAL, econ_category: INFLATION, polarity: -1, default_transform: level, notes: Dallas Fed trimmed-mean PCE (12m rate)}
   - {series_id: PPIACO,   econ_category: INFLATION, polarity: -1, default_transform: pc1,   notes: PPI all commodities}
   - {series_id: T5YIE,    econ_category: INFLATION, polarity: -1, default_transform: level, notes: 5y breakeven}
@@ -63,6 +64,7 @@ series:
   - {series_id: CUSR0000SETB01, econ_category: INFLATION, polarity: -1, default_transform: pc1, source: bls, notes: CPI gasoline (SA)}
 
   # ---- GROWTH ----------------------------------------------------------------
+  - {series_id: GDP,      econ_category: GROWTH, polarity: 1, default_transform: pc1, surprise_window: 8, notes: Nominal GDP}
   - {series_id: GDPC1,    econ_category: GROWTH, polarity: 1, default_transform: pc1, surprise_window: 8, notes: Real GDP}
   - {series_id: GDI,      econ_category: GROWTH, polarity: 1, default_transform: pc1, surprise_window: 8, notes: Gross domestic income}
   - {series_id: GPDIC1,   econ_category: GROWTH, polarity: 1, default_transform: pc1, surprise_window: 8, notes: Real private investment}
@@ -82,17 +84,28 @@ series:
   - {series_id: GACDISA066MSFRBNY,  econ_category: ACTIVITY, polarity: 1, default_transform: level, notes: Empire State manufacturing survey}
   - {series_id: GACDFSA066MSFRBPHI, econ_category: ACTIVITY, polarity: 1, default_transform: level, notes: Philadelphia Fed manufacturing survey}
   - {series_id: BACTSAMFRBDAL,      econ_category: ACTIVITY, polarity: 1, default_transform: level, notes: Dallas Fed manufacturing survey}
+  - {series_id: DCOILWTICO,         econ_category: ACTIVITY, polarity: 0, default_transform: level, decimals: 2, notes: WTI crude oil spot price}
 
   # ---- RATES -----------------------------------------------------------------
   - {series_id: DGS3MO,   econ_category: RATES, polarity: 0, default_transform: level, notes: 3M Treasury}
   - {series_id: DGS2,     econ_category: RATES, polarity: 0, default_transform: level, notes: 2Y Treasury}
+  - {series_id: DGS3,     econ_category: RATES, polarity: 0, default_transform: level, notes: 3Y Treasury}
   - {series_id: DGS10,    econ_category: RATES, polarity: 0, default_transform: level, notes: 10Y Treasury}
   - {series_id: DGS30,    econ_category: RATES, polarity: 0, default_transform: level, notes: 30Y Treasury}
   - {series_id: FEDFUNDS, econ_category: RATES, polarity: 0, default_transform: level, notes: Effective fed funds (monthly)}
+  - {series_id: DFF,      econ_category: RATES, polarity: 0, default_transform: level, notes: Effective fed funds (daily)}
   - {series_id: SOFR,     econ_category: RATES, polarity: 0, default_transform: level, notes: SOFR}
+  - {series_id: SOFR30DAYAVG, econ_category: RATES, polarity: 0, default_transform: level, notes: 30-day average SOFR}
+  - {series_id: TGCRRATE, econ_category: RATES, polarity: 0, default_transform: level, notes: Tri-party general collateral rate}
+  - {series_id: RRPONTSYAWARD, econ_category: RATES, polarity: 0, default_transform: level, notes: ON RRP award rate}
+  - {series_id: DCPF3M,   econ_category: RATES, polarity: 0, default_transform: level, notes: 90-day AA financial commercial paper rate}
   - {series_id: REAINTRATREARAT10Y, econ_category: RATES, polarity: 0, default_transform: level, notes: 10y real rate}
+  - {series_id: DFII10,   econ_category: RATES, polarity: 0, default_transform: level, notes: 10y TIPS real yield}
   - {series_id: DGS1MO,   econ_category: RATES, polarity: 0, default_transform: level, notes: 1M Treasury}
+  - {series_id: DTB4WK,   econ_category: RATES, polarity: 0, default_transform: level, notes: 4-week Treasury bill discount rate}
+  - {series_id: DTB3,     econ_category: RATES, polarity: 0, default_transform: level, notes: 3-month Treasury bill discount rate}
   - {series_id: DGS6MO,   econ_category: RATES, polarity: 0, default_transform: level, notes: 6M Treasury}
+  - {series_id: DTB6,     econ_category: RATES, polarity: 0, default_transform: level, notes: 6-month Treasury bill discount rate}
   - {series_id: DGS1,     econ_category: RATES, polarity: 0, default_transform: level, notes: 1Y Treasury}
   - {series_id: DGS5,     econ_category: RATES, polarity: 0, default_transform: level, notes: 5Y Treasury}
   - {series_id: DGS7,     econ_category: RATES, polarity: 0, default_transform: level, notes: 7Y Treasury}
@@ -106,6 +119,9 @@ series:
   - {series_id: DFEDTARL, econ_category: RATES, polarity: 0, default_transform: level, notes: Fed funds target lower}
   - {series_id: DPRIME,   econ_category: RATES, polarity: 0, default_transform: level, notes: Bank prime loan rate}
   - {series_id: MORTGAGE30US, econ_category: RATES, polarity: 0, default_transform: level, notes: 30y fixed mortgage rate}
+  - {series_id: MORTGAGE15US, econ_category: RATES, polarity: 0, default_transform: level, notes: 15y fixed mortgage rate}
+  - {series_id: "ECB:FM:M.U2.EUR.RT.MM.EURIBOR3MD_.HSTA", econ_category: RATES, polarity: 0, default_transform: level, source: ecb, decimals: 4, notes: ECB 3-month EURIBOR}
+  - {series_id: "ECB:YC:B.U2.EUR.4F.G_N_A.SV_C_YM.SR_10Y", econ_category: RATES, polarity: 0, default_transform: level, source: ecb, decimals: 4, notes: ECB euro area 10y yield curve spot rate}
 
   # ---- CREDIT ----------------------------------------------------------------
   - {series_id: NFCI,     econ_category: CREDIT, polarity: -1, default_transform: level, notes: Chicago Fed financial conditions}
@@ -119,6 +135,8 @@ series:
   - {series_id: BAMLC0A0CM,   econ_category: CREDIT, polarity: -1, default_transform: level, notes: IG corporate OAS}
   - {series_id: BAMLH0A0HYM2, econ_category: CREDIT, polarity: -1, default_transform: level, notes: HY corporate OAS}
   - {series_id: BAMLC0A4CBBB, econ_category: CREDIT, polarity: -1, default_transform: level, notes: BBB corporate OAS}
+  - {series_id: BAMLH0A1HYBB, econ_category: CREDIT, polarity: -1, default_transform: level, notes: BB high-yield corporate OAS}
+  - {series_id: BAMLH0A2HYB,  econ_category: CREDIT, polarity: -1, default_transform: level, notes: B high-yield corporate OAS}
   - {series_id: BAMLH0A3HYC,  econ_category: CREDIT, polarity: -1, default_transform: level, notes: CCC and lower OAS}
   - {series_id: BAA10Y,   econ_category: CREDIT, polarity: -1, default_transform: level, notes: Baa spread over 10y Treasury}
   - {series_id: AAA10Y,   econ_category: CREDIT, polarity: -1, default_transform: level, notes: Aaa spread over 10y Treasury}
@@ -160,6 +178,13 @@ series:
   # ---- FX --------------------------------------------------------------------
   - {series_id: DTWEXBGS, econ_category: FX, polarity: 0, default_transform: level, notes: Broad dollar index}
   - {series_id: DEXUSEU,  econ_category: FX, polarity: 0, default_transform: level, decimals: 4, notes: USD per EUR}
+  - {series_id: "ECB:EXR:D.USD.EUR.SP00.A", econ_category: FX, polarity: 0, default_transform: level, source: ecb, decimals: 4, notes: ECB USD per EUR reference rate}
+  - {series_id: "ECB:EXR:D.GBP.EUR.SP00.A", econ_category: FX, polarity: 0, default_transform: level, source: ecb, decimals: 4, notes: ECB GBP per EUR reference rate}
+  - {series_id: "ECB:EXR:D.JPY.EUR.SP00.A", econ_category: FX, polarity: 0, default_transform: level, source: ecb, decimals: 2, notes: ECB JPY per EUR reference rate}
+  - {series_id: "ECB:EXR:D.CHF.EUR.SP00.A", econ_category: FX, polarity: 0, default_transform: level, source: ecb, decimals: 4, notes: ECB CHF per EUR reference rate}
+  - {series_id: "ECB:EXR:D.CNY.EUR.SP00.A", econ_category: FX, polarity: 0, default_transform: level, source: ecb, decimals: 4, notes: ECB CNY per EUR reference rate}
+  - {series_id: "ECB:EXR:D.CAD.EUR.SP00.A", econ_category: FX, polarity: 0, default_transform: level, source: ecb, decimals: 4, notes: ECB CAD per EUR reference rate}
+  - {series_id: "ECB:EXR:D.AUD.EUR.SP00.A", econ_category: FX, polarity: 0, default_transform: level, source: ecb, decimals: 4, notes: ECB AUD per EUR reference rate}
   - {series_id: DEXJPUS,  econ_category: FX, polarity: 0, default_transform: level, notes: JPY per USD}
   - {series_id: DEXUSUK,  econ_category: FX, polarity: 0, default_transform: level, decimals: 4, notes: USD per GBP}
   - {series_id: DEXCHUS,  econ_category: FX, polarity: 0, default_transform: level, decimals: 4, notes: CNY per USD}

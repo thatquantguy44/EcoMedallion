@@ -26,10 +26,12 @@ from __future__ import annotations
 import datetime as _dt
 import hashlib
 import json
+import logging
 import os
 import sqlite3
+from collections.abc import Callable, Iterable, Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Any, Callable, Iterable, Optional, Sequence
+from typing import Any
 
 from fred_pipeline.audit import EtlRun, EtlSeriesRun
 from fred_pipeline.config import PipelineConfig
@@ -37,6 +39,8 @@ from fred_pipeline.manifest import Manifest
 from fred_pipeline.meta import build_meta_rows
 from fred_pipeline.quality import QualityReport
 from fred_pipeline.transform import latest_by_observation
+
+log = logging.getLogger(__name__)
 from fred_pipeline.warehouse import dq_rows
 
 
@@ -61,8 +65,11 @@ def _gold_feature_impls():
         )
 
         return (
-            "polars", daily_feature_matrix_frame, compute_feature_transforms_frame,
-            compute_curve_spreads_frame, compute_revision_stats_frame,
+            "polars",
+            daily_feature_matrix_frame,
+            compute_feature_transforms_frame,
+            compute_curve_spreads_frame,
+            compute_revision_stats_frame,
         )
     except ImportError:
         from fred_pipeline.features import (
@@ -73,8 +80,11 @@ def _gold_feature_impls():
         from fred_pipeline.transform import daily_feature_matrix
 
         return (
-            "python", daily_feature_matrix, compute_feature_transforms,
-            compute_curve_spreads, compute_revision_stats,
+            "python",
+            daily_feature_matrix,
+            compute_feature_transforms,
+            compute_curve_spreads,
+            compute_revision_stats,
         )
 
 
@@ -617,10 +627,11 @@ class LocalWarehouse:
         # journal_mode pragma (WAL is persisted); the others are session-level.
         self.conn.execute("PRAGMA journal_mode=WAL")
         self.conn.execute("PRAGMA synchronous=NORMAL")
-        self.conn.execute("PRAGMA cache_size=-65536")    # 64 MB
+        self.conn.execute("PRAGMA cache_size=-65536")  # 64 MB
         self.conn.execute("PRAGMA mmap_size=268435456")  # 256 MB
         self.conn.executescript(_SCHEMA)
         self._apply_additive_migrations()
+        self._defer_commits = False
         self.conn.commit()
 
     # ---- schema migrations ----------------------------------------------
@@ -642,15 +653,12 @@ class LocalWarehouse:
     def _apply_additive_migrations(self) -> None:
         for table, column, coltype in self._ADDED_COLUMNS:
             existing = {
-                row[1]
-                for row in self.conn.execute(f"PRAGMA table_info({table})")
+                row[1] for row in self.conn.execute(f"PRAGMA table_info({table})")
             }
             if not existing:
                 continue  # table absent entirely; _SCHEMA just created it
             if column not in existing:
-                self.conn.execute(
-                    f"ALTER TABLE {table} ADD COLUMN {column} {coltype}"
-                )
+                self.conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {coltype}")
 
     # ---- low-level helpers ---------------------------------------------
 
@@ -658,7 +666,7 @@ class LocalWarehouse:
         self,
         table: str,
         rows: Sequence[dict[str, Any]],
-        upsert_keys: Optional[Sequence[str]] = None,
+        upsert_keys: Sequence[str] | None = None,
     ) -> int:
         if not rows:
             return 0
@@ -674,14 +682,15 @@ class LocalWarehouse:
             sql += f" ON CONFLICT({conflict}) DO UPDATE SET {updates}"
         data = [tuple(_encode(r.get(c)) for c in cols) for r in rows]
         self.conn.executemany(sql, data)
-        self.conn.commit()
+        if not self._defer_commits:
+            self.conn.commit()
         return len(rows)
 
     def _insert_frame(
         self,
         table: str,
         df: Any,
-        upsert_keys: Optional[Sequence[str]] = None,
+        upsert_keys: Sequence[str] | None = None,
     ) -> int:
         """Like :meth:`_insert` but for a polars DataFrame.
 
@@ -706,7 +715,8 @@ class LocalWarehouse:
             sql += f" ON CONFLICT({conflict}) DO UPDATE SET {updates}"
         n = df.height
         self.conn.executemany(sql, df.iter_rows())
-        self.conn.commit()
+        if not self._defer_commits:
+            self.conn.commit()
         return n
 
     def _read(self, table: str) -> list[dict[str, Any]]:
@@ -731,7 +741,7 @@ class LocalWarehouse:
         )
         return counts
 
-    def restate_start(self, series_id: str, n: int) -> Optional[str]:
+    def restate_start(self, series_id: str, n: int) -> str | None:
         """Earliest observation_date among the N most recent for this series.
 
         Returns ``None`` when the series has no rows yet (→ full load).
@@ -753,11 +763,11 @@ class LocalWarehouse:
     def write_bronze(self, rows: list[dict[str, Any]]) -> int:
         return self._insert("bronze_fred_api_response", rows)
 
-    def read_bronze(
-        self, series_ids: Optional[list[str]] = None
-    ) -> list[dict[str, Any]]:
-        sql = ("SELECT source, series_id, response_payload, run_id, ingested_at "
-               "FROM bronze_fred_api_response")
+    def read_bronze(self, series_ids: list[str] | None = None) -> list[dict[str, Any]]:
+        sql = (
+            "SELECT source, series_id, response_payload, run_id, ingested_at "
+            "FROM bronze_fred_api_response"
+        )
         params: tuple = ()
         if series_ids:
             placeholders = ", ".join("?" * len(series_ids))
@@ -774,6 +784,20 @@ class LocalWarehouse:
         )
 
     def build_gold(self) -> dict[str, str]:
+        self.conn.execute("BEGIN")
+        self._defer_commits = True
+        try:
+            result = self._build_gold_inner()
+        except BaseException:
+            self.conn.rollback()
+            raise
+        else:
+            self.conn.commit()
+            return result
+        finally:
+            self._defer_commits = False
+
+    def _build_gold_inner(self) -> dict[str, str]:
         silver = self._read("silver_fred_observation")
         for r in silver:
             r["is_missing"] = bool(r.get("is_missing"))
@@ -818,9 +842,13 @@ class LocalWarehouse:
         # polars-accelerated versions (output-identical, see gold_polars
         # module docstring) when available, inserting straight from the
         # DataFrame to skip Python dict overhead.
-        mode, build_daily_matrix, build_transforms, build_spreads, build_revision_stats = (
-            _gold_feature_impls()
-        )
+        (
+            mode,
+            build_daily_matrix,
+            build_transforms,
+            build_spreads,
+            build_revision_stats,
+        ) = _gold_feature_impls()
         insert = self._insert_frame if mode == "polars" else self._insert
 
         self.conn.execute("DELETE FROM gold_fred_macro_feature_daily")
@@ -839,12 +867,16 @@ class LocalWarehouse:
             compute_fred_series_zscore_rolling,
             compute_zscore_heatmap,
         )
+
         self.conn.execute("DELETE FROM gold_fred_series_zscore_rolling")
-        self._insert("gold_fred_series_zscore_rolling",
-                     compute_fred_series_zscore_rolling(feature_transform_rows))
+        self._insert(
+            "gold_fred_series_zscore_rolling",
+            compute_fred_series_zscore_rolling(feature_transform_rows),
+        )
         self.conn.execute("DELETE FROM gold_zscore_heatmap")
-        self._insert("gold_zscore_heatmap",
-                     compute_zscore_heatmap(feature_transform_rows))
+        self._insert(
+            "gold_zscore_heatmap", compute_zscore_heatmap(feature_transform_rows)
+        )
 
         self.conn.execute("DELETE FROM gold_fred_curve_spread")
         insert("gold_fred_curve_spread", build_spreads(latest))
@@ -856,17 +888,22 @@ class LocalWarehouse:
             compute_cross_series_features_pit,
             compute_source_reconciliation,
         )
+
         self.conn.execute("DELETE FROM gold_fred_cross_series_feature")
-        self._insert("gold_fred_cross_series_feature",
-                     compute_cross_series_features(latest))
+        self._insert(
+            "gold_fred_cross_series_feature", compute_cross_series_features(latest)
+        )
         # Point-in-time (as-first-reported) variant: leak-free, reads raw Silver
         # (all vintages), not latest-revision rows.
         self.conn.execute("DELETE FROM gold_fred_cross_series_feature_pit")
-        self._insert("gold_fred_cross_series_feature_pit",
-                     compute_cross_series_features_pit(silver))
+        self._insert(
+            "gold_fred_cross_series_feature_pit",
+            compute_cross_series_features_pit(silver),
+        )
         self.conn.execute("DELETE FROM gold_fred_source_reconciliation")
-        self._insert("gold_fred_source_reconciliation",
-                     compute_source_reconciliation(latest))
+        self._insert(
+            "gold_fred_source_reconciliation", compute_source_reconciliation(latest)
+        )
 
         # SEC company financials: standardize raw XBRL tags into canonical line
         # items, then derived ratios (reads raw Silver for source='sec' rows).
@@ -874,6 +911,7 @@ class LocalWarehouse:
             compute_sec_ratios,
             standardize_sec_statements,
         )
+
         fundamentals = standardize_sec_statements(silver)
         self.conn.execute("DELETE FROM gold_fred_company_fundamentals")
         self._insert("gold_fred_company_fundamentals", fundamentals)
@@ -905,6 +943,7 @@ class LocalWarehouse:
             compute_treasury_curve,
             compute_treasury_curve_rolling,
         )
+
         meta_rows = self.query(
             "SELECT series_id, title, frequency, units FROM meta_fred_series"
         )
@@ -912,7 +951,8 @@ class LocalWarehouse:
         self._insert("gold_dim_series", build_dim_series(meta_rows=meta_rows))
 
         obs_dates = [
-            r["observation_date"] for r in latest
+            r["observation_date"]
+            for r in latest
             if not r["is_missing"] and r.get("observation_date")
         ]
         usrec = [r for r in latest if r["series_id"] == "USREC"]
@@ -942,26 +982,34 @@ class LocalWarehouse:
             compute_series_structural_breaks,
         )
 
-        computed = _compute_parallel({
-            "dashboard": lambda: compute_macro_dashboard(latest),
-            "curve": lambda: compute_treasury_curve(latest),
-            "curve_spread_daily": lambda: compute_curve_spread_daily(latest),
-            "spread_inversion_episode": lambda: compute_spread_inversion_episodes(latest),
-            "benchmark_rate_board": lambda: compute_benchmark_rate_board(latest),
-            "funding": lambda: compute_funding_features(latest),
-            "credit_spread_daily": lambda: compute_credit_spread_daily(latest),
-            "inflation": lambda: compute_inflation_explorer(latest),
-            "curve_spread_rolling": lambda: compute_curve_spread_rolling(latest),
-            "credit_spread_rolling": lambda: compute_credit_spread_rolling(latest),
-            "treasury_curve_rolling": lambda: compute_treasury_curve_rolling(latest),
-            "macro_regime_daily": lambda: compute_macro_regime(latest),
-            "series_correlation": lambda: compute_series_correlation(latest),
-            "series_lead_lag": lambda: compute_series_lead_lag(latest),
-            "series_structural_breaks": lambda: compute_series_structural_breaks(latest),
-            "fomc": lambda: compute_fomc_probability(latest),
-            "global_inflation": lambda: compute_global_inflation(latest),
-            "global_policy_rates": lambda: compute_global_policy_rates(latest),
-        })
+        computed = _compute_parallel(
+            {
+                "dashboard": lambda: compute_macro_dashboard(latest),
+                "curve": lambda: compute_treasury_curve(latest),
+                "curve_spread_daily": lambda: compute_curve_spread_daily(latest),
+                "spread_inversion_episode": lambda: compute_spread_inversion_episodes(
+                    latest
+                ),
+                "benchmark_rate_board": lambda: compute_benchmark_rate_board(latest),
+                "funding": lambda: compute_funding_features(latest),
+                "credit_spread_daily": lambda: compute_credit_spread_daily(latest),
+                "inflation": lambda: compute_inflation_explorer(latest),
+                "curve_spread_rolling": lambda: compute_curve_spread_rolling(latest),
+                "credit_spread_rolling": lambda: compute_credit_spread_rolling(latest),
+                "treasury_curve_rolling": lambda: compute_treasury_curve_rolling(
+                    latest
+                ),
+                "macro_regime_daily": lambda: compute_macro_regime(latest),
+                "series_correlation": lambda: compute_series_correlation(latest),
+                "series_lead_lag": lambda: compute_series_lead_lag(latest),
+                "series_structural_breaks": lambda: compute_series_structural_breaks(
+                    latest
+                ),
+                "fomc": lambda: compute_fomc_probability(latest),
+                "global_inflation": lambda: compute_global_inflation(latest),
+                "global_policy_rates": lambda: compute_global_policy_rates(latest),
+            }
+        )
 
         dash = computed["dashboard"]
         self.conn.execute("DELETE FROM gold_macro_indicator_dashboard")
@@ -977,20 +1025,21 @@ class LocalWarehouse:
         self.conn.execute("DELETE FROM gold_treasury_curve_metrics")
         self._insert("gold_treasury_curve_metrics", curve["metrics"])
         from fred_pipeline.ns_model import compute_yield_curve_ns_factors
+
         ns_factor_rows = compute_yield_curve_ns_factors(curve["curve"])
         self.conn.execute("DELETE FROM gold_yield_curve_ns_factors")
         self._insert("gold_yield_curve_ns_factors", ns_factor_rows)
         self.conn.execute("DELETE FROM gold_curve_spread_daily")
         self._insert("gold_curve_spread_daily", computed["curve_spread_daily"])
         self.conn.execute("DELETE FROM gold_spread_inversion_episode")
-        self._insert("gold_spread_inversion_episode",
-                     computed["spread_inversion_episode"])
+        self._insert(
+            "gold_spread_inversion_episode", computed["spread_inversion_episode"]
+        )
 
         # Phase 4 rates complex: BMRK benchmark board, FUND funding tape +
         # stress gauge, CRDT credit spreads (configs under config/).
         self.conn.execute("DELETE FROM gold_benchmark_rate_board")
-        self._insert("gold_benchmark_rate_board",
-                     computed["benchmark_rate_board"])
+        self._insert("gold_benchmark_rate_board", computed["benchmark_rate_board"])
         funding = computed["funding"]
         self.conn.execute("DELETE FROM gold_funding_tape_daily")
         self._insert("gold_funding_tape_daily", funding["tape"])
@@ -1010,14 +1059,11 @@ class LocalWarehouse:
         # Rolling-window stats companions (windows 1/5/10/21/63/126/252 obs)
         # for the spread, credit, and curve daily tables.
         self.conn.execute("DELETE FROM gold_curve_spread_rolling")
-        self._insert("gold_curve_spread_rolling",
-                     computed["curve_spread_rolling"])
+        self._insert("gold_curve_spread_rolling", computed["curve_spread_rolling"])
         self.conn.execute("DELETE FROM gold_credit_spread_rolling")
-        self._insert("gold_credit_spread_rolling",
-                     computed["credit_spread_rolling"])
+        self._insert("gold_credit_spread_rolling", computed["credit_spread_rolling"])
         self.conn.execute("DELETE FROM gold_treasury_curve_rolling")
-        self._insert("gold_treasury_curve_rolling",
-                     computed["treasury_curve_rolling"])
+        self._insert("gold_treasury_curve_rolling", computed["treasury_curve_rolling"])
 
         # Phase 5: regime playbook + statistical lab (config/regime.yml,
         # config/stats_pairs.yml).
@@ -1029,8 +1075,9 @@ class LocalWarehouse:
         self.conn.execute("DELETE FROM gold_series_lead_lag")
         self._insert("gold_series_lead_lag", computed["series_lead_lag"])
         self.conn.execute("DELETE FROM gold_series_structural_breaks")
-        self._insert("gold_series_structural_breaks",
-                     computed["series_structural_breaks"])
+        self._insert(
+            "gold_series_structural_breaks", computed["series_structural_breaks"]
+        )
 
         # docs/handoffs/terminal_phase0_gaps.md item 3: FOMC rate
         # probabilities (config/fomc.yml) — option A, no CME connector;
@@ -1046,8 +1093,7 @@ class LocalWarehouse:
         self.conn.execute("DELETE FROM gold_global_inflation")
         self._insert("gold_global_inflation", computed["global_inflation"])
         self.conn.execute("DELETE FROM gold_global_policy_rates")
-        self._insert("gold_global_policy_rates",
-                     computed["global_policy_rates"])
+        self._insert("gold_global_policy_rates", computed["global_policy_rates"])
         self.conn.execute("DELETE FROM gold_powerbi_catalog")
         self._insert("gold_powerbi_catalog", powerbi_catalog_rows())
 
@@ -1063,36 +1109,48 @@ class LocalWarehouse:
             compute_realized_volatility,
             select_canonical_equity_price_rows,
         )
+
         stooq_rows = [r for r in silver if r.get("source") == "stooq"]
         ishares_rows = [r for r in silver if r.get("source") == "ishares"]
         tiingo_rows = [r for r in silver if r.get("source") == "tiingo"]
-        canonical_price_rows = select_canonical_equity_price_rows(stooq_rows, tiingo_rows)
+        canonical_price_rows = select_canonical_equity_price_rows(
+            stooq_rows, tiingo_rows
+        )
         eq_return_rows = compute_equity_return_daily(canonical_price_rows)
         self.conn.execute("DELETE FROM gold_equity_return_daily")
         self._insert("gold_equity_return_daily", eq_return_rows)
         self.conn.execute("DELETE FROM gold_index_constituents")
-        self._insert("gold_index_constituents",
-                     compute_index_constituents(ishares_rows))
+        self._insert(
+            "gold_index_constituents", compute_index_constituents(ishares_rows)
+        )
         self.conn.execute("DELETE FROM gold_equity_total_return_index")
-        self._insert("gold_equity_total_return_index",
-                     compute_equity_total_return_index(tiingo_rows))
+        self._insert(
+            "gold_equity_total_return_index",
+            compute_equity_total_return_index(tiingo_rows),
+        )
         self.conn.execute("DELETE FROM gold_equity_price_reconciliation")
-        self._insert("gold_equity_price_reconciliation",
-                     compute_equity_price_reconciliation(stooq_rows, tiingo_rows))
+        self._insert(
+            "gold_equity_price_reconciliation",
+            compute_equity_price_reconciliation(stooq_rows, tiingo_rows),
+        )
         self.conn.execute("DELETE FROM gold_realized_volatility")
-        self._insert("gold_realized_volatility",
-                     compute_realized_volatility(canonical_price_rows))
+        self._insert(
+            "gold_realized_volatility",
+            compute_realized_volatility(canonical_price_rows),
+        )
 
         # ML pipeline: ML-0 feature matrix → ML-2 PCA scores/loadings → ML-4 anomaly.
-        from fred_pipeline.ml_features import compute_ml_feature_matrix
-        from fred_pipeline.macro_pca import compute_macro_factor_scores
         from fred_pipeline.anomaly import compute_macro_anomaly_scores
+        from fred_pipeline.macro_pca import compute_macro_factor_scores
+        from fred_pipeline.ml_features import compute_ml_feature_matrix
+
         ml_cfg = None  # load from repo config/ml_features.yml
         try:
             from fred_pipeline.ml_features import load_ml_feature_config
+
             ml_cfg = load_ml_feature_config()
-        except Exception:
-            pass
+        except (OSError, ValueError) as exc:
+            log.warning("Using default ML feature config: %s", exc)
         ml_matrix = compute_ml_feature_matrix(feature_transform_rows, ml_cfg)
         self.conn.execute("DELETE FROM gold_ml_feature_matrix")
         self._insert("gold_ml_feature_matrix", ml_matrix)
@@ -1108,9 +1166,7 @@ class LocalWarehouse:
         self.conn.execute("DELETE FROM gold_macro_anomaly_scores")
         self._insert(
             "gold_macro_anomaly_scores",
-            compute_macro_anomaly_scores(
-                pca["scores"], anomaly_threshold=anom_thresh
-            ),
+            compute_macro_anomaly_scores(pca["scores"], anomaly_threshold=anom_thresh),
         )
 
         # ML-5: Equity factor attribution (rolling OLS vs PCA macro factors).
@@ -1119,11 +1175,12 @@ class LocalWarehouse:
             compute_equity_factor_implied_return,
             load_equity_factor_config,
         )
+
         ef_cfg = None
         try:
             ef_cfg = load_equity_factor_config()
-        except Exception:
-            pass
+        except (OSError, ValueError) as exc:
+            log.warning("Using default equity factor config: %s", exc)
         attribution_rows = compute_equity_factor_attribution(
             eq_return_rows, pca["scores"], cfg=ef_cfg
         )
@@ -1144,11 +1201,12 @@ class LocalWarehouse:
             compute_recession_probability,
             load_recession_model_config,
         )
+
         rec_cfg = None
         try:
             rec_cfg = load_recession_model_config()
-        except Exception:
-            pass
+        except (OSError, ValueError) as exc:
+            log.warning("Using default recession model config: %s", exc)
         self.conn.execute("DELETE FROM gold_recession_probability_daily")
         self._insert(
             "gold_recession_probability_daily",
@@ -1168,51 +1226,76 @@ class LocalWarehouse:
             compute_inflation_forecast,
             load_inflation_forecast_config,
         )
+
         inf_cfg = None
         try:
             inf_cfg = load_inflation_forecast_config()
-        except Exception:
-            pass
+        except (OSError, ValueError) as exc:
+            log.warning("Using default inflation forecast config: %s", exc)
         self.conn.execute("DELETE FROM gold_inflation_forecast")
         self._insert(
             "gold_inflation_forecast",
             compute_inflation_forecast(latest, cfg=inf_cfg),
         )
 
-        self.conn.commit()
-        return {k: "ok" for k in (
-            "fred_point_in_time", "fred_latest_observation",
-            "fred_macro_feature_daily", "fred_feature_transforms",
-            "fred_series_zscore_rolling", "zscore_heatmap",
-            "fred_curve_spread", "fred_cross_series_feature",
-            "fred_cross_series_feature_pit", "fred_source_reconciliation",
-            "fred_company_fundamentals", "fred_company_ratios",
-            "fred_revision_stats",
-            "dim_series", "dim_date", "market_calendar",
-            "macro_indicator_dashboard", "macro_indicator_sparkline",
-            "macro_category_summary",
-            "treasury_curve", "treasury_curve_metrics",
-            "yield_curve_ns_factors", "curve_spread_daily",
-            "spread_inversion_episode",
-            "benchmark_rate_board", "funding_tape_daily",
-            "funding_stress_daily", "credit_spread_daily",
-            "inflation_explorer", "inflation_contribution",
-            "curve_spread_rolling", "credit_spread_rolling",
-            "treasury_curve_rolling",
-            "macro_regime_daily", "series_correlation", "series_lead_lag",
-            "series_structural_breaks",
-            "global_inflation", "global_policy_rates", "powerbi_catalog",
-            "equity_return_daily", "index_constituents",
-            "equity_total_return_index", "equity_price_reconciliation",
-            "realized_volatility",
-            "ml_feature_matrix",
-            "macro_factor_scores", "macro_factor_loadings",
-            "macro_anomaly_scores",
-            "equity_factor_attribution",
-            "equity_factor_implied_return",
-            "recession_probability_daily",
-            "inflation_forecast",
-        )}
+        return {
+            k: "ok"
+            for k in (
+                "fred_point_in_time",
+                "fred_latest_observation",
+                "fred_macro_feature_daily",
+                "fred_feature_transforms",
+                "fred_series_zscore_rolling",
+                "zscore_heatmap",
+                "fred_curve_spread",
+                "fred_cross_series_feature",
+                "fred_cross_series_feature_pit",
+                "fred_source_reconciliation",
+                "fred_company_fundamentals",
+                "fred_company_ratios",
+                "fred_revision_stats",
+                "dim_series",
+                "dim_date",
+                "market_calendar",
+                "macro_indicator_dashboard",
+                "macro_indicator_sparkline",
+                "macro_category_summary",
+                "treasury_curve",
+                "treasury_curve_metrics",
+                "yield_curve_ns_factors",
+                "curve_spread_daily",
+                "spread_inversion_episode",
+                "benchmark_rate_board",
+                "funding_tape_daily",
+                "funding_stress_daily",
+                "credit_spread_daily",
+                "inflation_explorer",
+                "inflation_contribution",
+                "curve_spread_rolling",
+                "credit_spread_rolling",
+                "treasury_curve_rolling",
+                "macro_regime_daily",
+                "series_correlation",
+                "series_lead_lag",
+                "series_structural_breaks",
+                "global_inflation",
+                "global_policy_rates",
+                "powerbi_catalog",
+                "equity_return_daily",
+                "index_constituents",
+                "equity_total_return_index",
+                "equity_price_reconciliation",
+                "realized_volatility",
+                "ml_feature_matrix",
+                "macro_factor_scores",
+                "macro_factor_loadings",
+                "macro_anomaly_scores",
+                "equity_factor_attribution",
+                "equity_factor_implied_return",
+                "recession_probability_daily",
+                "inflation_forecast",
+            )
+        }
 
     def point_in_time_features(self, as_of: str) -> list[dict[str, Any]]:
         """Each series' value as known on ``as_of`` (leakage-free snapshot)."""
@@ -1230,7 +1313,7 @@ class LocalWarehouse:
         return self._insert("meta_fred_series_drift", rows)
 
     def latest_observation_dates(
-        self, series_ids: Optional[Sequence[str]] = None
+        self, series_ids: Sequence[str] | None = None
     ) -> dict[str, str]:
         """Most recent ingested ``observation_date`` per series, any source.
 
@@ -1287,7 +1370,11 @@ class LocalWarehouse:
     # ---- convenience for interactive/local use -------------------------
 
     def query(
-        self, sql: str, params: Sequence[Any] = (), *, caller: str = "",
+        self,
+        sql: str,
+        params: Sequence[Any] = (),
+        *,
+        caller: str = "",
     ) -> list[dict[str, Any]]:
         """Run an ad-hoc SQL query and return rows as dicts.
 

@@ -33,7 +33,6 @@ import datetime as _dt
 import json
 import logging
 import sys
-from typing import Optional
 
 from fred_pipeline.config import Environment, PipelineConfig
 from fred_pipeline.manifest import all_series, load_manifests
@@ -52,16 +51,20 @@ def _cmd_discover(args: argparse.Namespace) -> int:
 
     sources = [bool(args.category_id), bool(args.release_id), bool(args.search)]
     if sum(sources) != 1:
-        print("ERROR: pass exactly one of --category-id / --release-id / --search",
-              file=sys.stderr)
+        print(
+            "ERROR: pass exactly one of --category-id / --release-id / --search",
+            file=sys.stderr,
+        )
         return 2
 
     config = PipelineConfig.resolve(
         environment=Environment(args.env), config_file=args.config
     )
     if not config.fred_api_key:
-        print("ERROR: no FRED API key found (config file / FRED_API_KEY / secret).",
-              file=sys.stderr)
+        print(
+            "ERROR: no FRED API key found (config file / FRED_API_KEY / secret).",
+            file=sys.stderr,
+        )
         return 2
 
     client = FredClient(
@@ -87,7 +90,7 @@ def _cmd_discover(args: argparse.Namespace) -> int:
         try:
             existing = load_manifests(args.manifests)
             exclude_ids = {s.series_id for s in all_series(existing, active_only=False)}
-        except Exception:
+        except (OSError, ValueError):
             exclude_ids = set()
 
     frequencies = (
@@ -124,6 +127,44 @@ def _cmd_discover(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_discover_ecb(args: argparse.Namespace) -> int:
+    from fred_pipeline.catalogs.ecb_discovery import (
+        ECBMetadataClient,
+        dataflows_to_rows,
+        filter_dataflows,
+    )
+    from fred_pipeline.pipeline import _rate_limit_for_source
+
+    config = PipelineConfig.resolve(
+        environment=Environment(args.env), config_file=args.config
+    )
+    client = ECBMetadataClient(
+        base_url=config.ecb_base_url,
+        timeout=config.request_timeout_seconds,
+        max_retries=config.max_retries,
+        rate_limit_per_minute=_rate_limit_for_source(config, "ecb"),
+    )
+    flows = filter_dataflows(
+        client.list_dataflows(),
+        search=args.search,
+        max_results=args.max,
+    )
+
+    if args.json:
+        print(json.dumps(dataflows_to_rows(flows), indent=2))
+        return 0
+
+    print(f"Found {len(flows)} ECB dataflow(s).")
+    if not flows:
+        return 0
+    print(f"{'Flow':12s} {'Agency':8s} {'Version':8s} Name")
+    print(f"{'-' * 12} {'-' * 8} {'-' * 8} {'-' * 60}")
+    for flow in flows:
+        name = flow.name or flow.description or ""
+        print(f"{flow.flow_id:12s} {flow.agency_id:8s} {flow.version:8s} {name}")
+    return 0
+
+
 def _parse_series(value):
     """Parse a --series comma list into a list of ids, or None for 'all'."""
     if not value:
@@ -138,7 +179,9 @@ def _open_warehouse(config, args):
     Precedence: CLI flags (--local, --db-path) > warehouse.yml config > defaults.
     """
     from fred_pipeline.io.warehouse_factory import (
-        WarehouseFactory, load_warehouse_config, WarehouseConfig
+        WarehouseConfig,
+        WarehouseFactory,
+        load_warehouse_config,
     )
 
     # Load warehouse config from file
@@ -149,9 +192,7 @@ def _open_warehouse(config, args):
         # Force local backend with optional db_path override
         warehouse_config = WarehouseConfig(
             primary_backend="local",
-            backends={
-                "local": {"db_path": getattr(args, "db_path", "fred.db")}
-            }
+            backends={"local": {"db_path": getattr(args, "db_path", "fred.db")}},
         )
 
     factory = WarehouseFactory(config, warehouse_config)
@@ -216,8 +257,11 @@ def _cmd_replay(args: argparse.Namespace) -> int:
     warehouse = _open_warehouse(config, args)
     try:
         result = replay_from_bronze(
-            config, manifests, warehouse,
-            series_ids=series, rebuild_gold=not args.no_gold,
+            config,
+            manifests,
+            warehouse,
+            series_ids=series,
+            rebuild_gold=not args.no_gold,
         )
     finally:
         warehouse.close()
@@ -233,8 +277,10 @@ def _cmd_reconcile(args: argparse.Namespace) -> int:
         environment=Environment(args.env), config_file=args.config
     )
     if not config.fred_api_key:
-        print("ERROR: no FRED API key found (config file / FRED_API_KEY / secret).",
-              file=sys.stderr)
+        print(
+            "ERROR: no FRED API key found (config file / FRED_API_KEY / secret).",
+            file=sys.stderr,
+        )
         return 2
 
     client = FredClient(
@@ -254,11 +300,15 @@ def _cmd_reconcile(args: argparse.Namespace) -> int:
     print("Reconciliation summary (FRED metadata drift):", json.dumps(report.summary()))
     for sev in ("error", "warning", "info"):
         for d in report.by_severity(sev):
-            print(f"  [{sev:7s}] {d.series_id:12s} {d.kind}: "
-                  f"{d.manifest_value!r} (manifest) vs {d.fred_value!r} (FRED)")
+            print(
+                f"  [{sev:7s}] {d.series_id:12s} {d.kind}: "
+                f"{d.manifest_value!r} (manifest) vs {d.fred_value!r} (FRED)"
+            )
     if report.stale:
-        print(f"  [stale-fred] {len(report.stale)} FRED series past expected "
-              f"update: {', '.join(report.stale)}")
+        print(
+            f"  [stale-fred] {len(report.stale)} FRED series past expected "
+            f"update: {', '.join(report.stale)}"
+        )
 
     # Build a warehouse for reading regardless of --no-persist: the all-source
     # staleness check below needs it to read already-ingested Silver data.
@@ -273,9 +323,12 @@ def _cmd_reconcile(args: argparse.Namespace) -> int:
 
         try:
             warehouse = SparkWarehouse(config, get_spark())
-        except Exception:
-            print("(no Spark available; skipping all-source staleness check "
-                  "and persistence)", file=sys.stderr)
+        except Exception:  # noqa: BLE001 - Spark may be unavailable locally.
+            print(
+                "(no Spark available; skipping all-source staleness check "
+                "and persistence)",
+                file=sys.stderr,
+            )
 
     staleness_rows: list[dict] = []
     if warehouse is not None:
@@ -295,19 +348,27 @@ def _cmd_reconcile(args: argparse.Namespace) -> int:
                     stale_by_source.setdefault(row["source"], []).append(
                         row["series_id"]
                     )
-            print(f"All-source staleness check: {len(staleness_rows)} series "
-                  f"across {len({r['source'] for r in staleness_rows})} source(s).")
+            print(
+                f"All-source staleness check: {len(staleness_rows)} series "
+                f"across {len({r['source'] for r in staleness_rows})} source(s)."
+            )
             for source, ids in sorted(stale_by_source.items()):
-                print(f"  [stale] {source}: {len(ids)} series past expected "
-                      f"update: {', '.join(ids)}")
+                print(
+                    f"  [stale] {source}: {len(ids)} series past expected "
+                    f"update: {', '.join(ids)}"
+                )
             if no_data:
-                print(f"  [no-data] {len(no_data)} series have no ingested "
-                      f"observations yet: {', '.join(no_data)}")
+                print(
+                    f"  [no-data] {len(no_data)} series have no ingested "
+                    f"observations yet: {', '.join(no_data)}"
+                )
 
             if not args.no_persist:
                 counts = persist_report(config, report, warehouse)
-                print(f"Persisted {counts['lifecycle_rows']} lifecycle + "
-                      f"{counts['drift_rows']} drift rows.")
+                print(
+                    f"Persisted {counts['lifecycle_rows']} lifecycle + "
+                    f"{counts['drift_rows']} drift rows."
+                )
                 n_stale = warehouse.write_staleness(staleness_rows)
                 print(f"Persisted {n_stale} all-source staleness rows.")
         finally:
@@ -331,7 +392,8 @@ def _cmd_validate(args: argparse.Namespace) -> int:
         print(f"  - {man.name}: {len(man.series)} series ({man.source_path})")
 
     from fred_pipeline.governance.licensing import (
-        check_commercial_use, check_redistribution_review,
+        check_commercial_use,
+        check_redistribution_review,
         load_data_licensing_config,
     )
 
@@ -343,8 +405,10 @@ def _cmd_validate(args: argparse.Namespace) -> int:
         if violations:
             print("ERROR: commercial-use licensing check failed:", file=sys.stderr)
             for v in violations:
-                print(f"  - {v.source} ({v.series_count} active series): "
-                      f"{v.reason}", file=sys.stderr)
+                print(
+                    f"  - {v.source} ({v.series_count} active series): {v.reason}",
+                    file=sys.stderr,
+                )
             return 2
         print("Commercial-use licensing check: all active sources cleared.")
 
@@ -359,8 +423,10 @@ def _cmd_validate(args: argparse.Namespace) -> int:
                 file=sys.stderr,
             )
             for v in findings:
-                print(f"  - {v.source} ({v.series_count} active series): "
-                      f"{v.reason}", file=sys.stderr)
+                print(
+                    f"  - {v.source} ({v.series_count} active series): {v.reason}",
+                    file=sys.stderr,
+                )
             print(
                 "  Read each terms_url, then set review_status: verified and "
                 "reviewed_by: <name> in config/data_licensing.yml.",
@@ -388,9 +454,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
     # BLS/EIA-only run shouldn't demand a FRED key (and BLS runs keyless).
     wanted = set(_parse_series(args.series) or [])
     include_sources = {s.lower() for s in (_parse_series(args.source) or [])}
-    exclude_sources = {
-        s.lower() for s in (_parse_series(args.exclude_source) or [])
-    }
+    exclude_sources = {s.lower() for s in (_parse_series(args.exclude_source) or [])}
     active = all_series(load_manifests(args.manifests), active_only=True)
     if wanted:
         active = [s for s in active if s.series_id in wanted]
@@ -420,7 +484,9 @@ def _cmd_run(args: argparse.Namespace) -> int:
     else:
         # Use warehouse factory with config + CLI overrides
         from fred_pipeline.io.warehouse_factory import (
-            WarehouseFactory, load_warehouse_config, WarehouseConfig
+            WarehouseConfig,
+            WarehouseFactory,
+            load_warehouse_config,
         )
 
         warehouse_config = load_warehouse_config(environment=config.environment.value)
@@ -429,9 +495,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
         if args.local:
             warehouse_config = WarehouseConfig(
                 primary_backend="local",
-                backends={
-                    "local": {"db_path": getattr(args, "db_path", "fred.db")}
-                }
+                backends={"local": {"db_path": getattr(args, "db_path", "fred.db")}},
             )
 
         factory = WarehouseFactory(config, warehouse_config)
@@ -639,15 +703,17 @@ def build_parser() -> argparse.ArgumentParser:
     v = sub.add_parser("validate", help="validate manifests only")
     v.add_argument("--manifests", default="manifests")
     v.add_argument(
-        "--commercial", action="store_true",
+        "--commercial",
+        action="store_true",
         help="fail if any active source's license doesn't clear commercial "
-             "use (see config/data_licensing.yml)",
+        "use (see config/data_licensing.yml)",
     )
     v.add_argument(
-        "--licensing-review", action="store_true",
+        "--licensing-review",
+        action="store_true",
         help="fail if any active source permits redistribution but nobody has "
-             "verified its terms (review_status != verified). Run this before "
-             "publishing anything derived from the data outside the org.",
+        "verified its terms (review_status != verified). Run this before "
+        "publishing anything derived from the data outside the org.",
     )
     v.set_defaults(func=_cmd_validate)
 
@@ -675,24 +741,53 @@ def build_parser() -> argparse.ArgumentParser:
         default="fred_local.db",
         help="SQLite file path for --local runs (default: fred_local.db)",
     )
-    r.add_argument("--series", default=None,
-                   help="comma-separated series ids to run (default: all active)")
-    r.add_argument("--full", action="store_true",
-                   help="force a full re-pull, ignoring the restate watermark")
-    r.add_argument("--no-gold", action="store_true",
-                   help="skip the Gold refresh after extracting/writing Silver")
-    r.add_argument("--source", default=None,
-                   help="comma-separated source names to include, e.g. fred,stooq")
-    r.add_argument("--exclude-source", default=None,
-                   help="comma-separated source names to skip, e.g. tiingo")
-    r.add_argument("--extract-workers", type=int, default=None,
-                   help="override concurrent extraction workers for this run")
-    r.add_argument("--rate-limit-per-minute", type=int, default=None,
-                   help="override FRED aggregate request rate for this run")
-    r.add_argument("--source-workers", default=None,
-                   help="per-source worker overrides, e.g. fred=16,tiingo=1")
-    r.add_argument("--source-rate-limits", default=None,
-                   help="per-source request-rate overrides, e.g. fred=60,tiingo=5")
+    r.add_argument(
+        "--series",
+        default=None,
+        help="comma-separated series ids to run (default: all active)",
+    )
+    r.add_argument(
+        "--full",
+        action="store_true",
+        help="force a full re-pull, ignoring the restate watermark",
+    )
+    r.add_argument(
+        "--no-gold",
+        action="store_true",
+        help="skip the Gold refresh after extracting/writing Silver",
+    )
+    r.add_argument(
+        "--source",
+        default=None,
+        help="comma-separated source names to include, e.g. fred,stooq",
+    )
+    r.add_argument(
+        "--exclude-source",
+        default=None,
+        help="comma-separated source names to skip, e.g. tiingo",
+    )
+    r.add_argument(
+        "--extract-workers",
+        type=int,
+        default=None,
+        help="override concurrent extraction workers for this run",
+    )
+    r.add_argument(
+        "--rate-limit-per-minute",
+        type=int,
+        default=None,
+        help="override FRED aggregate request rate for this run",
+    )
+    r.add_argument(
+        "--source-workers",
+        default=None,
+        help="per-source worker overrides, e.g. fred=16,tiingo=1",
+    )
+    r.add_argument(
+        "--source-rate-limits",
+        default=None,
+        help="per-source request-rate overrides, e.g. fred=60,tiingo=5",
+    )
     r.set_defaults(func=_cmd_run)
 
     g = sub.add_parser(
@@ -706,8 +801,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="path to a YAML config file "
         "(default: $FRED_CONFIG_FILE or config/config.yaml)",
     )
-    g.add_argument("--local", action="store_true",
-                   help="use a local SQLite backend")
+    g.add_argument("--local", action="store_true", help="use a local SQLite backend")
     g.add_argument("--db-path", default="fred_local.db")
     g.set_defaults(func=_cmd_gold)
 
@@ -749,31 +843,80 @@ def build_parser() -> argparse.ArgumentParser:
         "discover",
         help="generate a manifest from a FRED category / release / search",
     )
-    d.add_argument("--name", required=True,
-                   help="manifest name + category label for the generated series")
+    d.add_argument(
+        "--name",
+        required=True,
+        help="manifest name + category label for the generated series",
+    )
     src = d.add_mutually_exclusive_group(required=True)
     src.add_argument("--category-id", type=int, help="FRED category id")
     src.add_argument("--release-id", type=int, help="FRED release id")
     src.add_argument("--search", help="full-text search string")
-    d.add_argument("--out", default=None,
-                   help="output YAML path (omit or use --dry-run to print instead)")
+    d.add_argument(
+        "--out",
+        default=None,
+        help="output YAML path (omit or use --dry-run to print instead)",
+    )
     d.add_argument("--env", default="dev", choices=[e.value for e in Environment])
     d.add_argument("--config", default=None, help="YAML config path for the API key")
-    d.add_argument("--manifests", default="manifests",
-                   help="existing manifests dir to dedupe against (default: manifests)")
-    d.add_argument("--frequencies", default=None,
-                   help="comma-separated frequency filter, e.g. 'd,m,q'")
-    d.add_argument("--max", type=int, default=100,
-                   help="max series to keep (default: 100)")
-    d.add_argument("--min-popularity", type=float, default=0.0,
-                   help="drop series below this FRED popularity (0-100)")
-    d.add_argument("--include-discontinued", action="store_true",
-                   help="keep series whose title is marked DISCONTINUED")
-    d.add_argument("--include-existing", action="store_true",
-                   help="do not dedupe against series already in --manifests")
+    d.add_argument(
+        "--manifests",
+        default="manifests",
+        help="existing manifests dir to dedupe against (default: manifests)",
+    )
+    d.add_argument(
+        "--frequencies",
+        default=None,
+        help="comma-separated frequency filter, e.g. 'd,m,q'",
+    )
+    d.add_argument(
+        "--max", type=int, default=100, help="max series to keep (default: 100)"
+    )
+    d.add_argument(
+        "--min-popularity",
+        type=float,
+        default=0.0,
+        help="drop series below this FRED popularity (0-100)",
+    )
+    d.add_argument(
+        "--include-discontinued",
+        action="store_true",
+        help="keep series whose title is marked DISCONTINUED",
+    )
+    d.add_argument(
+        "--include-existing",
+        action="store_true",
+        help="do not dedupe against series already in --manifests",
+    )
     d.add_argument("--description", default=None, help="manifest description")
     d.add_argument("--dry-run", action="store_true", help="print instead of writing")
     d.set_defaults(func=_cmd_discover)
+
+    de = sub.add_parser(
+        "discover-ecb",
+        help="list ECB SDMX dataflows for candidate manifest authoring",
+    )
+    de.add_argument(
+        "--list-flows", action="store_true", required=True, help="list ECB dataflows"
+    )
+    de.add_argument(
+        "--search",
+        default=None,
+        help="case-insensitive filter on flow id/name/description",
+    )
+    de.add_argument(
+        "--max", type=int, default=100, help="maximum dataflows to print (default: 100)"
+    )
+    de.add_argument(
+        "--json", action="store_true", help="print machine-readable dataflow rows"
+    )
+    de.add_argument("--env", default="dev", choices=[e.value for e in Environment])
+    de.add_argument(
+        "--config",
+        default=None,
+        help="YAML config path for ECB_BASE_URL/proxy overrides",
+    )
+    de.set_defaults(func=_cmd_discover_ecb)
 
     rc = sub.add_parser(
         "reconcile",
@@ -782,15 +925,27 @@ def build_parser() -> argparse.ArgumentParser:
     rc.add_argument("--manifests", default="manifests")
     rc.add_argument("--env", default="dev", choices=[e.value for e in Environment])
     rc.add_argument("--config", default=None, help="YAML config path for the API key")
-    rc.add_argument("--series", default=None,
-                    help="comma-separated series ids to reconcile (default: all)")
-    rc.add_argument("--local", action="store_true",
-                    help="persist lifecycle/drift to a local SQLite file")
+    rc.add_argument(
+        "--series",
+        default=None,
+        help="comma-separated series ids to reconcile (default: all)",
+    )
+    rc.add_argument(
+        "--local",
+        action="store_true",
+        help="persist lifecycle/drift to a local SQLite file",
+    )
     rc.add_argument("--db-path", default="fred_local.db")
-    rc.add_argument("--no-persist", action="store_true",
-                    help="report only; do not write to any backend")
-    rc.add_argument("--fail-on-drift", action="store_true",
-                    help="exit non-zero if any error-level drift is found (for CI)")
+    rc.add_argument(
+        "--no-persist",
+        action="store_true",
+        help="report only; do not write to any backend",
+    )
+    rc.add_argument(
+        "--fail-on-drift",
+        action="store_true",
+        help="exit non-zero if any error-level drift is found (for CI)",
+    )
     rc.set_defaults(func=_cmd_reconcile)
 
     bf = sub.add_parser(
@@ -826,7 +981,7 @@ def build_parser() -> argparse.ArgumentParser:
         default="monthly",
         choices=["monthly", "weekly", "daily"],
         help="snapshot cadence: monthly (month-end), weekly (Sunday), daily "
-             "(default: monthly)",
+        "(default: monthly)",
     )
     bf.add_argument(
         "--tables",
@@ -852,18 +1007,23 @@ def build_parser() -> argparse.ArgumentParser:
     rp.add_argument("--manifests", default="manifests")
     rp.add_argument("--env", default="dev", choices=[e.value for e in Environment])
     rp.add_argument("--config", default=None)
-    rp.add_argument("--series", default=None,
-                    help="comma-separated series ids to replay (default: all)")
-    rp.add_argument("--local", action="store_true",
-                    help="use a local SQLite backend")
+    rp.add_argument(
+        "--series",
+        default=None,
+        help="comma-separated series ids to replay (default: all)",
+    )
+    rp.add_argument("--local", action="store_true", help="use a local SQLite backend")
     rp.add_argument("--db-path", default="fred_local.db")
-    rp.add_argument("--no-gold", action="store_true",
-                    help="rebuild Silver only, skip the Gold refresh")
+    rp.add_argument(
+        "--no-gold",
+        action="store_true",
+        help="rebuild Silver only, skip the Gold refresh",
+    )
     rp.set_defaults(func=_cmd_replay)
     return parser
 
 
-def main(argv: Optional[list[str]] = None) -> int:
+def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     logging.basicConfig(

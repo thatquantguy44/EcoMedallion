@@ -58,19 +58,15 @@ series:
     max_value: 25
     tags: [rates, funding, unsecured]
 
-  # Broad General Collateral Rate — the TGCR universe plus GCF Repo. Shares the
-  # RATE-suffix convention of its confirmed sibling TGCRRATE (the bare BGCR/TGCR
-  # prefixes belong to the percentile and volume companions). Activated without
-  # a live id check — egress to fred.stlouisfed.org was blocked from the
-  # environment this was written in. If the id is wrong the first run records a
-  # single failed series in audit.etl_series_run and every other series is
-  # unaffected; confirm there after the next run.
+  # Broad General Collateral Rate — kept inactive because live runs report that
+  # FRED no longer resolves BGCRRATE. Leave declared for audit/history, but do
+  # not ingest until a verified replacement id exists.
   - series_id: BGCRRATE
     title: Broad General Collateral Rate
     category: rates
     frequency: d
     units: Percent
-    active: true
+    active: false
     vintage_enabled: false
     validation_profile: standard
     downstream_use_case: funding_tape

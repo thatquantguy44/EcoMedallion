@@ -30,15 +30,18 @@ from __future__ import annotations
 import logging
 import os
 import time
+from collections.abc import Callable
 from datetime import date
-from typing import Any, Callable, Optional
+from typing import Any
 
 from fred_pipeline.sources.base import HTTPSource, SourceError
 from fred_pipeline.transform import _row_hash, _utc_now_iso, parse_value
 
 log = logging.getLogger("fred_pipeline.sources.sec")
 
-DEFAULT_USER_AGENT = "fred-bronze-to-gold-pipeline (set SEC_USER_AGENT to your contact email)"
+DEFAULT_USER_AGENT = (
+    "fred-bronze-to-gold-pipeline (set SEC_USER_AGENT to your contact email)"
+)
 
 # Duration windows (days) used to disambiguate income-statement (duration) facts:
 # a 10-Q reports both the ~3-month quarterly value and the ~9-month YTD value for
@@ -58,7 +61,7 @@ def resolve_sec_period() -> str:
     return p if p in _PERIOD_WINDOWS else "quarterly"
 
 
-def _duration_days(start: Any, end: Any) -> Optional[int]:
+def _duration_days(start: Any, end: Any) -> int | None:
     try:
         s = date.fromisoformat(str(start)[:10])
         e = date.fromisoformat(str(end)[:10])
@@ -83,13 +86,17 @@ def _decumulate_q4(
     a synthetic ~3-month fact dated at the FY end. Skips a year that already has a
     directly-reported quarterly fact at that end, or that lacks a matching YTD.
     """
-    fy_facts = [e for e in entries
-                if e.get("start") is not None
-                and _in_window(e.get("start"), e.get("end"), _PERIOD_WINDOWS["annual"])]
+    fy_facts = [
+        e
+        for e in entries
+        if e.get("start") is not None
+        and _in_window(e.get("start"), e.get("end"), _PERIOD_WINDOWS["annual"])
+    ]
     nm_by_start: dict[str, list[dict[str, Any]]] = {}
     for e in entries:
         if e.get("start") is not None and _in_window(
-                e.get("start"), e.get("end"), _NINE_MONTH_WINDOW):
+            e.get("start"), e.get("end"), _NINE_MONTH_WINDOW
+        ):
             nm_by_start.setdefault(str(e.get("start")), []).append(e)
 
     synth: list[dict[str, Any]] = []
@@ -107,12 +114,14 @@ def _decumulate_q4(
         fy_val, nm_val = parse_value(fy.get("val")), parse_value(src.get("val"))
         if fy_val is None or nm_val is None:
             continue
-        synth.append({
-            "start": src.get("end"),   # Q4 covers (9-month end, FY end]
-            "end": fy.get("end"),
-            "val": fy_val - nm_val,
-            "filed": fy.get("filed"),  # Q4 becomes known when the 10-K is filed
-        })
+        synth.append(
+            {
+                "start": src.get("end"),  # Q4 covers (9-month end, FY end]
+                "end": fy.get("end"),
+                "val": fy_val - nm_val,
+                "filed": fy.get("filed"),  # Q4 becomes known when the 10-K is filed
+            }
+        )
     return synth
 
 
@@ -123,13 +132,52 @@ def _select_period_entries(
     facts matching the target window, plus (quarterly) synthesized Q4 facts."""
     window = _PERIOD_WINDOWS.get(period, _PERIOD_WINDOWS["quarterly"])
     instant = [e for e in entries if e.get("start") is None]
-    matched = [e for e in entries
-               if e.get("start") is not None
-               and _in_window(e.get("start"), e.get("end"), window)]
+    matched = [
+        e
+        for e in entries
+        if e.get("start") is not None
+        and _in_window(e.get("start"), e.get("end"), window)
+    ]
     if period == "quarterly":
         existing_ends = {str(e.get("end") or "")[:10] for e in matched}
         matched = matched + _decumulate_q4(entries, existing_ends)
     return instant + matched
+
+
+def _sec_entry_score(entry: dict[str, Any]) -> tuple[int, int, str]:
+    """Prefer deterministic, merge-safe SEC facts for a natural key.
+
+    The companyconcept feed can include multiple facts for the same concept,
+    period end, and filing date. Silver's natural key cannot store all of those
+    variants separately, so keep one stable representative instead of failing
+    the whole series on duplicate-key DQ.
+    """
+    form = str(entry.get("form") or "").upper()
+    form_rank = {
+        "10-K/A": 5,
+        "10-K": 4,
+        "10-Q/A": 3,
+        "10-Q": 2,
+    }.get(form, 1)
+    has_value = 1 if parse_value(entry.get("val")) is not None else 0
+    frame = str(entry.get("frame") or "")
+    return has_value, form_rank, frame
+
+
+def _dedupe_sec_entries(
+    entries: list[dict[str, Any]], *, track_vintage: bool
+) -> list[dict[str, Any]]:
+    selected: dict[tuple[str, str], dict[str, Any]] = {}
+    for entry in entries:
+        end = str(entry.get("end") or "")[:10]
+        if not end:
+            continue
+        filed = str(entry.get("filed") or "") if track_vintage else ""
+        key = (end, filed)
+        current = selected.get(key)
+        if current is None or _sec_entry_score(entry) >= _sec_entry_score(current):
+            selected[key] = entry
+    return [selected[key] for key in sorted(selected)]
 
 
 class SECAPIError(SourceError):
@@ -196,8 +244,7 @@ def _parse_series_id(series_id: str) -> tuple[str, str, str, str]:
     taxonomy, sep3, tag = concept.partition("/")
     if not (sep1 and sep2 and sep3) or not all([cik, taxonomy, tag, unit]):
         raise SECAPIError(
-            f"SEC series_id must be '<CIK>:<taxonomy>/<tag>:<unit>', "
-            f"got {series_id!r}"
+            f"SEC series_id must be '<CIK>:<taxonomy>/<tag>:<unit>', got {series_id!r}"
         )
     return cik.strip(), taxonomy.strip(), tag.strip(), unit.strip()
 
@@ -206,8 +253,8 @@ def normalize_sec_observations(
     series_id: str,
     payload: dict[str, Any],
     *,
-    run_id: Optional[str] = None,
-    ingested_at: Optional[str] = None,
+    run_id: str | None = None,
+    ingested_at: str | None = None,
     track_vintage: bool = True,
     source: str = "sec",
     period: str = "quarterly",
@@ -232,7 +279,10 @@ def normalize_sec_observations(
     _cik, _tax, _tag, unit = _parse_series_id(series_id)
     entries = (payload.get("units") or {}).get(unit) or []
     rows: list[dict[str, Any]] = []
-    for e in _select_period_entries(entries, period):
+    for e in _dedupe_sec_entries(
+        _select_period_entries(entries, period),
+        track_vintage=track_vintage,
+    ):
         obs_date = e.get("end")
         if not obs_date:
             continue
@@ -254,7 +304,9 @@ def normalize_sec_observations(
                 "value": value,
                 "raw_value": None if raw_value is None else str(raw_value),
                 "is_missing": value is None,
-                "row_hash": _row_hash(series_id, str(obs_date)[:10], rt_start, raw_value),
+                "row_hash": _row_hash(
+                    series_id, str(obs_date)[:10], rt_start, raw_value
+                ),
                 "ingested_at": ingested_at,
                 "run_id": run_id,
             }
@@ -270,7 +322,7 @@ class SECClient(HTTPSource):
 
     def __init__(
         self,
-        user_agent: Optional[str] = None,
+        user_agent: str | None = None,
         base_url: str = "https://data.sec.gov",
         *,
         session: Any = None,
@@ -307,8 +359,8 @@ class SECClient(HTTPSource):
         self,
         series_id: str,
         *,
-        observation_start: Optional[str] = None,
-        observation_end: Optional[str] = None,
+        observation_start: str | None = None,
+        observation_end: str | None = None,
         **_ignored: Any,
     ) -> dict[str, Any]:
         """Fetch one concept's full filing history for a company.
@@ -323,11 +375,15 @@ class SECClient(HTTPSource):
         series_id: str,
         payload: dict[str, Any],
         *,
-        run_id: Optional[str] = None,
+        run_id: str | None = None,
         track_vintage: bool = True,
         source: str = "sec",
     ) -> list[dict[str, Any]]:
         return normalize_sec_observations(
-            series_id, payload, run_id=run_id, track_vintage=track_vintage,
-            source=source, period=self.period,
+            series_id,
+            payload,
+            run_id=run_id,
+            track_vintage=track_vintage,
+            source=source,
+            period=self.period,
         )

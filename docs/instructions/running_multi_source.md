@@ -55,11 +55,12 @@ only if your workspace routes ECB requests through an approved proxy or mirror.
 
 ## 2. Activate the series you want
 
-**Every non-FRED manifest ships `active: false`** — plus some FRED additions
+Most non-FRED demo manifests ship `active: false` — plus some FRED additions
 (`macro_flags.yml`, the `DGS3/DGS7/DGS20` curve tenors, `fed_funding.yml`,
 `ice_credit.yml`) — because the series ids were assembled from documentation,
-not verified against the live APIs. Each manifest's header says exactly where
-to verify its ids.
+not verified against the live APIs. `ecb_rates.yml` is the exception: it ships
+active with nine verified FX and rates series. Each manifest's header says
+exactly where to verify its ids.
 
 For each series you want, confirm the id at the source, then flip:
 
@@ -70,7 +71,7 @@ For each series you want, confirm the id at the source, then flip:
     active: true        # was false
 ```
 
-Manifests you may want to activate:
+Manifests you may want to activate or run:
 
 | Manifest | Source | Contents |
 |---|---|---|
@@ -79,20 +80,33 @@ Manifests you may want to activate:
 | `treasury_fiscal.yml` | treasury | debt/fiscal series |
 | `worldbank_global.yml` | worldbank | global indicators |
 | `bea_national_accounts.yml` | bea | NIPA tables |
-| `ecb_rates.yml` | ecb | ECB Data Portal exchange rates / euro area rates |
+| `ecb_rates.yml` | ecb | active verified starter ECB Data Portal FX and rates series |
 | `census_indicators.yml` | census | economic indicators |
 | `sec_financials.yml` | sec | company XBRL fundamentals |
 | `equity_stooq.yml` | stooq | optional/inactive broad ETFs + large-cap stocks for vendor reconciliation |
 | `etf_holdings.yml` | ishares | ETF constituent weights (`gold.index_constituents`) |
 | `equity_tiingo.yml` | tiingo | broad ETFs + stocks total return (needs `TIINGO_API_KEY`) |
 | `macro_flags.yml` | fred | `USREC` — lights up every `is_recession` column |
-| `fed_funding.yml` | fred | EFFR/IORB/OBFR/BGCR/TGCR/… — funding tape + stress gauge |
+| `fed_funding.yml` | fred | EFFR/IORB/OBFR/TGCR/… — funding tape + stress gauge; BGCRRATE remains inactive pending a verified replacement |
 | `ice_credit.yml` | fred | ICE BofA OAS — credit-spread table |
 | `rates.yml` (tail entries) | fred | DGS3/7/20 (full curve), DPRIME, MORTGAGE30US |
 
 A wrong id is cheap: failures are **per-series isolated** — that one series
 errors, everything else loads, and the run finishes `partial` with the error
 recorded in `audit_etl_series_run`.
+
+### ECB dataflow discovery
+
+ECB is keyless, and the helper below lists available SDMX dataflows before you
+decide which flow to inspect or turn into candidate manifest rows:
+
+```bash
+fred-pipeline discover-ecb --list-flows --search exchange
+fred-pipeline discover-ecb --list-flows --search rates --json
+```
+
+The current implementation lists flows. `specs/spec002` tracks the next slices:
+structure inspection and bounded inactive candidate manifest generation.
 
 ## 3. Run
 

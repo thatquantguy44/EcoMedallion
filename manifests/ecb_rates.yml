@@ -10,7 +10,7 @@ series:
     category: international
     frequency: d
     units: USD per EUR
-    active: false
+    active: true
     source: ecb
     load_type: incremental
     expected_update_frequency: daily
@@ -20,3 +20,133 @@ series:
     priority: 2
     min_value: 0
     tags: [fx, ecb, euro-area]
+
+  - series_id: "ECB:EXR:D.GBP.EUR.SP00.A"
+    title: ECB Reference Exchange Rate - GBP per EUR
+    category: international
+    frequency: d
+    units: GBP per EUR
+    active: true
+    source: ecb
+    load_type: incremental
+    expected_update_frequency: daily
+    vintage_enabled: true
+    validation_profile: standard
+    downstream_use_case: fx_rates
+    priority: 2
+    min_value: 0
+    tags: [fx, ecb, euro-area]
+
+  - series_id: "ECB:EXR:D.JPY.EUR.SP00.A"
+    title: ECB Reference Exchange Rate - JPY per EUR
+    category: international
+    frequency: d
+    units: JPY per EUR
+    active: true
+    source: ecb
+    load_type: incremental
+    expected_update_frequency: daily
+    vintage_enabled: true
+    validation_profile: standard
+    downstream_use_case: fx_rates
+    priority: 2
+    min_value: 0
+    tags: [fx, ecb, euro-area]
+
+  - series_id: "ECB:EXR:D.CHF.EUR.SP00.A"
+    title: ECB Reference Exchange Rate - CHF per EUR
+    category: international
+    frequency: d
+    units: CHF per EUR
+    active: true
+    source: ecb
+    load_type: incremental
+    expected_update_frequency: daily
+    vintage_enabled: true
+    validation_profile: standard
+    downstream_use_case: fx_rates
+    priority: 2
+    min_value: 0
+    tags: [fx, ecb, euro-area]
+
+  - series_id: "ECB:EXR:D.CNY.EUR.SP00.A"
+    title: ECB Reference Exchange Rate - CNY per EUR
+    category: international
+    frequency: d
+    units: CNY per EUR
+    active: true
+    source: ecb
+    load_type: incremental
+    expected_update_frequency: daily
+    vintage_enabled: true
+    validation_profile: standard
+    downstream_use_case: fx_rates
+    priority: 2
+    min_value: 0
+    tags: [fx, ecb, euro-area]
+
+  - series_id: "ECB:EXR:D.CAD.EUR.SP00.A"
+    title: ECB Reference Exchange Rate - CAD per EUR
+    category: international
+    frequency: d
+    units: CAD per EUR
+    active: true
+    source: ecb
+    load_type: incremental
+    expected_update_frequency: daily
+    vintage_enabled: true
+    validation_profile: standard
+    downstream_use_case: fx_rates
+    priority: 2
+    min_value: 0
+    tags: [fx, ecb, euro-area]
+
+  - series_id: "ECB:EXR:D.AUD.EUR.SP00.A"
+    title: ECB Reference Exchange Rate - AUD per EUR
+    category: international
+    frequency: d
+    units: AUD per EUR
+    active: true
+    source: ecb
+    load_type: incremental
+    expected_update_frequency: daily
+    vintage_enabled: true
+    validation_profile: standard
+    downstream_use_case: fx_rates
+    priority: 2
+    min_value: 0
+    tags: [fx, ecb, euro-area]
+
+  - series_id: "ECB:FM:M.U2.EUR.RT.MM.EURIBOR3MD_.HSTA"
+    title: ECB 3-Month EURIBOR
+    category: rates
+    frequency: m
+    units: Percent
+    active: true
+    source: ecb
+    load_type: incremental
+    expected_update_frequency: monthly
+    vintage_enabled: true
+    validation_profile: standard
+    downstream_use_case: money_market_rates
+    priority: 2
+    min_value: -5
+    max_value: 25
+    tags: [rates, money_market, ecb, euro-area]
+
+  - series_id: "ECB:YC:B.U2.EUR.4F.G_N_A.SV_C_YM.SR_10Y"
+    title: ECB Euro Area 10-Year Yield Curve Spot Rate
+    category: rates
+    frequency: d
+    units: Percent
+    active: true
+    source: ecb
+    load_type: incremental
+    expected_update_frequency: daily
+    vintage_enabled: true
+    validation_profile: standard
+    downstream_use_case: yield_curve
+    priority: 2
+    min_value: -5
+    max_value: 25
+    tags: [rates, yield_curve, ecb, euro-area]

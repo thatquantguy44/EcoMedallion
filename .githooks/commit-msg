@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+hook_dir="$(cd "$(dirname "$0")" && pwd)"
+"${hook_dir}/ensure-git-author.sh"
+
+msg_file="${1:?commit message file required}"
+
+if grep -Eiq '(^|[[:space:]])co-authored-by:[[:space:]].*(claude|codex|openai|anthropic|chatgpt|copilot|assistant|agent)' "$msg_file"; then
+  cat >&2 <<'EOF'
+Commit blocked: agent co-author trailers are not allowed in this repository.
+
+Keep the commit author as:
+  Joshua Lutkemuller <110635594+joshualutkemuller@users.noreply.github.com>
+EOF
+  exit 1
+fi

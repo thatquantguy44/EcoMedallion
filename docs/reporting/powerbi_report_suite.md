@@ -232,8 +232,8 @@ Rules:
   reports and **FEDWIRE** for rates/funding settlement math (FEDWIRE does not
   observe Good Friday, which is why it is the correct calendar for T+1/T+2
   against a Fed-cleared instrument).
-- `dim_series` covers the **254 curated series** in `config/series_catalog.yml`,
-  not the 2,820 active series in the manifests. These are two independent
+- `dim_series` covers the **279 curated series** in `config/series_catalog.yml`,
+  not the 2,829 active series in the manifests. These are two independent
   layers: the manifests decide what gets *ingested*, `series_catalog.yml`
   decides what gets *presentation semantics*. Reports that need the wider
   universe bind to `gold.fred_latest_observation` /
@@ -1575,7 +1575,7 @@ SWITCH ( TRUE (),
 
 ### 6.1 Model sizing
 
-Sizes are driven by the series universe (2,820 active series across the
+Sizes are driven by the series universe (2,829 active series across the
 manifests) and history depth. Before building, run the row-count query in
 Appendix C against the target environment — **do not** size from this table
 alone.
@@ -1585,7 +1585,7 @@ alone.
 | Snapshot facts | `macro_indicator_dashboard`, `benchmark_rate_board`, `macro_category_summary`, `funding_stress_daily` | tiny (10²–10³ rows) | full import |
 | Curated daily facts | `treasury_curve*`, `curve_spread*`, `credit_spread*`, `funding_tape_daily`, `macro_regime_daily` | small (10⁴–10⁵) | full import |
 | Windowed facts | `curve_spread_rolling`, `credit_spread_rolling`, `treasury_curve_rolling`, `realized_volatility` | medium (10⁵–10⁶; ×7 windows) | full import; window slicer defaults to one window |
-| **Universe-scope z-score facts** | `zscore_heatmap`, `fred_series_zscore_rolling` | **large** — built from *all* 2,820 active series, not the 254 cataloged ones | **restrict on load** (see below) |
+| **Universe-scope z-score facts** | `zscore_heatmap`, `fred_series_zscore_rolling` | **large** — built from *all* 2,829 active series, not the 279 cataloged ones | **restrict on load** (see below) |
 | Universe facts | `fred_latest_observation`, `fred_feature_transforms`, `ml_feature_matrix` | large | restrict series; incremental refresh |
 | Vintage facts | `fred_point_in_time`, `silver.fred_observation` | largest | restrict series + incremental refresh; DirectQuery last resort |
 | Audit facts | `etl_series_run`, `data_quality_result` | grows every run | incremental refresh on run date |
@@ -1670,21 +1670,21 @@ be resequenced freely to suit whoever is waiting.
 These are the things that must change outside Power BI. Each is a pipeline PR,
 not a report-authoring task.
 
-**G1 — `dim_series` covers 254 of 2,820 active series.** *(Partially resolved.)*
-Ingestion and presentation are separate layers. The manifests activate **2,820
-series** (of 2,920 declared) — fred 2,570, tiingo 85, bls 60, worldbank 37,
-bis 36, bea 23, sec 3, eia 2, treasury 2, census 1, ishares 1 — and all of them
-reach Gold. Separately, `config/series_catalog.yml` gives some of them
+**G1 — `dim_series` covers 279 of 2,829 active series.** *(Partially resolved.)*
+Ingestion and presentation are separate layers. The manifests activate **2,829
+series** (of 2,930 declared) — fred 2,570, tiingo 85, bls 60, worldbank 37,
+bis 36, bea 23, ecb 9, sec 3, eia 2, treasury 2, census 1, ishares 1 — and all
+of them reach Gold. Separately, `config/series_catalog.yml` gives some of them
 presentation semantics (`econ_category`, `polarity`, `default_transform`,
 `geo`, `scale`, `decimals`), which is what `dim_series` and the ECON objects
 (`macro_indicator_dashboard`, `_sparkline`, `macro_category_summary`) iterate.
 
-The catalog was expanded from 67 to **254** entries:
+The catalog was expanded from 67 to **279** entries:
 
 | Bucket | Entries | |
 |---|---|---|
-| LABOR | 21 | RATES 22, INFLATION 17, CREDIT 15, FX 15 |
-| HOUSING | 10 | GROWTH 9, MONEY 9, ACTIVITY 8, CONSUMER 8 |
+| LABOR | 21 | RATES 35, INFLATION 18, CREDIT 17, FX 22 |
+| HOUSING | 10 | GROWTH 10, MONEY 9, ACTIVITY 9, CONSUMER 8 |
 | **REGIONAL** | **120** | new bucket: 52 state unemployment, 50 coincident indexes, 14 state HPI, 4 census regions |
 
 Every entry is verified active in a manifest (enforced by
@@ -1693,7 +1693,7 @@ carries a `geo` code (enforced by
 `test_repo_series_catalog_regional_entries_carry_geo`). This unblocked Report 12
 and roughly doubled Report 1's national coverage.
 
-**What remains.** The other 2,566 active series are fully ingested and queryable
+**What remains.** The other 2,550 active series are fully ingested and queryable
 via `fred_latest_observation`, `fred_point_in_time`, `fred_feature_transforms`,
 `fred_series_zscore_rolling`, and `zscore_heatmap` — but still arrive with no
 category, polarity, or formatting metadata. That is a deliberate curation

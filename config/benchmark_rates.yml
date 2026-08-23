@@ -18,9 +18,9 @@ rates:
 
   # --- secured overnight / repo ---
   - {series_id: SOFR,  label: SOFR,  category: secured_overnight, benchmark: EFFR}
-  # FRED ids carry a RATE suffix; bare TGCR/BGCR are prefixes of the percentile
-  # and volume companion series, not the rate itself.
-  - {series_id: BGCRRATE,  label: Broad General Collateral Rate, category: secured_overnight, benchmark: SOFR}
+  # FRED ids carry a RATE suffix; bare TGCR is a prefix of the percentile and
+  # volume companion series, not the rate itself. BGCRRATE is inactive until a
+  # replacement id is verified.
   - {series_id: TGCRRATE,  label: Tri-Party General Collateral Rate, category: secured_overnight, benchmark: SOFR}
   - {series_id: OBFR,  label: Overnight Bank Funding Rate, category: unsecured_overnight, benchmark: EFFR}
   - {series_id: SOFR30DAYAVG, label: 30-Day Average SOFR, category: term_reference, benchmark: SOFR}

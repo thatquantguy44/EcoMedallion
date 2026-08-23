@@ -22,7 +22,9 @@ from __future__ import annotations
 
 import logging
 import time
-from typing import Any, Callable, Optional
+from collections.abc import Callable
+from datetime import datetime, timezone
+from typing import Any
 
 from fred_pipeline.sources.base import HTTPSource, SourceError
 from fred_pipeline.transform import _row_hash, _utc_now_iso, parse_value
@@ -34,7 +36,7 @@ class BLSAPIError(SourceError):
     """Raised when the BLS API returns an unrecoverable error."""
 
 
-def _bls_period_to_date(year: Any, period: Any) -> Optional[str]:
+def _bls_period_to_date(year: Any, period: Any) -> str | None:
     """Map a BLS (year, period) to an ISO observation date (period start).
 
     Returns ``None`` for periods we don't ingest as points — notably ``M13``
@@ -69,8 +71,8 @@ def normalize_bls_observations(
     series_id: str,
     payload: dict[str, Any],
     *,
-    run_id: Optional[str] = None,
-    ingested_at: Optional[str] = None,
+    run_id: str | None = None,
+    ingested_at: str | None = None,
     source: str = "bls",
 ) -> list[dict[str, Any]]:
     """Convert a raw BLS timeseries payload into canonical silver rows.
@@ -117,7 +119,7 @@ class BLSClient(HTTPSource):
 
     def __init__(
         self,
-        api_key: Optional[str] = None,
+        api_key: str | None = None,
         base_url: str = "https://api.bls.gov/publicAPI/v2",
         *,
         session: Any = None,
@@ -148,7 +150,7 @@ class BLSClient(HTTPSource):
             if msg:
                 return "; ".join(msg) if isinstance(msg, list) else str(msg)
             return str(body)
-        except Exception:
+        except ValueError:
             return getattr(resp, "text", "<no body>")
 
     def observations_endpoint(self, series_id: str) -> str:
@@ -161,10 +163,10 @@ class BLSClient(HTTPSource):
         self,
         series_id: str,
         *,
-        start_year: Optional[str] = None,
-        end_year: Optional[str] = None,
-        observation_start: Optional[str] = None,
-        observation_end: Optional[str] = None,
+        start_year: str | None = None,
+        end_year: str | None = None,
+        observation_start: str | None = None,
+        observation_end: str | None = None,
         **_ignored: Any,
     ) -> dict[str, Any]:
         """Fetch a single series' observations, returning the raw JSON payload.
@@ -178,6 +180,11 @@ class BLSClient(HTTPSource):
             start_year = str(observation_start)[:4]
         if observation_end and not end_year:
             end_year = str(observation_end)[:4]
+        if start_year and not end_year:
+            # BLS rejects requests that send startyear without endyear. The
+            # pipeline's incremental plan often supplies only observation_start,
+            # so bound the request through the current year.
+            end_year = str(datetime.now(timezone.utc).year)
 
         params: dict[str, Any] = {}
         if start_year:
@@ -189,10 +196,10 @@ class BLSClient(HTTPSource):
         status = payload.get("status")
         if status and status != "REQUEST_SUCCEEDED":
             messages = payload.get("message") or []
-            detail = "; ".join(messages) if isinstance(messages, list) else str(messages)
-            raise BLSAPIError(
-                f"BLS request not processed for {series_id!r}: {detail}"
+            detail = (
+                "; ".join(messages) if isinstance(messages, list) else str(messages)
             )
+            raise BLSAPIError(f"BLS request not processed for {series_id!r}: {detail}")
         return payload
 
     def normalize(
@@ -200,9 +207,10 @@ class BLSClient(HTTPSource):
         series_id: str,
         payload: dict[str, Any],
         *,
-        run_id: Optional[str] = None,
+        run_id: str | None = None,
         track_vintage: bool = False,  # BLS single-fetch carries no vintages
         source: str = "bls",
     ) -> list[dict[str, Any]]:
-        return normalize_bls_observations(series_id, payload, run_id=run_id,
-                                          source=source)
+        return normalize_bls_observations(
+            series_id, payload, run_id=run_id, source=source
+        )

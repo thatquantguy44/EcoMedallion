@@ -170,6 +170,7 @@ only the flags that differ in meaning are listed per command. (Full detail:
 | `run` | Full Bronze → Silver → Gold: extracts active series from every source with an active manifest entry, then rebuilds Gold (unless `--no-gold`) | `--local --db-path`, `--series`, `--source` / `--exclude-source`, `--full`, `--dry-run`, `--no-gold`, `--extract-workers`, `--source-workers`, `--rate-limit-per-minute`, `--source-rate-limits` |
 | `price-constituents` | Dynamic Tiingo pricing batch: reads current ETF membership from `gold_index_constituents`, prices only missing/stale tickers (by weight rank), stops on a Tiingo quota hit | `--index-etf`, `--max-symbols`, `--stale-days`, `--rate-limit-per-minute`, `--dry-run`, `--rebuild-gold` |
 | `discover` | Generates a new manifest from a FRED category/release/search — not a refresh, a discovery/authoring tool | `--category-id` / `--release-id` / `--search`, `--frequencies`, `--min-popularity`, `--max`, `--out`, `--dry-run` |
+| `discover-ecb` | Lists ECB SDMX dataflows for candidate manifest authoring | `--list-flows`, `--search`, `--max`, `--json` |
 
 ### Refresh (rebuilds from already-ingested data — no external API calls)
 
@@ -291,14 +292,14 @@ on the CLI, use the config file, `FRED_API_KEY`, or a Databricks secret scope.
 
 A series' `source:` selects its upstream API and its client; every source lands
 in the same tables, tagged by `source` in the natural key. **Thirteen source
-clients are wired**, eleven of which have active series today.
+clients are wired**, twelve of which have active series today.
 
 Counts below are the currently-active series per source
-(`active: true` in `manifests/*.yml`) — **2,821 active of 2,922 declared**.
+(`active: true` in `manifests/*.yml`) — **2,829 active of 2,930 declared**.
 
 | Source | `source:` | API key | Active series | Manifests |
 |---|---|---|---|---|
-| FRED | `fred` | required | **2,571** | the domain manifests |
+| FRED | `fred` | required | **2,570** | the domain manifests |
 | Tiingo | `tiingo` | **required** | 85 | `equity_tiingo.yml` |
 | BLS | `bls` | optional (keyless) | 60 | `bls_cpi_basket.yml`, `bls_cpi_basket_sa.yml`, `bls_labor.yml` |
 | World Bank | `worldbank` | none | 37 | `worldbank_global.yml` |
@@ -309,13 +310,14 @@ Counts below are the currently-active series per source
 | US Treasury | `treasury` | none | 2 | `treasury_fiscal.yml` |
 | Census | `census` | optional (keyless) | 1 | `census_indicators.yml` |
 | iShares | `ishares` | none | 1 | `etf_holdings.yml` |
-| ECB | `ecb` | none | **0** (manifest inactive) | `ecb_rates.yml` |
+| ECB | `ecb` | none | 9 | `ecb_rates.yml` |
 | Stooq | `stooq` | none | **0** (manifest inactive) | `equity_stooq.yml` |
 
 SEC is the one that exercises the point-in-time machinery — each filing's `filed`
-date becomes a vintage. Stooq ships inactive: its 89 entries are the price-return
-counterpart to the Tiingo total-return series, activated when you want the
-cross-source price reconciliation (`gold.equity_price_reconciliation`).
+date becomes a vintage. ECB ships with nine verified active FX and rates series.
+Stooq ships inactive: its 89 entries are the price-return counterpart to the
+Tiingo total-return series, activated when you want the cross-source price
+reconciliation (`gold.equity_price_reconciliation`).
 
 Before activating anything for redistribution, check
 [`config/data_licensing.yml`](config/data_licensing.yml) — Tiingo, Stooq, and
@@ -335,7 +337,7 @@ reviewed set — not all of FRED (~800k series). Grow it three ways:
 > **Ingestion and presentation are separate layers.** A manifest entry decides
 > what gets *pulled*; [`config/series_catalog.yml`](config/series_catalog.yml)
 > decides what gets *presentation semantics* (`econ_category`, `polarity`,
-> `default_transform`, `geo`). The catalog currently covers **254** of the
+> `default_transform`, `geo`). The catalog currently covers **279** of the
 > active series — those are the ones `gold.dim_series`,
 > `gold.macro_indicator_dashboard`, and `gold.macro_category_summary` are built
 > from. Everything else is still fully queryable via
@@ -376,12 +378,12 @@ Series aren't limited to FRED. A manifest entry can set `source:` to `bls`,
 through the same Bronze/Silver/Gold path — each row is tagged with its `source`
 in the natural key. ECB, Treasury, World Bank, Census, and SEC are keyless
 (SEC needs a descriptive User-Agent); EIA and BEA require a key. **SEC** brings
-company financials (fundamentals from EDGAR XBRL) in as point-in-time series. See the
-inactive demos under `manifests/` (`bls_labor.yml`, `bls_cpi_basket.yml` — the
-full CPI-U item hierarchy, more complete than FRED's partial mirror —
+company financials (fundamentals from EDGAR XBRL) in as point-in-time series.
+`ecb_rates.yml` ships active with a verified starter exchange-rate series. See
+the inactive demos under `manifests/` (`bls_labor.yml`, `bls_cpi_basket.yml` —
+the full CPI-U item hierarchy, more complete than FRED's partial mirror —
 `eia_energy.yml`, `treasury_fiscal.yml`, `worldbank_global.yml`,
-`bea_national_accounts.yml`, `census_indicators.yml`, `ecb_rates.yml`,
-`sec_financials.yml`), and
+`bea_national_accounts.yml`, `census_indicators.yml`, `sec_financials.yml`), and
 [`docs/instructions/adding_a_source.md`](docs/instructions/adding_a_source.md) for how to add a new source
 (one client module + one registry entry).
 
@@ -482,13 +484,26 @@ Find category/release ids on the FRED website (the id is in the page URL) or via
 the API. Review the generated YAML, set `vintage_enabled` / `validation_profile`
 where it matters, and commit it like any other manifest.
 
+### 4. Discover ECB dataflows
+
+ECB discovery is keyless. The first helper lists SDMX dataflows so you can pick
+which ECB domains to inspect before generating candidate manifests.
+
+```bash
+PYTHONPATH=src python -m fred_pipeline discover-ecb --list-flows --search exchange
+PYTHONPATH=src python -m fred_pipeline discover-ecb --list-flows --search rates --json
+```
+
+Follow `specs/spec002` for the planned next slices: flow structure inspection,
+bounded key expansion, and inactive candidate manifest generation.
+
 ## Open decisions (before non-FRED go-live)
 
 The code is complete; what's left is provisioning + domain calls, tracked as a
 checkboxed decision register in
 [`docs/deployment/deployment_runbook.md`](docs/deployment/deployment_runbook.md). In short:
 
-- **Which sources/series to activate** — the seven non-FRED demos are inactive;
+- **Which sources/series to activate** — the remaining non-FRED demos are inactive;
   turn on what you want (and, for SEC at scale, generate the manifest with
   `fred_pipeline.sources.sec.build_sec_manifest`).
 - **Keys & secrets** — provision EIA/BEA keys and (optional) BLS/Census keys in
@@ -496,8 +511,9 @@ checkboxed decision register in
 - **Egress** — allow the source hosts the active sources need.
 - **Per-series data policy** — `vintage_enabled`, `validation_profile`, value
   bounds, `restate_records`; plus any new `config/spreads.yml` pairs.
-- **Verify demo IDs live** — the demo series IDs (and Census predicate codes)
-  were built to the documented API shapes but not verified against the live APIs.
+- **Verify remaining demo IDs live** — aside from the active ECB starter, the
+  demo series IDs (and Census predicate codes) were built to the documented API
+  shapes but not verified against the live APIs.
 - **Known follow-ons** — SEC statement standardization (canonical tags + duration
   disambiguation); per-source **drift** reconciliation against each source's own
   metadata catalog (today's `reconcile` diffs FRED-only against FRED's `/series`
@@ -508,7 +524,7 @@ checkboxed decision register in
 
 Implemented and tested (**984 non-Spark tests + a Spark/Delta integration suite in
 CI**, green on the latest commit). Highlights: **thirteen pluggable sources**
-(eleven with active series; ECB and Stooq ship inactive) with
+(twelve with active series; Stooq ships inactive) with
 `source` in the natural key and source-aware Bronze lineage + replay;
 **API-driven FRED discovery**; **metadata governance** (drift + lifecycle vs.
 live FRED); **incremental loads** (full-on-first-run, then restate last N);

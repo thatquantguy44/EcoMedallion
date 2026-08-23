@@ -192,16 +192,18 @@ per-series manifest fields under `manifests/` (validated by
 ### Q1. Source activation
 - [ ] Which of the ~2,300 FRED series stay `active: true`?
 - [ ] Activate any of the inactive demo manifests? `bls_labor.yml`,
-      `eia_energy.yml`, `ecb_rates.yml`, `treasury_fiscal.yml`,
+      `eia_energy.yml`, `treasury_fiscal.yml`,
       `worldbank_global.yml`, `bea_national_accounts.yml`,
       `census_indicators.yml`, `sec_financials.yml` are all `active: false`
       today. EIA and BEA **require** a key (A3); ECB / Treasury / World Bank /
-      Census / SEC are keyless (SEC needs a User-Agent).
+      Census / SEC are keyless (SEC needs a User-Agent); `ecb_rates.yml` ships
+      active with nine verified starter FX and rates series.
       For SEC at scale, generate the manifest with
       `fred_pipeline.sources.sec.build_sec_manifest` rather than by hand.
-- [ ] **Verify the demo series IDs live** once keys exist (blocked in the build
-      env by egress). Quick check: `python -m fred_pipeline run --dry-run
-      --manifests manifests/eia_energy.yml` after setting `active: true`.
+- [ ] **Verify the remaining demo series IDs live** once keys exist (blocked in
+      the build env by egress). Quick check: `python -m fred_pipeline run
+      --dry-run --manifests manifests/eia_energy.yml` after setting
+      `active: true`.
 
 ### Q2. Per-series data policy (manifest fields)
 | Field | Decision | Notes |

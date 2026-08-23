@@ -17,11 +17,9 @@ metrics:
   - {name: EFFR,        series_id: EFFR,        metric_type: rate}
   - {name: IORB,        series_id: IORB,        metric_type: rate}
   - {name: OBFR,        series_id: OBFR,        metric_type: rate}
-  # FRED publishes the repo reference rates with a RATE suffix (the bare TGCR/
-  # BGCR prefixes belong to the percentile/volume companions, e.g.
-  # TGCR25THPERCENTILE, TGCRVOLUME). `name` stays short for display; series_id
-  # must be the real FRED id or the metric silently emits no rows.
-  - {name: BGCR,        series_id: BGCRRATE,    metric_type: rate}
+  # FRED publishes TGCR with a RATE suffix (the bare TGCR prefix belongs to the
+  # percentile/volume companion series, e.g. TGCR25THPERCENTILE, TGCRVOLUME).
+  # BGCRRATE is declared inactive until a replacement id is verified.
   - {name: TGCR,        series_id: TGCRRATE,    metric_type: rate}
   # --- balances ---
   - {name: FED_ASSETS,  series_id: WALCL,       metric_type: balance}

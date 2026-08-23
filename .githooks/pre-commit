@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+hook_dir="$(cd "$(dirname "$0")" && pwd)"
+"${hook_dir}/ensure-git-author.sh"
+
+# Preserve the repo's existing pre-commit behavior.
+install_python="/Library/Frameworks/Python.framework/Versions/3.12/bin/python3"
+args=(hook-impl --config=.pre-commit-config.yaml --hook-type=pre-commit)
+args+=(--hook-dir "$hook_dir" -- "$@")
+
+if [ -x "$install_python" ]; then
+  exec "$install_python" -mpre_commit "${args[@]}"
+elif command -v pre-commit >/dev/null 2>&1; then
+  exec pre-commit "${args[@]}"
+else
+  echo '`pre-commit` not found. Did you forget to activate your virtualenv?' >&2
+  exit 1
+fi

@@ -1,3 +1,5 @@
+import pytest
+
 from fred_pipeline.audit import RunStatus
 from fred_pipeline.config import Environment, PipelineConfig
 from fred_pipeline.local_store import LocalWarehouse
@@ -61,8 +63,10 @@ def test_local_run_builds_dim_date_and_market_calendar(
     pipe = FredPipeline(_config(), client=client, warehouse=wh)
     pipe.run([_spec("DGS10")], build_gold_layer=True)
 
-    obs_dates = {r["observation_date"] for r in
-                 wh.query("SELECT observation_date FROM silver_fred_observation")}
+    obs_dates = {
+        r["observation_date"]
+        for r in wh.query("SELECT observation_date FROM silver_fred_observation")
+    }
     n_days = len(obs_dates)
 
     dim_date = wh.query("SELECT * FROM gold_dim_date")
@@ -89,14 +93,15 @@ def test_local_backend_gold_views_exist_and_match_tables(
     pipe.run([_spec("DGS10")], build_gold_layer=True)
 
     views = {
-        r["name"] for r in wh.query(
-            "SELECT name FROM sqlite_master WHERE type='view'"
-        )
+        r["name"] for r in wh.query("SELECT name FROM sqlite_master WHERE type='view'")
     }
     assert views == {
-        "gold_v_latest_revised", "gold_v_point_in_time",
-        "gold_v_series_latest_value", "gold_v_series_revision_summary",
-        "gold_v_source_coverage", "gold_v_company_ratio_ranks",
+        "gold_v_latest_revised",
+        "gold_v_point_in_time",
+        "gold_v_series_latest_value",
+        "gold_v_series_revision_summary",
+        "gold_v_source_coverage",
+        "gold_v_company_ratio_ranks",
     }
 
     latest_table = wh.query("SELECT * FROM gold_fred_latest_observation")
@@ -117,14 +122,62 @@ def test_local_backend_gold_views_exist_and_match_tables(
     wh.close()
 
 
+def test_local_gold_rebuild_rolls_back_on_failure(tmp_path, monkeypatch):
+    wh = LocalWarehouse(_config(), db_path=str(tmp_path / "f.db"))
+    wh.conn.execute(
+        """
+        INSERT INTO gold_fred_point_in_time (
+            series_id, observation_date, realtime_start, realtime_end, value,
+            revision_number, is_missing, ingested_at
+        )
+        VALUES ('OLD', '2024-01-01', '', '', 1.0, 1, 0, 'old')
+        """
+    )
+    wh.conn.commit()
+    wh.merge_silver(
+        [
+            {
+                "source": "fred",
+                "series_id": "DGS10",
+                "observation_date": "2024-01-01",
+                "realtime_start": "",
+                "realtime_end": "",
+                "value": 4.0,
+                "raw_value": "4.0",
+                "is_missing": False,
+                "row_hash": "h",
+                "ingested_at": "now",
+                "run_id": "r",
+            }
+        ]
+    )
+
+    original_insert = wh._insert
+
+    def fail_first_gold_insert(table, rows, upsert_keys=None):
+        if table == "gold_fred_point_in_time":
+            raise RuntimeError("boom")
+        return original_insert(table, rows, upsert_keys)
+
+    monkeypatch.setattr(wh, "_insert", fail_first_gold_insert)
+
+    with pytest.raises(RuntimeError, match="boom"):
+        wh.build_gold()
+
+    rows = wh.query("SELECT series_id FROM gold_fred_point_in_time")
+    assert rows == [{"series_id": "OLD"}]
+    wh.close()
+
+
 def test_local_run_is_idempotent(tmp_path, observations_payload, fake_client_cls):
     db = str(tmp_path / "fred.db")
     cfg = _config()
 
     def one_run():
         wh = LocalWarehouse(cfg, db_path=db)
-        pipe = FredPipeline(cfg, client=fake_client_cls({"DGS10": observations_payload}),
-                            warehouse=wh)
+        pipe = FredPipeline(
+            cfg, client=fake_client_cls({"DGS10": observations_payload}), warehouse=wh
+        )
         pipe.run([_spec("DGS10")])
         n = len(wh.query("SELECT * FROM silver_fred_observation"))
         wh.close()
@@ -160,10 +213,17 @@ def test_source_is_part_of_natural_key(tmp_path):
     source updates in place rather than duplicating."""
     wh = LocalWarehouse(_config(), db_path=str(tmp_path / "f.db"))
     base = {
-        "series_id": "X", "observation_date": "2024-01-01",
-        "realtime_start": "", "realtime_end": "", "value": 1.0,
-        "raw_value": "1.0", "is_missing": False, "row_hash": "h",
-        "revision_number": 1, "ingested_at": "t", "run_id": "r",
+        "series_id": "X",
+        "observation_date": "2024-01-01",
+        "realtime_start": "",
+        "realtime_end": "",
+        "value": 1.0,
+        "raw_value": "1.0",
+        "is_missing": False,
+        "row_hash": "h",
+        "revision_number": 1,
+        "ingested_at": "t",
+        "run_id": "r",
     }
     wh.merge_silver([{**base, "source": "fred"}])
     wh.merge_silver([{**base, "source": "bls"}])
@@ -238,8 +298,18 @@ def test_additive_migration_adds_column_to_preexisting_db(tmp_path):
 
 def test_daily_feature_matrix_forward_fills():
     latest = [
-        {"series_id": "X", "observation_date": "2024-01-01", "value": 1.0, "is_missing": False},
-        {"series_id": "X", "observation_date": "2024-01-03", "value": 2.0, "is_missing": False},
+        {
+            "series_id": "X",
+            "observation_date": "2024-01-01",
+            "value": 1.0,
+            "is_missing": False,
+        },
+        {
+            "series_id": "X",
+            "observation_date": "2024-01-03",
+            "value": 2.0,
+            "is_missing": False,
+        },
     ]
     rows = daily_feature_matrix(latest)
     assert [r["as_of_date"] for r in rows] == ["2024-01-01", "2024-01-02", "2024-01-03"]
