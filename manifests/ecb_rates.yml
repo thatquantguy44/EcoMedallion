@@ -117,6 +117,86 @@ series:
     min_value: 0
     tags: [fx, ecb, euro-area]
 
+  - series_id: "ECB:EXR:D.NOK.EUR.SP00.A"
+    title: ECB Reference Exchange Rate - NOK per EUR
+    category: international
+    frequency: d
+    units: NOK per EUR
+    active: true
+    source: ecb
+    load_type: incremental
+    expected_update_frequency: daily
+    vintage_enabled: true
+    validation_profile: standard
+    downstream_use_case: fx_rates
+    priority: 2
+    min_value: 0
+    tags: [fx, ecb, euro-area]
+
+  - series_id: "ECB:EXR:D.SEK.EUR.SP00.A"
+    title: ECB Reference Exchange Rate - SEK per EUR
+    category: international
+    frequency: d
+    units: SEK per EUR
+    active: true
+    source: ecb
+    load_type: incremental
+    expected_update_frequency: daily
+    vintage_enabled: true
+    validation_profile: standard
+    downstream_use_case: fx_rates
+    priority: 2
+    min_value: 0
+    tags: [fx, ecb, euro-area]
+
+  - series_id: "ECB:EXR:D.DKK.EUR.SP00.A"
+    title: ECB Reference Exchange Rate - DKK per EUR
+    category: international
+    frequency: d
+    units: DKK per EUR
+    active: true
+    source: ecb
+    load_type: incremental
+    expected_update_frequency: daily
+    vintage_enabled: true
+    validation_profile: standard
+    downstream_use_case: fx_rates
+    priority: 2
+    min_value: 0
+    tags: [fx, ecb, euro-area]
+
+  - series_id: "ECB:EXR:D.NZD.EUR.SP00.A"
+    title: ECB Reference Exchange Rate - NZD per EUR
+    category: international
+    frequency: d
+    units: NZD per EUR
+    active: true
+    source: ecb
+    load_type: incremental
+    expected_update_frequency: daily
+    vintage_enabled: true
+    validation_profile: standard
+    downstream_use_case: fx_rates
+    priority: 2
+    min_value: 0
+    tags: [fx, ecb, euro-area]
+
+  - series_id: "ECB:EXR:D.PLN.EUR.SP00.A"
+    title: ECB Reference Exchange Rate - PLN per EUR
+    category: international
+    frequency: d
+    units: PLN per EUR
+    active: true
+    source: ecb
+    load_type: incremental
+    expected_update_frequency: daily
+    vintage_enabled: true
+    validation_profile: standard
+    downstream_use_case: fx_rates
+    priority: 2
+    min_value: 0
+    tags: [fx, ecb, euro-area]
+
   - series_id: "ECB:FM:M.U2.EUR.RT.MM.EURIBOR3MD_.HSTA"
     title: ECB 3-Month EURIBOR
     category: rates
@@ -134,8 +214,110 @@ series:
     max_value: 25
     tags: [rates, money_market, ecb, euro-area]
 
+  - series_id: "ECB:FM:D.U2.EUR.4F.KR.DFR.LEV"
+    title: ECB Deposit Facility Rate
+    category: rates
+    frequency: d
+    units: Percent
+    active: true
+    source: ecb
+    load_type: incremental
+    expected_update_frequency: daily
+    vintage_enabled: true
+    validation_profile: standard
+    downstream_use_case: policy_rates
+    priority: 2
+    min_value: -5
+    max_value: 25
+    tags: [rates, policy, ecb, euro-area]
+
+  - series_id: "ECB:FM:D.U2.EUR.4F.KR.MRR_FR.LEV"
+    title: ECB Main Refinancing Operations Fixed Rate
+    category: rates
+    frequency: d
+    units: Percent
+    active: true
+    source: ecb
+    load_type: incremental
+    expected_update_frequency: daily
+    vintage_enabled: true
+    validation_profile: standard
+    downstream_use_case: policy_rates
+    priority: 2
+    min_value: -5
+    max_value: 25
+    tags: [rates, policy, ecb, euro-area]
+
+  - series_id: "ECB:FM:D.U2.EUR.4F.KR.MLFR.LEV"
+    title: ECB Marginal Lending Facility Rate
+    category: rates
+    frequency: d
+    units: Percent
+    active: true
+    source: ecb
+    load_type: incremental
+    expected_update_frequency: daily
+    vintage_enabled: true
+    validation_profile: standard
+    downstream_use_case: policy_rates
+    priority: 2
+    min_value: -5
+    max_value: 25
+    tags: [rates, policy, ecb, euro-area]
+
+  - series_id: "ECB:YC:B.U2.EUR.4F.G_N_A.SV_C_YM.SR_2Y"
+    title: ECB Euro Area 2-Year Yield Curve Spot Rate
+    category: rates
+    frequency: d
+    units: Percent
+    active: true
+    source: ecb
+    load_type: incremental
+    expected_update_frequency: daily
+    vintage_enabled: true
+    validation_profile: standard
+    downstream_use_case: yield_curve
+    priority: 2
+    min_value: -5
+    max_value: 25
+    tags: [rates, yield_curve, ecb, euro-area]
+
+  - series_id: "ECB:YC:B.U2.EUR.4F.G_N_A.SV_C_YM.SR_5Y"
+    title: ECB Euro Area 5-Year Yield Curve Spot Rate
+    category: rates
+    frequency: d
+    units: Percent
+    active: true
+    source: ecb
+    load_type: incremental
+    expected_update_frequency: daily
+    vintage_enabled: true
+    validation_profile: standard
+    downstream_use_case: yield_curve
+    priority: 2
+    min_value: -5
+    max_value: 25
+    tags: [rates, yield_curve, ecb, euro-area]
+
   - series_id: "ECB:YC:B.U2.EUR.4F.G_N_A.SV_C_YM.SR_10Y"
     title: ECB Euro Area 10-Year Yield Curve Spot Rate
+    category: rates
+    frequency: d
+    units: Percent
+    active: true
+    source: ecb
+    load_type: incremental
+    expected_update_frequency: daily
+    vintage_enabled: true
+    validation_profile: standard
+    downstream_use_case: yield_curve
+    priority: 2
+    min_value: -5
+    max_value: 25
+    tags: [rates, yield_curve, ecb, euro-area]
+
+  - series_id: "ECB:YC:B.U2.EUR.4F.G_N_A.SV_C_YM.SR_30Y"
+    title: ECB Euro Area 30-Year Yield Curve Spot Rate
     category: rates
     frequency: d
     units: Percent

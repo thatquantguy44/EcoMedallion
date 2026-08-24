@@ -59,7 +59,7 @@ Most non-FRED demo manifests ship `active: false` — plus some FRED additions
 (`macro_flags.yml`, the `DGS3/DGS7/DGS20` curve tenors, `fed_funding.yml`,
 `ice_credit.yml`) — because the series ids were assembled from documentation,
 not verified against the live APIs. `ecb_rates.yml` is the exception: it ships
-active with nine verified FX and rates series. Each manifest's header says
+active with 20 verified FX and rates series. Each manifest's header says
 exactly where to verify its ids.
 
 For each series you want, confirm the id at the source, then flip:
@@ -103,10 +103,18 @@ decide which flow to inspect or turn into candidate manifest rows:
 ```bash
 fred-pipeline discover-ecb --list-flows --search exchange
 fred-pipeline discover-ecb --list-flows --search rates --json
+fred-pipeline discover-ecb --flow EXR --inspect
+fred-pipeline discover-ecb --flow EXR \
+  --frequency d \
+  --dimension CURRENCY=CZK,HUF \
+  --dimension CURRENCY_DENOM=EUR \
+  --dimension EXR_TYPE=SP00 \
+  --dimension EXR_SUFFIX=A \
+  --dry-run
 ```
 
-The current implementation lists flows. `specs/spec002` tracks the next slices:
-structure inspection and bounded inactive candidate manifest generation.
+Generated ECB manifests are inactive by default. Review and smoke-test exact
+`ECB:<flow_ref>:<key>` ids before activating broad flows.
 
 ## 3. Run
 

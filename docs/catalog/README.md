@@ -19,6 +19,7 @@ This folder is the human-readable catalog companion to `manifests/*.yml` and
 | BLS | [bls.md](bls.md) | placeholder |
 | Census | [census.md](census.md) | placeholder |
 | ECB | [ecb.md](ecb.md) | populated |
+| ECB candidates | [ecb_candidate_flows.md](ecb_candidate_flows.md) | discovery backlog |
 | EIA | [eia.md](eia.md) | placeholder |
 | FRED | [fred.md](fred.md) | populated starter |
 | iShares | [ishares.md](ishares.md) | placeholder |

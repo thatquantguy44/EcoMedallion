@@ -295,7 +295,7 @@ in the same tables, tagged by `source` in the natural key. **Thirteen source
 clients are wired**, twelve of which have active series today.
 
 Counts below are the currently-active series per source
-(`active: true` in `manifests/*.yml`) — **2,829 active of 2,930 declared**.
+(`active: true` in `manifests/*.yml`) — **2,840 active of 2,941 declared**.
 
 | Source | `source:` | API key | Active series | Manifests |
 |---|---|---|---|---|
@@ -310,11 +310,11 @@ Counts below are the currently-active series per source
 | US Treasury | `treasury` | none | 2 | `treasury_fiscal.yml` |
 | Census | `census` | optional (keyless) | 1 | `census_indicators.yml` |
 | iShares | `ishares` | none | 1 | `etf_holdings.yml` |
-| ECB | `ecb` | none | 9 | `ecb_rates.yml` |
+| ECB | `ecb` | none | 20 | `ecb_rates.yml` |
 | Stooq | `stooq` | none | **0** (manifest inactive) | `equity_stooq.yml` |
 
 SEC is the one that exercises the point-in-time machinery — each filing's `filed`
-date becomes a vintage. ECB ships with nine verified active FX and rates series.
+date becomes a vintage. ECB ships with 20 verified active FX and rates series.
 Stooq ships inactive: its 89 entries are the price-return counterpart to the
 Tiingo total-return series, activated when you want the cross-source price
 reconciliation (`gold.equity_price_reconciliation`).
@@ -337,7 +337,7 @@ reviewed set — not all of FRED (~800k series). Grow it three ways:
 > **Ingestion and presentation are separate layers.** A manifest entry decides
 > what gets *pulled*; [`config/series_catalog.yml`](config/series_catalog.yml)
 > decides what gets *presentation semantics* (`econ_category`, `polarity`,
-> `default_transform`, `geo`). The catalog currently covers **279** of the
+> `default_transform`, `geo`). The catalog currently covers **290** of the
 > active series — those are the ones `gold.dim_series`,
 > `gold.macro_indicator_dashboard`, and `gold.macro_category_summary` are built
 > from. Everything else is still fully queryable via

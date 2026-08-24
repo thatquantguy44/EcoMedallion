@@ -128,12 +128,32 @@ def _cmd_discover(args: argparse.Namespace) -> int:
 
 
 def _cmd_discover_ecb(args: argparse.Namespace) -> int:
+    import os
+
     from fred_pipeline.catalogs.ecb_discovery import (
         ECBMetadataClient,
+        build_ecb_manifest_dict,
         dataflows_to_rows,
+        ecb_manifest_to_yaml,
+        estimate_candidate_count,
         filter_dataflows,
+        generate_ecb_candidate_specs,
+        parse_dimension_filters,
     )
     from fred_pipeline.pipeline import _rate_limit_for_source
+
+    modes = [
+        bool(args.list_flows),
+        bool(args.inspect),
+        bool(args.flow and not args.inspect),
+    ]
+    if sum(modes) != 1:
+        print(
+            "ERROR: pass exactly one ECB discovery mode: --list-flows, "
+            "--flow FLOW --inspect, or --flow FLOW for candidate generation",
+            file=sys.stderr,
+        )
+        return 2
 
     config = PipelineConfig.resolve(
         environment=Environment(args.env), config_file=args.config
@@ -144,24 +164,114 @@ def _cmd_discover_ecb(args: argparse.Namespace) -> int:
         max_retries=config.max_retries,
         rate_limit_per_minute=_rate_limit_for_source(config, "ecb"),
     )
-    flows = filter_dataflows(
-        client.list_dataflows(),
-        search=args.search,
-        max_results=args.max,
+    flows = client.list_dataflows()
+
+    if args.list_flows:
+        visible = filter_dataflows(
+            flows,
+            search=args.search,
+            max_results=args.max,
+        )
+
+        if args.json:
+            print(json.dumps(dataflows_to_rows(visible), indent=2))
+            return 0
+
+        print(f"Found {len(visible)} ECB dataflow(s).")
+        if not visible:
+            return 0
+        print(f"{'Flow':12s} {'Agency':8s} {'Version':8s} Name")
+        print(f"{'-' * 12} {'-' * 8} {'-' * 8} {'-' * 60}")
+        for flow in visible:
+            name = flow.name or flow.description or ""
+            print(f"{flow.flow_id:12s} {flow.agency_id:8s} {flow.version:8s} {name}")
+        return 0
+
+    matches = [flow for flow in flows if flow.flow_id.upper() == args.flow.upper()]
+    flow = matches[0] if matches else None
+    agency_id = args.agency or (flow.agency_id if flow else "ECB")
+    version = args.version or (flow.version if flow else "1.0")
+    structure = client.get_dataflow_structure(
+        args.flow,
+        agency_id=agency_id,
+        version=version,
     )
 
-    if args.json:
-        print(json.dumps(dataflows_to_rows(flows), indent=2))
+    if args.inspect:
+        if args.json:
+            print(
+                json.dumps(structure.to_dict(sample_size=args.sample_codes), indent=2)
+            )
+            return 0
+        print(
+            f"Flow: {structure.flow_id} ({structure.agency_id} "
+            f"{structure.version}) - {structure.name}"
+        )
+        print(
+            f"Structure: {structure.structure_agency_id}:"
+            f"{structure.structure_id} ({structure.structure_version})"
+        )
+        print(f"{'Pos':>3s} {'Dimension':24s} {'Codelist':24s} {'Codes':>7s} Sample")
+        print(f"{'-' * 3} {'-' * 24} {'-' * 24} {'-' * 7} {'-' * 40}")
+        for dim in structure.dimensions:
+            sample = ", ".join(code.code_id for code in dim.codes[: args.sample_codes])
+            print(
+                f"{dim.position:3d} {dim.dimension_id:24s} "
+                f"{dim.codelist_id:24s} {len(dim.codes):7d} {sample}"
+            )
         return 0
 
-    print(f"Found {len(flows)} ECB dataflow(s).")
-    if not flows:
-        return 0
-    print(f"{'Flow':12s} {'Agency':8s} {'Version':8s} Name")
-    print(f"{'-' * 12} {'-' * 8} {'-' * 8} {'-' * 60}")
-    for flow in flows:
-        name = flow.name or flow.description or ""
-        print(f"{flow.flow_id:12s} {flow.agency_id:8s} {flow.version:8s} {name}")
+    dimension_filters = parse_dimension_filters(args.dimension)
+    frequencies = (
+        [freq.strip() for freq in args.frequency.split(",")] if args.frequency else None
+    )
+    estimate = estimate_candidate_count(
+        structure,
+        dimension_filters=dimension_filters,
+        frequencies=frequencies,
+        include_code=args.include_code,
+        exclude_code=args.exclude_code,
+    )
+    exclude_ids: set[str] = set()
+    if not args.include_existing and os.path.isdir(args.manifests):
+        try:
+            existing = load_manifests(args.manifests)
+            exclude_ids = {s.series_id for s in all_series(existing, active_only=False)}
+        except (OSError, ValueError):
+            exclude_ids = set()
+    specs, skipped = generate_ecb_candidate_specs(
+        structure,
+        dimension_filters=dimension_filters,
+        frequencies=frequencies,
+        include_code=args.include_code,
+        exclude_code=args.exclude_code,
+        category=args.category,
+        max_results=args.max,
+        max_cartesian=args.max_cartesian,
+        force=args.force,
+        exclude_ids=exclude_ids,
+    )
+    manifest_name = args.name or f"ecb_{structure.flow_id.lower()}_candidates"
+    description = (
+        args.description
+        or f"Inactive ECB candidate series generated from {structure.flow_id} metadata."
+    )
+    manifest = build_ecb_manifest_dict(manifest_name, specs, description=description)
+    yaml_text = ecb_manifest_to_yaml(manifest)
+
+    print(
+        f"ECB {structure.flow_id}: estimated {estimate} candidate combination(s); "
+        f"kept {len(specs)}, skipped {len(skipped)}."
+    )
+    if args.dry_run or not args.out:
+        print("\n--- manifest (dry run, not written) ---\n")
+        print(yaml_text)
+    else:
+        with open(args.out, "w", encoding="utf-8") as fh:
+            fh.write(yaml_text)
+        print(f"Wrote {len(specs)} inactive ECB candidate series to {args.out}")
+        load_manifests(args.out)
+        print("Validated: generated manifest loads successfully.")
     return 0
 
 
@@ -894,10 +1004,28 @@ def build_parser() -> argparse.ArgumentParser:
 
     de = sub.add_parser(
         "discover-ecb",
-        help="list ECB SDMX dataflows for candidate manifest authoring",
+        help="inspect ECB SDMX metadata and generate candidate manifests",
+    )
+    de.add_argument("--list-flows", action="store_true", help="list ECB dataflows")
+    de.add_argument(
+        "--flow",
+        default=None,
+        help="ECB dataflow id to inspect or expand, e.g. EXR",
     )
     de.add_argument(
-        "--list-flows", action="store_true", required=True, help="list ECB dataflows"
+        "--agency",
+        default=None,
+        help="override dataflow agency id; defaults to the listed ECB agency",
+    )
+    de.add_argument(
+        "--version",
+        default=None,
+        help="override dataflow version; defaults to the listed ECB version",
+    )
+    de.add_argument(
+        "--inspect",
+        action="store_true",
+        help="inspect one --flow's ordered dimensions and code lists",
     )
     de.add_argument(
         "--search",
@@ -905,10 +1033,70 @@ def build_parser() -> argparse.ArgumentParser:
         help="case-insensitive filter on flow id/name/description",
     )
     de.add_argument(
-        "--max", type=int, default=100, help="maximum dataflows to print (default: 100)"
+        "--max",
+        type=int,
+        default=100,
+        help="maximum dataflows or generated candidates to print/write",
     )
     de.add_argument(
-        "--json", action="store_true", help="print machine-readable dataflow rows"
+        "--sample-codes",
+        type=int,
+        default=8,
+        help="codes to show per dimension when inspecting a flow",
+    )
+    de.add_argument(
+        "--dimension",
+        action="append",
+        default=[],
+        help="dimension filter KEY=VALUE[,VALUE]; repeatable",
+    )
+    de.add_argument(
+        "--frequency",
+        default=None,
+        help="manifest frequency filter, e.g. d,m,q,a",
+    )
+    de.add_argument(
+        "--include-code",
+        action="append",
+        default=[],
+        help="keep only codes whose id/name contains this text; repeatable",
+    )
+    de.add_argument(
+        "--exclude-code",
+        action="append",
+        default=[],
+        help="drop codes whose id/name contains this text; repeatable",
+    )
+    de.add_argument(
+        "--max-cartesian",
+        type=int,
+        default=10000,
+        help="refuse candidate expansion above this count unless --force is set",
+    )
+    de.add_argument(
+        "--force",
+        action="store_true",
+        help="allow candidate expansion above --max-cartesian",
+    )
+    de.add_argument(
+        "--include-existing",
+        action="store_true",
+        help="do not dedupe against series already in --manifests",
+    )
+    de.add_argument(
+        "--manifests",
+        default="manifests",
+        help="manifest directory used for duplicate exclusion",
+    )
+    de.add_argument("--name", default=None, help="generated manifest name")
+    de.add_argument("--category", default=None, help="generated manifest category")
+    de.add_argument(
+        "--description", default=None, help="generated manifest description"
+    )
+    de.add_argument("--dry-run", action="store_true", help="print instead of writing")
+    de.add_argument("--out", default=None, help="path for generated manifest YAML")
+    de.add_argument(
+        "--json", action="store_true", help="print machine-readable metadata"
     )
     de.add_argument("--env", default="dev", choices=[e.value for e in Environment])
     de.add_argument(

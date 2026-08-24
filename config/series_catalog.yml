@@ -121,7 +121,13 @@ series:
   - {series_id: MORTGAGE30US, econ_category: RATES, polarity: 0, default_transform: level, notes: 30y fixed mortgage rate}
   - {series_id: MORTGAGE15US, econ_category: RATES, polarity: 0, default_transform: level, notes: 15y fixed mortgage rate}
   - {series_id: "ECB:FM:M.U2.EUR.RT.MM.EURIBOR3MD_.HSTA", econ_category: RATES, polarity: 0, default_transform: level, source: ecb, decimals: 4, notes: ECB 3-month EURIBOR}
+  - {series_id: "ECB:FM:D.U2.EUR.4F.KR.DFR.LEV", econ_category: RATES, polarity: 0, default_transform: level, source: ecb, decimals: 4, notes: ECB deposit facility rate}
+  - {series_id: "ECB:FM:D.U2.EUR.4F.KR.MRR_FR.LEV", econ_category: RATES, polarity: 0, default_transform: level, source: ecb, decimals: 4, notes: ECB main refinancing operations fixed rate}
+  - {series_id: "ECB:FM:D.U2.EUR.4F.KR.MLFR.LEV", econ_category: RATES, polarity: 0, default_transform: level, source: ecb, decimals: 4, notes: ECB marginal lending facility rate}
+  - {series_id: "ECB:YC:B.U2.EUR.4F.G_N_A.SV_C_YM.SR_2Y", econ_category: RATES, polarity: 0, default_transform: level, source: ecb, decimals: 4, notes: ECB euro area 2y yield curve spot rate}
+  - {series_id: "ECB:YC:B.U2.EUR.4F.G_N_A.SV_C_YM.SR_5Y", econ_category: RATES, polarity: 0, default_transform: level, source: ecb, decimals: 4, notes: ECB euro area 5y yield curve spot rate}
   - {series_id: "ECB:YC:B.U2.EUR.4F.G_N_A.SV_C_YM.SR_10Y", econ_category: RATES, polarity: 0, default_transform: level, source: ecb, decimals: 4, notes: ECB euro area 10y yield curve spot rate}
+  - {series_id: "ECB:YC:B.U2.EUR.4F.G_N_A.SV_C_YM.SR_30Y", econ_category: RATES, polarity: 0, default_transform: level, source: ecb, decimals: 4, notes: ECB euro area 30y yield curve spot rate}
 
   # ---- CREDIT ----------------------------------------------------------------
   - {series_id: NFCI,     econ_category: CREDIT, polarity: -1, default_transform: level, notes: Chicago Fed financial conditions}
@@ -185,6 +191,11 @@ series:
   - {series_id: "ECB:EXR:D.CNY.EUR.SP00.A", econ_category: FX, polarity: 0, default_transform: level, source: ecb, decimals: 4, notes: ECB CNY per EUR reference rate}
   - {series_id: "ECB:EXR:D.CAD.EUR.SP00.A", econ_category: FX, polarity: 0, default_transform: level, source: ecb, decimals: 4, notes: ECB CAD per EUR reference rate}
   - {series_id: "ECB:EXR:D.AUD.EUR.SP00.A", econ_category: FX, polarity: 0, default_transform: level, source: ecb, decimals: 4, notes: ECB AUD per EUR reference rate}
+  - {series_id: "ECB:EXR:D.NOK.EUR.SP00.A", econ_category: FX, polarity: 0, default_transform: level, source: ecb, decimals: 4, notes: ECB NOK per EUR reference rate}
+  - {series_id: "ECB:EXR:D.SEK.EUR.SP00.A", econ_category: FX, polarity: 0, default_transform: level, source: ecb, decimals: 4, notes: ECB SEK per EUR reference rate}
+  - {series_id: "ECB:EXR:D.DKK.EUR.SP00.A", econ_category: FX, polarity: 0, default_transform: level, source: ecb, decimals: 4, notes: ECB DKK per EUR reference rate}
+  - {series_id: "ECB:EXR:D.NZD.EUR.SP00.A", econ_category: FX, polarity: 0, default_transform: level, source: ecb, decimals: 4, notes: ECB NZD per EUR reference rate}
+  - {series_id: "ECB:EXR:D.PLN.EUR.SP00.A", econ_category: FX, polarity: 0, default_transform: level, source: ecb, decimals: 4, notes: ECB PLN per EUR reference rate}
   - {series_id: DEXJPUS,  econ_category: FX, polarity: 0, default_transform: level, notes: JPY per USD}
   - {series_id: DEXUSUK,  econ_category: FX, polarity: 0, default_transform: level, decimals: 4, notes: USD per GBP}
   - {series_id: DEXCHUS,  econ_category: FX, polarity: 0, default_transform: level, decimals: 4, notes: CNY per USD}

@@ -31,14 +31,16 @@ source: ecb
 
 ## 2. Current ECB Footprint
 
-The repository currently has exactly **1 ECB series**, and it is active:
+The repository currently has **20 active ECB series** in
+`manifests/ecb_rates.yml`:
 
-| Manifest | Series ID | Title | Frequency | Active | Cataloged |
-|---|---|---|---|---|---|
-| `manifests/ecb_rates.yml` | `ECB:EXR:D.USD.EUR.SP00.A` | ECB Reference Exchange Rate - USD per EUR | `d` | true | yes |
+- 12 daily euro foreign exchange reference rates from `EXR`.
+- 3 ECB policy rates from `FM`.
+- 1 monthly 3-month EURIBOR series from `FM`.
+- 4 euro area yield-curve spot rates from `YC`.
 
-This series is also present in `config/series_catalog.yml` as an `FX` series, so
-it appears in the Gold terminal/dashboard presentation views.
+All 20 are also present in `config/series_catalog.yml`, so they appear in the
+Gold terminal/dashboard presentation views after refresh.
 
 ## 3. Non-Goals
 
@@ -61,14 +63,14 @@ https://data-api.ecb.europa.eu/service
 Discovery should use SDMX metadata endpoints:
 
 - `/dataflow`
-- `/dataflow/{agencyID}/{resourceID}/{version}`
+- `/dataflow/{agencyID}/{resourceID}/{version}?references=all`
 - `/datastructure/{agencyID}/{resourceID}/{version}`
 - Code-list references returned from the data structure response.
 
 Implementation notes:
 
-- Prefer SDMX JSON for metadata if available; fall back to SDMX XML only if
-  needed.
+- Use SDMX XML for the implemented slice. ECB returns dimensions and embedded
+  code lists from the dataflow reference endpoint when `references=all`.
 - Preserve the simple flow id used by ingestion when possible, such as `EXR`.
 - Retain the full ECB agency/resource/version metadata in diagnostics so a user
   can trace generated ids back to the exact metadata source.
@@ -308,8 +310,8 @@ Use fixtures under `tests/fixtures/ecb/` if the metadata samples are large.
 - `python -m fred_pipeline discover-ecb --flow EXR --frequency d --max 25
   --dry-run` produces a valid inactive candidate manifest.
 - Generated manifests pass `PYTHONPATH=src python -m fred_pipeline validate`.
-- Existing `manifests/ecb_rates.yml` remains the only active ECB series unless
-  the user deliberately activates more rows.
+- Existing `manifests/ecb_rates.yml` remains the only active ECB manifest unless
+  the user deliberately activates more ECB rows elsewhere.
 - Tests pass without network access.
 
 ## 9. Suggested First Implementation Slice
@@ -320,10 +322,25 @@ Build the smallest useful version first:
 2. Add `discover-ecb --list-flows --search --json`. Status: implemented.
 3. Add parser tests from a stored fixture. Status: implemented.
 4. Add docs for listing flows. Status: implemented.
+5. Add `--flow FLOW --inspect` structure inspection. Status: implemented.
+6. Add bounded inactive candidate manifest generation. Status: implemented.
 
-Then add flow inspection, then bounded manifest generation.
+## 10. Candidate Dataflow Backlog
 
-## 10. Follow-Ups
+The broad ECB flow backlog is recorded in
+`docs/catalog/ecb_candidate_flows.md`. First-pass expansion should prioritize:
+
+- `EST`, `FM_PUB`, and `YC_PUB` for policy, money-market, and curve coverage.
+- `BSI_PUB`, `MIR_PUB`, and `MOBILE_BSI` for money, credit, and banking.
+- `ICP_PUB`, `HICP`, and `MOBILE_ICP` for inflation.
+- `MNA_PUB` and the `JDF_MNA_*` GDP growth/contribution flows for macro.
+- `QSA_PUB`, `GFS_PUB`, `BP6_PUB`, `PSS`, `SUP`, `CES`, `SPF`, and `SAFE`
+  for sector accounts, government finance, external statistics, payments,
+  supervision, and surveys.
+
+Then add live smoke-test assistance for generated candidates.
+
+## 11. Follow-Ups
 
 - Add an interactive review report that groups candidates by flow, frequency,
   geography, and unit.

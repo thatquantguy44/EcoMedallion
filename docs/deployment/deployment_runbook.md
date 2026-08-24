@@ -197,7 +197,7 @@ per-series manifest fields under `manifests/` (validated by
       `census_indicators.yml`, `sec_financials.yml` are all `active: false`
       today. EIA and BEA **require** a key (A3); ECB / Treasury / World Bank /
       Census / SEC are keyless (SEC needs a User-Agent); `ecb_rates.yml` ships
-      active with nine verified starter FX and rates series.
+      active with 20 verified starter FX and rates series.
       For SEC at scale, generate the manifest with
       `fred_pipeline.sources.sec.build_sec_manifest` rather than by hand.
 - [ ] **Verify the remaining demo series IDs live** once keys exist (blocked in
