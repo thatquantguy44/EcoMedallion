@@ -261,7 +261,7 @@ def test_repo_register_flags_exactly_bis_and_worldbank():
     licensing = load_data_licensing_config("config/data_licensing.yml")
     active = [s for s in all_series(load_manifests("manifests")) if s.active]
     flagged = {v.source for v in check_redistribution_review(active, licensing)}
-    assert flagged == {"bis", "worldbank"}
+    assert flagged == {"bis", "ecb", "worldbank"}
 
 
 def test_repo_register_records_why_bis_is_unverified():
