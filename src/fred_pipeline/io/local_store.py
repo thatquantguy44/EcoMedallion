@@ -648,6 +648,13 @@ class LocalWarehouse:
         # metric disambiguates measures that share an econ_category (REGIONAL
         # spans unemployment, activity and house prices).
         ("gold_dim_series", "metric", "TEXT"),
+        # quant/derivatives marker dates, added alongside gold_market_calendar
+        # (commit 0773630) without a matching migration entry -- every Gold
+        # rebuild against a pre-existing local db failed on this table with
+        # "table gold_dim_date has no column named is_imm_date" until now.
+        ("gold_dim_date", "is_imm_date", "INTEGER"),
+        ("gold_dim_date", "is_monthly_option_expiry", "INTEGER"),
+        ("gold_dim_date", "is_triple_witching", "INTEGER"),
     )
 
     def _apply_additive_migrations(self) -> None:
