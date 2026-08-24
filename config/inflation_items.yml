@@ -25,10 +25,10 @@ items:
   - {series_id: CPIAUCSL, label: All Items,                      basket: CPI, sa_nsa: SA, level: 0}
   - {series_id: CPILFESL, label: Core (All Items Less Food and Energy), basket: CPI, sa_nsa: SA, parent: CPIAUCSL, level: 1}
   - {series_id: CUSR0000SA0E,   label: Energy,                   basket: CPI, sa_nsa: SA, parent: CPIAUCSL, level: 1}
-  - {series_id: CUSR0000SAC,    label: Commodities,              basket: CPI, sa_nsa: SA, parent: CPIAUCSL, level: 1}
-  - {series_id: CUSR0000SAS,    label: Services,                 basket: CPI, sa_nsa: SA, parent: CPIAUCSL, level: 1}
-  - {series_id: CUSR0000SACL1E, label: Core Goods,               basket: CPI, sa_nsa: SA, parent: CUSR0000SAC, level: 2}
-  - {series_id: CUSR0000SASLE,  label: Core Services,            basket: CPI, sa_nsa: SA, parent: CUSR0000SAS, level: 2}
+  - {series_id: CUSR0000SAC,    label: Commodities,              basket: CPI, sa_nsa: SA, parent: CPIAUCSL, level: 1, weight: 37.4}
+  - {series_id: CUSR0000SAS,    label: Services,                 basket: CPI, sa_nsa: SA, parent: CPIAUCSL, level: 1, weight: 62.6}
+  - {series_id: CUSR0000SACL1E, label: Core Goods,               basket: CPI, sa_nsa: SA, parent: CUSR0000SAC, level: 2, weight: 19.6}
+  - {series_id: CUSR0000SASLE,  label: Core Services ex Energy,  basket: CPI, sa_nsa: SA, parent: CUSR0000SAS, level: 2, weight: 57.1}
   # --- the 8 major groups (the waterfall decomposition) ---
   - {series_id: CUSR0000SAF, label: Food and Beverages,          basket: CPI, sa_nsa: SA, parent: CPIAUCSL, level: 1, weight: 14.4, waterfall: true}
   - {series_id: CUSR0000SAH, label: Housing,                     basket: CPI, sa_nsa: SA, parent: CPIAUCSL, level: 1, weight: 44.4, waterfall: true}
@@ -45,14 +45,14 @@ items:
   - {series_id: CUSR0000SAH1,   label: Shelter,                  basket: CPI, sa_nsa: SA, parent: CUSR0000SAH, level: 2, weight: 36.2}
   - {series_id: CUSR0000SEHA,   label: Rent of Primary Residence, basket: CPI, sa_nsa: SA, parent: CUSR0000SAH1, level: 3}
   - {series_id: CUSR0000SEHC,   label: Owners' Equivalent Rent,  basket: CPI, sa_nsa: SA, parent: CUSR0000SAH1, level: 3}
-  - {series_id: CUSR0000SAH2,   label: Fuels and Utilities,      basket: CPI, sa_nsa: SA, parent: CUSR0000SAH, level: 2}
+  - {series_id: CUSR0000SAH2,   label: Fuels and Utilities,      basket: CPI, sa_nsa: SA, parent: CUSR0000SAH, level: 2, weight: 5.6}
   - {series_id: CUSR0000SEHF01, label: Electricity,              basket: CPI, sa_nsa: SA, parent: CUSR0000SAH2, level: 3}
-  - {series_id: CUSR0000SEHF02, label: Utility (Piped) Gas,      basket: CPI, sa_nsa: SA, parent: CUSR0000SAH2, level: 3}
+  - {series_id: CUSR0000SEHF02, label: Utility (Piped) Gas,      basket: CPI, sa_nsa: SA, parent: CUSR0000SAH2, level: 3, weight: 0.9}
   - {series_id: CUSR0000SETA01, label: New Vehicles,             basket: CPI, sa_nsa: SA, parent: CUSR0000SAT, level: 2}
   - {series_id: CUSR0000SETA02, label: Used Cars and Trucks,     basket: CPI, sa_nsa: SA, parent: CUSR0000SAT, level: 2}
   - {series_id: CUSR0000SETB01, label: Gasoline (All Types),     basket: CPI, sa_nsa: SA, parent: CUSR0000SAT, level: 2}
-  - {series_id: CUSR0000SAM1,   label: Medical Care Commodities, basket: CPI, sa_nsa: SA, parent: CUSR0000SAM, level: 2}
-  - {series_id: CUSR0000SAM2,   label: Medical Care Services,    basket: CPI, sa_nsa: SA, parent: CUSR0000SAM, level: 2}
+  - {series_id: CUSR0000SAM1,   label: Medical Care Commodities, basket: CPI, sa_nsa: SA, parent: CUSR0000SAM, level: 2, weight: 1.6}
+  - {series_id: CUSR0000SAM2,   label: Medical Care Services,    basket: CPI, sa_nsa: SA, parent: CUSR0000SAM, level: 2, weight: 6.4}
 
   # ============================ CPI / NSA tree ===============================
   - {series_id: CUUR0000SA0,    label: All Items,                basket: CPI, sa_nsa: NSA, level: 0}
