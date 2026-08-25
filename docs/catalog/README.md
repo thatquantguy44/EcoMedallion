@@ -14,25 +14,31 @@ This folder is the human-readable catalog companion to `manifests/*.yml` and
 
 | Source | Catalog page | Status |
 |---|---|---|
-| BEA | [bea.md](bea.md) | placeholder |
-| BIS | [bis.md](bis.md) | placeholder |
-| BLS | [bls.md](bls.md) | placeholder |
-| Census | [census.md](census.md) | placeholder |
+| BEA | [bea.md](bea.md) | populated |
+| BIS | [bis.md](bis.md) | populated |
+| BLS | [bls.md](bls.md) | populated |
+| Census | [census.md](census.md) | populated |
 | ECB | [ecb.md](ecb.md) | populated |
 | ECB candidates | [ecb_candidate_flows.md](ecb_candidate_flows.md) | discovery backlog |
-| EIA | [eia.md](eia.md) | placeholder |
-| FRED | [fred.md](fred.md) | populated starter |
-| iShares | [ishares.md](ishares.md) | placeholder |
-| SEC | [sec.md](sec.md) | placeholder |
-| Stooq | [stooq.md](stooq.md) | placeholder |
-| Tiingo | [tiingo.md](tiingo.md) | placeholder |
-| Treasury | [treasury.md](treasury.md) | placeholder |
-| World Bank | [worldbank.md](worldbank.md) | placeholder |
+| EIA | [eia.md](eia.md) | populated |
+| FRED | [fred.md](fred.md) | populated starter (too large for full per-series enumeration — see manifests/*.yml) |
+| iShares | [ishares.md](ishares.md) | populated |
+| SEC | [sec.md](sec.md) | populated |
+| Stooq | [stooq.md](stooq.md) | populated |
+| Tiingo | [tiingo.md](tiingo.md) | populated |
+| Treasury | [treasury.md](treasury.md) | populated |
+| World Bank | [worldbank.md](worldbank.md) | populated |
 
 ## Next Catalog Work
 
-- Fill each placeholder with source purpose, active manifests, inactive or
-  candidate coverage, licensing notes, and known caveats.
+- Every non-FRED source page now documents: upstream API + series id
+  convention, auth requirements, current active coverage (full enumeration
+  for small sources, grouped summary for large ones — Tiingo/Stooq/BIS/World
+  Bank), whether a `discover-*` tool exists, and licensing caveats from
+  `config/data_licensing.yml`. Last verified 2026-08-25 against
+  `manifests/*.yml` and live source client code.
 - Keep ECB discovery notes in sync with `specs/spec002`.
 - Keep active-series counts synchronized with
-  `PYTHONPATH=src python -m fred_pipeline validate --manifests manifests`.
+  `PYTHONPATH=src python -m fred_pipeline validate --manifests manifests` —
+  each page's counts will drift as manifests change; re-verify against the
+  actual YAML rather than trusting the doc, the same way these were written.
