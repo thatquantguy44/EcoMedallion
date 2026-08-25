@@ -251,6 +251,19 @@ def _cmd_discover_ecb(args: argparse.Namespace) -> int:
         force=args.force,
         exclude_ids=exclude_ids,
     )
+    print(
+        f"ECB {structure.flow_id}: estimated {estimate} candidate combination(s); "
+        f"kept {len(specs)}, skipped {len(skipped)}."
+    )
+    if not specs:
+        print(
+            "No candidates matched -- nothing to write. Sample skip reasons:",
+            file=sys.stderr,
+        )
+        for row in skipped[:10]:
+            print(f"  {row}", file=sys.stderr)
+        return 1
+
     manifest_name = args.name or f"ecb_{structure.flow_id.lower()}_candidates"
     description = (
         args.description
@@ -258,11 +271,6 @@ def _cmd_discover_ecb(args: argparse.Namespace) -> int:
     )
     manifest = build_ecb_manifest_dict(manifest_name, specs, description=description)
     yaml_text = ecb_manifest_to_yaml(manifest)
-
-    print(
-        f"ECB {structure.flow_id}: estimated {estimate} candidate combination(s); "
-        f"kept {len(specs)}, skipped {len(skipped)}."
-    )
     if args.dry_run or not args.out:
         print("\n--- manifest (dry run, not written) ---\n")
         print(yaml_text)
