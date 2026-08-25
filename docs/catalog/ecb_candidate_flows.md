@@ -20,6 +20,29 @@ PYTHONPATH=src python -m fred_pipeline discover-ecb --flow EXR \
   --dry-run
 ```
 
+## Progress
+
+- **`EST` — done.** `manifests/ecb_est_candidates.yml` (inactive, pending
+  review): the euro short-term rate (€STR), volume-weighted trimmed mean
+  (`BENCHMARK_ITEM=EU000A2X2A25`, `DATA_TYPE_EST=WT`). Live-verified end to
+  end through `ECBClient.get_observations`. Note for anyone extending this:
+  EST publishes under `FREQ=B` (business-daily), not `D` -- a `D`-keyed
+  query 404s. `discover-ecb` now maps `B` to manifest frequency `d`.
+- **`FM_PUB` / `YC_PUB` — attempted, not completed.** Both are 7-dimension
+  flows sharing a 103,676-entry generic ticker codelist
+  (`PROVIDER_FM_ID`/`BENCHMARK_ITEM`) across `PROVIDER_FM`, `INSTRUMENT_FM`,
+  and `DATA_TYPE_FM`. `--include-code` only narrows a dimension it's
+  applied to (by design, after the fix below) -- with this many independent
+  unpinned dimensions, a single search term essentially never matches all of
+  them simultaneously, so useful candidates require pinning most dimensions
+  by exact code first, which in turn requires knowing what's in them.
+  Revisit with a specific instrument/currency already in mind rather than
+  open-ended browsing.
+- `discover-ecb` had two real bugs found and fixed while doing this work:
+  `--include-code`/`--exclude-code` used to also filter dimensions already
+  pinned by `--dimension`/`--frequency` (silently zeroing results), and
+  generating zero candidates crashed instead of printing a clean message.
+
 ## Candidate Areas
 
 | Area | Candidate flows | Why revisit |
