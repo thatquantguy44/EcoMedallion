@@ -42,3 +42,9 @@ This folder is the human-readable catalog companion to `manifests/*.yml` and
   `PYTHONPATH=src python -m fred_pipeline validate --manifests manifests` —
   each page's counts will drift as manifests change; re-verify against the
   actual YAML rather than trusting the doc, the same way these were written.
+  **This is enforced, not just a reminder**: `tests/test_catalog_docs.py`
+  runs in CI on every push/PR and fails if a page's `## Current Series (N
+  active)` / `## Current Coverage (N active ...)` heading count doesn't
+  match the real manifest count, or if an active source has no catalog page
+  at all. Keep that heading format when editing a page's count, or the check
+  can't find it.
