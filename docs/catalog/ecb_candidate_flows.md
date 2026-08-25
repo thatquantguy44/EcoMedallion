@@ -116,12 +116,16 @@ PYTHONPATH=src python -m fred_pipeline discover-ecb --flow EXR \
 - **`BP6_PUB` (balance of payments) — not yet attempted to completion.**
   Structurally similar to `BSI_PUB`/`YC_PUB` (IMF `BOP1_15` structure, 11
   dimensions) so the wildcard technique should apply; `INT_ACC_ITEM=CA`
-  (current account) is a promising lead but wasn't confirmed with real data
-  before this session hit ECB's WAF rate limit (a `curl` burst during the
-  `JVC_PUB` troubleshooting above triggered a temporary block -- not a
-  permanent IP ban, confirmed by a follow-up request succeeding a few
-  minutes later, but a reminder to pace live-verification requests rather
-  than firing several in quick succession).
+  (current account) is a promising lead but wasn't confirmed with real data.
+  **The specific wide-open wildcard key tried for it
+  (`..U2......CA..`) got a repeat WAF block on retry** (narrow single-series
+  lookups through the normal client kept working fine throughout, confirmed
+  before and after) -- unlike EST's transient block earlier, this one didn't
+  clear on its own within the session. Worth trying a *narrower* first
+  wildcard next time (a few more dimensions pinned) rather than the
+  widest-open version, both to get a usable result faster and because ECB's
+  WAF seems to specifically flag broad multi-wildcard keys, not query
+  volume alone.
 - `discover-ecb` had two real bugs found and fixed while doing this work:
   `--include-code`/`--exclude-code` used to also filter dimensions already
   pinned by `--dimension`/`--frequency` (silently zeroing results), and
