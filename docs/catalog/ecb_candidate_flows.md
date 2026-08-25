@@ -61,19 +61,41 @@ PYTHONPATH=src python -m fred_pipeline discover-ecb --flow EXR \
   `MOBILE_KEY_8` shares `FM_PUB`'s 103,676-entry ticker codelist). Whatever
   "narrower" means for these, it isn't a smaller declared dimension space --
   don't assume a `MOBILE_KEY_*` flow is easy just because of the name.
-- **`FM_PUB` / `YC_PUB` — attempted, not completed.** Both are 7-dimension
-  flows sharing a 103,676-entry generic ticker codelist
-  (`PROVIDER_FM_ID`/`BENCHMARK_ITEM`) across `PROVIDER_FM`, `INSTRUMENT_FM`,
-  and `DATA_TYPE_FM`. `--include-code` only narrows a dimension it's
-  applied to (by design, after the fix below) -- with this many independent
-  unpinned dimensions, a single search term essentially never matches all of
-  them simultaneously, so useful candidates require pinning most dimensions
-  by exact code first, which in turn requires knowing what's in them.
-  Revisit with a specific instrument/currency already in mind rather than
-  open-ended browsing. `MOBILE_KEY_2`/`BSI` (money supply, M1/M2/M3) and
-  `MOBILE_KEY_3`/`MOBILE_KEY_7` (national accounts, GDP, government finance)
-  are in the same boat -- genuinely valuable, genuinely not tractable
-  without a specific series already identified going in.
+- **The "pin most dimensions, then wildcard-query the real API for what's
+  actually published" technique (used for EST/ICP_PUB) cracked both `BSI_PUB`
+  and `YC_PUB`.** Neither needed guessing across the full dimension space --
+  a `curl` against the flow with only the known-relevant dimensions pinned
+  and the rest left blank returns every combination that's actually live,
+  usually a handful of rows, which then get decoded by name and re-verified
+  through `ECBClient` before shipping. Both `_PUB` and `MOBILE_KEY_2` share
+  the *identical* 11-dimension `BSI` structure -- the win here wasn't a
+  simpler structure, it was not needing to reason about the structure at all.
+  - **`BSI_PUB` — done.** `manifests/ecb_bsi_candidates.yml`: euro area M1
+    (narrow money), M2 (intermediate), M3 (broad, ECB's traditional
+    monetary-analysis reference value) annual growth rates. Reporting sector
+    `BS_REP_SECTOR=V` (MFIs + central government + post office giro
+    institutions) held by `BS_COUNT_SECTOR=2300` (non-MFIs excluding central
+    government) -- the standard official-statistics sector pair, confirmed
+    by finding all three in one wildcard query rather than assumed.
+  - **`YC_PUB` — done.** `manifests/ecb_yc_pub_candidates.yml`: two spot
+    tenors ecb_rates.yml doesn't have (3M, 1Y), four instantaneous forward
+    rates (1Y/2Y/5Y/10Y), and the 10Y-1Y curve spread. Confirmed narrower
+    than raw `YC` in a way that actually holds: `SR_30Y` live-404s under
+    `YC_PUB` even though it's active via `YC` -- this `_PUB` variant
+    genuinely doesn't carry the full tenor set, unlike `BSI_PUB` which
+    turned out to be the same cube as `BSI`. Don't generalize "`_PUB` =
+    narrower" or "`_PUB` = same" across flows; it's decided per flow family,
+    check each one.
+- **`FM_PUB` — a real finding, but it's a scope question, not a rates gap.**
+  Wildcard-querying it (`REF_AREA=U2`, no currency pin, `FREQ=M` -- it
+  publishes monthly, not daily like `FM`/`YC`) surfaced European equity
+  indices (`DJES50I` = EURO STOXX 50, plus several STOXX sector
+  sub-indices) and a €STR-adjacent overnight-rate summary that's redundant
+  with the already-active `EST` flow. This isn't more rates coverage --
+  it's a first European-equity-index data point, a different kind of
+  addition than everything else in this backlog (equity coverage today is
+  entirely Tiingo/Stooq, both US-focused). Worth a deliberate decision
+  before pursuing, not a default yes.
 - `discover-ecb` had two real bugs found and fixed while doing this work:
   `--include-code`/`--exclude-code` used to also filter dimensions already
   pinned by `--dimension`/`--frequency` (silently zeroing results), and

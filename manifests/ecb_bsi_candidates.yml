@@ -1,0 +1,76 @@
+name: ecb_bsi_candidates
+description: 'Inactive ECB monetary aggregate candidates: euro area M1/M2/M3 annual
+  growth rates (BSI_PUB, MFIs + central government + post office giro institutions
+  reporting sector, holdings by non-MFIs excluding central government, all currencies).
+  Live-verified end to end against real published rows via a wildcard flow query before
+  generating.'
+version: 1
+series:
+- series_id: ECB:BSI_PUB:M.U2.Y.V.M10.X.I.U2.2300.Z01.A
+  title: Monetary Aggregate M1 (Narrow Money), Euro Area, Annual Growth Rate (SA)
+  frequency: m
+  category: money_banking
+  units: ''
+  active: false
+  source: ecb
+  load_type: incremental
+  expected_update_frequency: monthly
+  vintage_enabled: true
+  validation_profile: lenient
+  business_owner: ''
+  technical_owner: ''
+  downstream_use_case: ecb_candidate_review
+  priority: 3
+  restate_records: null
+  min_value: null
+  max_value: null
+  tags:
+  - ecb
+  - bsi_pub
+  - money_banking
+- series_id: ECB:BSI_PUB:M.U2.Y.V.M20.X.I.U2.2300.Z01.A
+  title: Monetary Aggregate M2 (Intermediate Money), Euro Area, Annual Growth Rate
+    (SA)
+  frequency: m
+  category: money_banking
+  units: ''
+  active: false
+  source: ecb
+  load_type: incremental
+  expected_update_frequency: monthly
+  vintage_enabled: true
+  validation_profile: lenient
+  business_owner: ''
+  technical_owner: ''
+  downstream_use_case: ecb_candidate_review
+  priority: 3
+  restate_records: null
+  min_value: null
+  max_value: null
+  tags:
+  - ecb
+  - bsi_pub
+  - money_banking
+- series_id: ECB:BSI_PUB:M.U2.Y.V.M30.X.I.U2.2300.Z01.A
+  title: Monetary Aggregate M3 (Broad Money), Euro Area, Annual Growth Rate (SA) --
+    ECB's traditional reference value for monetary analysis
+  frequency: m
+  category: money_banking
+  units: ''
+  active: false
+  source: ecb
+  load_type: incremental
+  expected_update_frequency: monthly
+  vintage_enabled: true
+  validation_profile: lenient
+  business_owner: ''
+  technical_owner: ''
+  downstream_use_case: ecb_candidate_review
+  priority: 3
+  restate_records: null
+  min_value: null
+  max_value: null
+  tags:
+  - ecb
+  - bsi_pub
+  - money_banking
