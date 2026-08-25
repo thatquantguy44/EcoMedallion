@@ -39,6 +39,28 @@ PYTHONPATH=src python -m fred_pipeline discover-ecb --flow EXR \
   `ICP_ITEM`/`ADJUSTMENT`/`STS_INSTITUTION` have far more *structurally
   valid* combinations than *actually published* ones, the same trap EST's
   `LEV` guess fell into.
+- **`EON` — done.** `manifests/ecb_eon_candidates.yml` (inactive, pending
+  review): EONIA (Euro OverNight Index Average, `EONIA_BANK=EONIA_TO`,
+  `EONIA_ITEM=RATE`), the overnight-rate benchmark €STR replaced. Only 3
+  dimensions total, one with a single code -- about as simple as ECB
+  discovery gets. Live-verified: publishes under `FREQ=D` (not `B`, unlike
+  EST -- don't assume the two share a convention just because they're both
+  overnight rates), and data stops exactly at 2021-12-31 (EONIA's real
+  discontinuation date), so this is fixed historical backfill, not a live
+  feed -- useful for pre-€STR backtests, not for ongoing ingestion.
+  (`OMO`, the flow next to `EON` in the same category, was checked and
+  rejected: it's per-operation data keyed by 22,923 individual tender IDs,
+  not a clean aggregate time series.)
+- **`MOBILE_KEY_*` flows checked — mostly not narrower, despite this doc's
+  own note below.** `MOBILE_KEY_1/2/3/5/7/8` all turned out to share the
+  *exact same* full dimension structure as their parent statistical cube
+  (`MOBILE_KEY_1` uses `ICP_PUB`'s own `ECB_ICP1` structure end to end;
+  `MOBILE_KEY_2` (BSI) has **11 dimensions**, more than `FM_PUB`'s 7;
+  `MOBILE_KEY_3`/`MOBILE_KEY_7` use Eurostat's national-accounts structure
+  with 939-code area lists on both `REF_AREA` and `COUNTERPART_AREA`;
+  `MOBILE_KEY_8` shares `FM_PUB`'s 103,676-entry ticker codelist). Whatever
+  "narrower" means for these, it isn't a smaller declared dimension space --
+  don't assume a `MOBILE_KEY_*` flow is easy just because of the name.
 - **`FM_PUB` / `YC_PUB` — attempted, not completed.** Both are 7-dimension
   flows sharing a 103,676-entry generic ticker codelist
   (`PROVIDER_FM_ID`/`BENCHMARK_ITEM`) across `PROVIDER_FM`, `INSTRUMENT_FM`,
@@ -48,7 +70,10 @@ PYTHONPATH=src python -m fred_pipeline discover-ecb --flow EXR \
   them simultaneously, so useful candidates require pinning most dimensions
   by exact code first, which in turn requires knowing what's in them.
   Revisit with a specific instrument/currency already in mind rather than
-  open-ended browsing.
+  open-ended browsing. `MOBILE_KEY_2`/`BSI` (money supply, M1/M2/M3) and
+  `MOBILE_KEY_3`/`MOBILE_KEY_7` (national accounts, GDP, government finance)
+  are in the same boat -- genuinely valuable, genuinely not tractable
+  without a specific series already identified going in.
 - `discover-ecb` had two real bugs found and fixed while doing this work:
   `--include-code`/`--exclude-code` used to also filter dimensions already
   pinned by `--dimension`/`--frequency` (silently zeroing results), and
@@ -76,8 +101,13 @@ PYTHONPATH=src python -m fred_pipeline discover-ecb --flow EXR \
 
 ## Notes
 
-- Prefer published or mobile/key-indicator flows for first-pass discovery when
-  they exist; they are often narrower than the full statistical cubes.
+- Prefer `*_PUB` (published) flows for first-pass discovery when they exist --
+  `ICP_PUB` worked well this way. **Correction from live probing** (see
+  Progress above): `MOBILE_KEY_*` flows are *not* reliably narrower than
+  their parent statistical cube -- several share the parent's exact
+  dimension structure, including the sprawling ones. Don't assume "mobile"
+  or "key indicator" in a flow's name implies a small dimension space;
+  check with `--inspect` first regardless.
 - Keep generated rows inactive until a live smoke test confirms observations
   exist for the exact `ECB:<flow_ref>:<key>` id.
 - Large flows such as `BSI`, `ICP`, `MNA`, `QSA`, `BOP`, `PSS`, and `SUP`
