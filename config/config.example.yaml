@@ -48,16 +48,23 @@ default:
   # `active: false`, so the pipeline runs fine on FRED alone until you flip a
   # manifest to active AND set the matching key below (or its env var).
   # EIA, BEA, Stooq, and Tiingo *require* a key (their clients raise without one);
-  # BLS and Census work keyless at a lower daily quota; SEC needs a
-  # descriptive User-Agent (contact info), not a key, or it 403s; Treasury,
-  # World Bank, and iShares are fully keyless.
+  # BLS and Census work keyless at a lower daily quota; Treasury, World Bank,
+  # and iShares are fully keyless.
   bls_api_key: ""       # BLS_API_KEY    — optional, https://www.bls.gov/developers/api_signature_v2.htm
   eia_api_key: ""       # EIA_API_KEY    — required if any eia_* manifest is active, https://www.eia.gov/opendata/register.php
   bea_api_key: ""       # BEA_API_KEY    — required if any bea_* manifest is active (UserID), https://apps.bea.gov/API/signup/
   census_api_key: ""    # CENSUS_API_KEY — optional, https://api.census.gov/data/key_signup.html
   stooq_api_key: ""     # STOOQ_API_KEY  — required if equity_stooq.yml is active; generate from a Stooq historical-data CSV link
   tiingo_api_key: ""    # TIINGO_API_KEY — required if equity_tiingo.yml is active, https://www.tiingo.com/account/api/token
-  sec_user_agent: ""    # SEC_USER_AGENT — required if any sec_* manifest is active; e.g. "Your Name your@email.com"
+
+  # SEC EDGAR and BLS's flat-file server (used by discover-bls) both 403 a
+  # User-Agent with no "@" in it, live-verified — the built-in default is an
+  # email-shaped placeholder that satisfies that check, so it works out of
+  # the box. Leave these commented out to use it; uncomment ONLY to set your
+  # own real contact info, since a literal "" here would override that
+  # working default with a blank string and bring the 403 back.
+  # sec_user_agent: "Your Name your@email.com"  # SEC_USER_AGENT — required if any sec_* manifest is active
+  # bls_user_agent: "Your Name your@email.com"  # BLS_USER_AGENT — only used by discover-bls, not routine ingestion
 
   # --- Incremental load ---
   # A series with no data yet is always loaded in full. On later runs, only the
