@@ -96,6 +96,32 @@ PYTHONPATH=src python -m fred_pipeline discover-ecb --flow EXR \
   addition than everything else in this backlog (equity coverage today is
   entirely Tiingo/Stooq, both US-focused). Worth a deliberate decision
   before pursuing, not a default yes.
+- **`LFSI_PUB` — done.** `manifests/ecb_lfsi_candidates.yml`: the euro area
+  unemployment rate (monthly, SA, ages 15-74, both sexes) -- the classic
+  headline labour-market print. **Real gotcha worth remembering**: this
+  flow's euro-area reference-area code is `I9` ("Euro area 20, fixed
+  composition"), *not* `U2` ("changing composition") used everywhere else
+  in this catalog -- assuming `U2` here wildcard-queries to nothing.
+  Different Eurostat-sourced flows (this one runs on `EUROSTAT_LFS1`, not
+  an ECB-native structure) don't necessarily share ECB's own area-code
+  convention; check per flow rather than assuming.
+- **`JVC_PUB` (job vacancy rate) — attempted, not completed.** Every
+  wildcard combination tried came back empty or 404, including one the API
+  itself echoed back in an error's `<SeriesKey>` as if it might be valid
+  (it wasn't, live-checked). Possibly genuinely sparse/discontinued data
+  for this dataflow, or it needs a country-level key rather than a euro-area
+  aggregate -- unclear without more digging. Lower priority than it looked:
+  the unemployment rate is the more important headline metric and that one
+  worked.
+- **`BP6_PUB` (balance of payments) — not yet attempted to completion.**
+  Structurally similar to `BSI_PUB`/`YC_PUB` (IMF `BOP1_15` structure, 11
+  dimensions) so the wildcard technique should apply; `INT_ACC_ITEM=CA`
+  (current account) is a promising lead but wasn't confirmed with real data
+  before this session hit ECB's WAF rate limit (a `curl` burst during the
+  `JVC_PUB` troubleshooting above triggered a temporary block -- not a
+  permanent IP ban, confirmed by a follow-up request succeeding a few
+  minutes later, but a reminder to pace live-verification requests rather
+  than firing several in quick succession).
 - `discover-ecb` had two real bugs found and fixed while doing this work:
   `--include-code`/`--exclude-code` used to also filter dimensions already
   pinned by `--dimension`/`--frequency` (silently zeroing results), and
