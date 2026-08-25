@@ -1,0 +1,51 @@
+name: ecb_icp_candidates
+description: 'Inactive ECB HICP (harmonised consumer price index) candidates: euro
+  area headline and core (ex energy/food) annual inflation rate, as published by Eurostat
+  -- the ECB''s own 2% inflation-target gauge. Live-verified end to end.'
+version: 1
+series:
+- series_id: ECB:ICP_PUB:M.U2.N.000000.4.ANR
+  title: HICP - Overall Index, Euro Area, Annual Rate of Change (Eurostat, NSA)
+  frequency: m
+  category: inflation
+  units: ''
+  active: false
+  source: ecb
+  load_type: incremental
+  expected_update_frequency: monthly
+  vintage_enabled: true
+  validation_profile: lenient
+  business_owner: ''
+  technical_owner: ''
+  downstream_use_case: ecb_candidate_review
+  priority: 3
+  restate_records: null
+  min_value: null
+  max_value: null
+  tags:
+  - ecb
+  - icp_pub
+  - inflation
+- series_id: ECB:ICP_PUB:M.U2.N.XEF000.4.ANR
+  title: HICP - All-Items Excluding Energy and Food (Core), Euro Area, Annual Rate
+    of Change (Eurostat, NSA)
+  frequency: m
+  category: inflation
+  units: ''
+  active: false
+  source: ecb
+  load_type: incremental
+  expected_update_frequency: monthly
+  vintage_enabled: true
+  validation_profile: lenient
+  business_owner: ''
+  technical_owner: ''
+  downstream_use_case: ecb_candidate_review
+  priority: 3
+  restate_records: null
+  min_value: null
+  max_value: null
+  tags:
+  - ecb
+  - icp_pub
+  - inflation

@@ -28,6 +28,17 @@ PYTHONPATH=src python -m fred_pipeline discover-ecb --flow EXR \
   end through `ECBClient.get_observations`. Note for anyone extending this:
   EST publishes under `FREQ=B` (business-daily), not `D` -- a `D`-keyed
   query 404s. `discover-ecb` now maps `B` to manifest frequency `d`.
+- **`ICP_PUB` — done.** `manifests/ecb_icp_candidates.yml` (inactive, pending
+  review): euro area HICP headline (`ICP_ITEM=000000`) and core ex
+  energy/food (`ICP_ITEM=XEF000`), annual rate of change (`ICP_SUFFIX=ANR`),
+  NSA (`ADJUSTMENT=N`), Eurostat-published (`STS_INSTITUTION=4`) -- the
+  ECB's own inflation-target gauge, previously entirely uncovered by this
+  source. Live-verified end to end; both the headline/core item codes and
+  the adjustment/institution combination were confirmed against real
+  published rows (a wildcard flow query), not assumed from the codelist --
+  `ICP_ITEM`/`ADJUSTMENT`/`STS_INSTITUTION` have far more *structurally
+  valid* combinations than *actually published* ones, the same trap EST's
+  `LEV` guess fell into.
 - **`FM_PUB` / `YC_PUB` — attempted, not completed.** Both are 7-dimension
   flows sharing a 103,676-entry generic ticker codelist
   (`PROVIDER_FM_ID`/`BENCHMARK_ITEM`) across `PROVIDER_FM`, `INSTRUMENT_FM`,
