@@ -1,0 +1,129 @@
+name: bls_productivity
+description: >
+  BLS Productivity and Costs (PRS) series fetched natively from the BLS Public
+  Data API v2. Covers quarterly output-per-hour, unit labor costs, and real
+  compensation per hour for the Nonfarm Business, Business, and Manufacturing
+  sectors — the primary BLS productivity release. All series are seasonally
+  adjusted. Quarterly frequency maps to period Q01–Q04 in the BLS response;
+  the normalizer converts these to quarter-start dates (Jan 1, Apr 1, Jul 1,
+  Oct 1).
+version: 1
+
+series:
+  # ---- Nonfarm Business sector ----------------------------------------------
+
+  - series_id: PRS85006092
+    title: BLS Nonfarm Business - Output per Hour (SA, Quarterly)
+    category: labor
+    frequency: q
+    units: Index 2017=100
+    active: true
+    source: bls
+    load_type: incremental
+    expected_update_frequency: quarterly
+    vintage_enabled: false
+    validation_profile: standard
+    downstream_use_case: productivity
+    priority: 2
+    min_value: 0
+    tags: [labor, productivity, nonfarm_business, bls]
+
+  - series_id: PRS85006112
+    title: BLS Nonfarm Business - Unit Labor Costs (SA, Quarterly)
+    category: labor
+    frequency: q
+    units: Index 2017=100
+    active: true
+    source: bls
+    load_type: incremental
+    expected_update_frequency: quarterly
+    vintage_enabled: false
+    validation_profile: standard
+    downstream_use_case: productivity
+    priority: 2
+    min_value: 0
+    tags: [labor, unit_labor_costs, nonfarm_business, bls]
+
+  - series_id: PRS85006152
+    title: BLS Nonfarm Business - Real Compensation per Hour (SA, Quarterly)
+    category: labor
+    frequency: q
+    units: Index 2017=100
+    active: true
+    source: bls
+    load_type: incremental
+    expected_update_frequency: quarterly
+    vintage_enabled: false
+    validation_profile: standard
+    downstream_use_case: productivity
+    priority: 2
+    min_value: 0
+    tags: [labor, compensation, nonfarm_business, bls]
+
+  # ---- Business sector ------------------------------------------------------
+
+  - series_id: PRS84006092
+    title: BLS Business Sector - Output per Hour (SA, Quarterly)
+    category: labor
+    frequency: q
+    units: Index 2017=100
+    active: true
+    source: bls
+    load_type: incremental
+    expected_update_frequency: quarterly
+    vintage_enabled: false
+    validation_profile: standard
+    downstream_use_case: productivity
+    priority: 2
+    min_value: 0
+    tags: [labor, productivity, business, bls]
+
+  - series_id: PRS84006112
+    title: BLS Business Sector - Unit Labor Costs (SA, Quarterly)
+    category: labor
+    frequency: q
+    units: Index 2017=100
+    active: true
+    source: bls
+    load_type: incremental
+    expected_update_frequency: quarterly
+    vintage_enabled: false
+    validation_profile: standard
+    downstream_use_case: productivity
+    priority: 2
+    min_value: 0
+    tags: [labor, unit_labor_costs, business, bls]
+
+  # ---- Manufacturing sector -------------------------------------------------
+
+  - series_id: PRS88003092
+    title: BLS Manufacturing - Output per Hour (SA, Quarterly)
+    category: labor
+    frequency: q
+    units: Index 2017=100
+    active: true
+    source: bls
+    load_type: incremental
+    expected_update_frequency: quarterly
+    vintage_enabled: false
+    validation_profile: standard
+    downstream_use_case: productivity
+    priority: 2
+    min_value: 0
+    tags: [labor, productivity, manufacturing, bls]
+
+  - series_id: PRS88003112
+    title: BLS Manufacturing - Unit Labor Costs (SA, Quarterly)
+    category: labor
+    frequency: q
+    units: Index 2017=100
+    active: true
+    source: bls
+    load_type: incremental
+    expected_update_frequency: quarterly
+    vintage_enabled: false
+    validation_profile: standard
+    downstream_use_case: productivity
+    priority: 2
+    min_value: 0
+    tags: [labor, unit_labor_costs, manufacturing, bls]

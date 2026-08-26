@@ -19,43 +19,64 @@
 # ...or a `default:` block with per-environment overrides (shown below).
 
 default:
-  # --- Secret ---
-  # Prefer leaving this blank and setting FRED_API_KEY (env) or a Databricks
-  # secret scope. Only put a literal key here for quick local use.
-  fred_api_key: ""
+  # --- Secrets ---
+  # Prefer leaving keys blank and setting the matching environment variable (shown
+  # in comments), or a Databricks secret scope. Only put literal values here for
+  # quick local use.
+  fred_api_key: ""        # FRED_API_KEY    — required; https://fredaccount.stlouisfed.org/apikey
 
   # --- FRED API client ---
-  fred_base_url: "https://api.stlouisfed.org/fred"
-  # Optional override for environments that route ECB traffic through an
-  # approved proxy/mirror. The official ECB endpoint is the default.
-  ecb_base_url: "https://data-api.ecb.europa.eu/service"
+  fred_base_url: "https://api.stlouisfed.org/fred"   # FRED_BASE_URL
   request_timeout_seconds: 30
   max_retries: 5
   rate_limit_per_minute: 120
-  # Concurrent extraction workers (thread pool; extraction is I/O-bound and
-  # still rate-limited by rate_limit_per_minute above).
-  extract_workers: 8
-  # Optional per-source worker caps/overrides. Tiingo defaults to a conservative
-  # cap to avoid hourly quota bursts; override when your account allows it.
-  # source_extract_workers: "fred=16,stooq=8,tiingo=1"
-  # Optional per-source request-rate caps. Defaults are conservative for
-  # keyless/quota-sensitive sources (currently stooq=20/min, tiingo=10/min).
-  # source_rate_limits: "fred=60,stooq=20,tiingo=5"
 
-  # --- Additional data sources (see fred_pipeline.sources) ---
-  # All optional: every source manifest (manifests/eia_energy.yml,
-  # bea_national_accounts.yml, equity_tiingo.yml, etc.) ships with
-  # `active: false`, so the pipeline runs fine on FRED alone until you flip a
-  # manifest to active AND set the matching key below (or its env var).
-  # EIA, BEA, Stooq, and Tiingo *require* a key (their clients raise without one);
-  # BLS and Census work keyless at a lower daily quota; Treasury, World Bank,
-  # and iShares are fully keyless.
-  bls_api_key: ""       # BLS_API_KEY    — optional, https://www.bls.gov/developers/api_signature_v2.htm
-  eia_api_key: ""       # EIA_API_KEY    — required if any eia_* manifest is active, https://www.eia.gov/opendata/register.php
-  bea_api_key: ""       # BEA_API_KEY    — required if any bea_* manifest is active (UserID), https://apps.bea.gov/API/signup/
-  census_api_key: ""    # CENSUS_API_KEY — optional, https://api.census.gov/data/key_signup.html
+  # --- ECB (European Central Bank Data Portal) ---
+  # No API key needed; ECB's SDMX 2.1 endpoint is fully public. Set the URL
+  # below only if you route ECB traffic through an approved proxy or mirror.
+  ecb_base_url: "https://data-api.ecb.europa.eu/service"  # ECB_BASE_URL
+
+  # --- Additional data source keys ------------------------------------------
+  #
+  # Every non-FRED source manifest ships inactive (active: false or active: true
+  # pending a key) so the pipeline runs fine on FRED alone. Enable a source by:
+  #   1. Setting the key below (or its env var), and
+  #   2. Ensuring the relevant manifest has `active: true` for the series you want.
+  #
+  # Keyless sources (BLS, Census, ECB, World Bank, BIS, iShares, Treasury):
+  #   work without a key at a lower daily quota or with no quota at all.
+  #   Setting a key (where supported) raises your daily quota.
+  #
+  # Key-required sources (EIA, BEA, Stooq, Tiingo):
+  #   their clients raise ConfigurationError on startup if a key is absent and
+  #   any of their series are active.
+  #
+  # Active manifests by source (as of current release):
+  #   fred:       rates.yml, prices.yml, prices_extra.yml, labor.yml,
+  #               labor_extra.yml, national_accounts.yml, financial_conditions.yml,
+  #               financial_stress.yml, housing.yml, credit.yml, trade.yml,
+  #               money_supply.yml, global.yml, global_policy.yml,
+  #               international.yml, survey.yml
+  #   bls:        bls_labor.yml, bls_cpi_basket.yml, bls_cpi_basket_sa.yml,
+  #               bls_ppi.yml, bls_productivity.yml
+  #   ecb:        ecb_rates.yml
+  #   eia:        eia_energy.yml
+  #   bea:        bea_national_accounts.yml
+  #   census:     census_housing.yml
+  #   tiingo:     equity_tiingo.yml
+  #   stooq:      equity_stooq.yml
+  #   sec:        sec_fundamentals.yml
+  #   treasury:   treasury_yield_curve.yml
+  #   worldbank:  world_bank_development.yml
+  #   bis:        bis_credit.yml
+  #   ishares:    equity_ishares.yml
+
+  bls_api_key: ""       # BLS_API_KEY    — optional; https://www.bls.gov/developers/api_signature_v2.htm
+  eia_api_key: ""       # EIA_API_KEY    — required if any eia_* manifest is active; https://www.eia.gov/opendata/register.php
+  bea_api_key: ""       # BEA_API_KEY    — required if any bea_* manifest is active (UserID); https://apps.bea.gov/API/signup/
+  census_api_key: ""    # CENSUS_API_KEY — optional; https://api.census.gov/data/key_signup.html
   stooq_api_key: ""     # STOOQ_API_KEY  — required if equity_stooq.yml is active; generate from a Stooq historical-data CSV link
-  tiingo_api_key: ""    # TIINGO_API_KEY — required if equity_tiingo.yml is active, https://www.tiingo.com/account/api/token
+  tiingo_api_key: ""    # TIINGO_API_KEY — required if equity_tiingo.yml is active; https://www.tiingo.com/account/api/token
 
   # SEC EDGAR and BLS's flat-file server (used by discover-bls) both 403 a
   # User-Agent with no "@" in it, live-verified — the built-in default is an
@@ -65,6 +86,23 @@ default:
   # working default with a blank string and bring the 403 back.
   # sec_user_agent: "Your Name your@email.com"  # SEC_USER_AGENT — required if any sec_* manifest is active
   # bls_user_agent: "Your Name your@email.com"  # BLS_USER_AGENT — only used by discover-bls, not routine ingestion
+
+  # --- Concurrent extraction ------------------------------------------------
+  # extract_workers: thread-pool size for parallel series extraction (I/O-bound).
+  # The RateLimiter still serializes actual HTTP calls; workers only overlap
+  # per-series wait / retry backoff, so raising this does not exceed the
+  # aggregate call rate set by rate_limit_per_minute.
+  extract_workers: 8
+
+  # Optional per-source worker caps (comma-separated "source=N" pairs).
+  # Tiingo's default cap is conservative to avoid hourly quota bursts.
+  # source_extract_workers: "fred=16,bls=8,ecb=8,stooq=8,tiingo=1"
+
+  # Optional per-source request-rate overrides (comma-separated "source=N/min").
+  # Defaults are conservative for keyless / quota-sensitive sources.
+  # BLS keyless: ~500 req/day total — keep per-minute rate low.
+  # ECB has no documented limit but is polite by default.
+  # source_rate_limits: "fred=60,bls=25,ecb=30,stooq=20,tiingo=5"
 
   # --- Incremental load ---
   # A series with no data yet is always loaded in full. On later runs, only the

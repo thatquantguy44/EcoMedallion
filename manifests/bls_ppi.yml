@@ -1,0 +1,79 @@
+name: bls_ppi
+description: >
+  BLS Producer Price Index series fetched natively from the BLS Public Data API
+  v2. Covers sub-aggregates from the Final Demand - Intermediate Demand (FD-ID)
+  system that are not already sourced via FRED in prices_extra.yml: Final Demand
+  Services, Final Demand Construction, Intermediate Demand Unprocessed Goods,
+  and Intermediate Demand Services. The overlapping FD headline and FD Goods
+  (WPSFD49207, WPSFD4131, WPSID61) are excluded because they are already
+  registered via FRED; series_ids must be unique across manifests.
+version: 1
+
+series:
+  # ---- Final Demand sub-aggregates not in prices_extra.yml -----------------
+
+  - series_id: WPSFD4214
+    title: PPI Final Demand - Services (BLS)
+    category: prices
+    frequency: m
+    units: Index 2009=100
+    active: true
+    source: bls
+    load_type: incremental
+    expected_update_frequency: monthly
+    vintage_enabled: false
+    validation_profile: standard
+    downstream_use_case: producer_prices
+    priority: 2
+    min_value: 0
+    tags: [prices, ppi, final_demand, services, bls]
+
+  - series_id: WPSFD4912
+    title: PPI Final Demand - Construction (BLS)
+    category: prices
+    frequency: m
+    units: Index 2009=100
+    active: true
+    source: bls
+    load_type: incremental
+    expected_update_frequency: monthly
+    vintage_enabled: false
+    validation_profile: standard
+    downstream_use_case: producer_prices
+    priority: 2
+    min_value: 0
+    tags: [prices, ppi, final_demand, construction, bls]
+
+  # ---- Intermediate Demand sub-aggregates not in prices_extra.yml ----------
+
+  - series_id: WPSID62
+    title: PPI Intermediate Demand - Unprocessed Goods (BLS)
+    category: prices
+    frequency: m
+    units: Index 1982=100
+    active: true
+    source: bls
+    load_type: incremental
+    expected_update_frequency: monthly
+    vintage_enabled: false
+    validation_profile: standard
+    downstream_use_case: producer_prices
+    priority: 2
+    min_value: 0
+    tags: [prices, ppi, intermediate_demand, unprocessed_goods, bls]
+
+  - series_id: WPSID63
+    title: PPI Intermediate Demand - Services (BLS)
+    category: prices
+    frequency: m
+    units: Index 2009=100
+    active: true
+    source: bls
+    load_type: incremental
+    expected_update_frequency: monthly
+    vintage_enabled: false
+    validation_profile: standard
+    downstream_use_case: producer_prices
+    priority: 2
+    min_value: 0
+    tags: [prices, ppi, intermediate_demand, services, bls]

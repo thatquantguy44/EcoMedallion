@@ -332,3 +332,246 @@ series:
     min_value: -5
     max_value: 25
     tags: [rates, yield_curve, ecb, euro-area]
+
+  # ---- Additional yield curve tenors ----------------------------------------
+
+  - series_id: "ECB:YC:B.U2.EUR.4F.G_N_A.SV_C_YM.SR_1Y"
+    title: ECB Euro Area 1-Year Yield Curve Spot Rate
+    category: rates
+    frequency: d
+    units: Percent
+    active: true
+    source: ecb
+    load_type: incremental
+    expected_update_frequency: daily
+    vintage_enabled: true
+    validation_profile: standard
+    downstream_use_case: yield_curve
+    priority: 2
+    min_value: -5
+    max_value: 25
+    tags: [rates, yield_curve, ecb, euro-area]
+
+  - series_id: "ECB:YC:B.U2.EUR.4F.G_N_A.SV_C_YM.SR_3Y"
+    title: ECB Euro Area 3-Year Yield Curve Spot Rate
+    category: rates
+    frequency: d
+    units: Percent
+    active: true
+    source: ecb
+    load_type: incremental
+    expected_update_frequency: daily
+    vintage_enabled: true
+    validation_profile: standard
+    downstream_use_case: yield_curve
+    priority: 2
+    min_value: -5
+    max_value: 25
+    tags: [rates, yield_curve, ecb, euro-area]
+
+  - series_id: "ECB:YC:B.U2.EUR.4F.G_N_A.SV_C_YM.SR_7Y"
+    title: ECB Euro Area 7-Year Yield Curve Spot Rate
+    category: rates
+    frequency: d
+    units: Percent
+    active: true
+    source: ecb
+    load_type: incremental
+    expected_update_frequency: daily
+    vintage_enabled: true
+    validation_profile: standard
+    downstream_use_case: yield_curve
+    priority: 2
+    min_value: -5
+    max_value: 25
+    tags: [rates, yield_curve, ecb, euro-area]
+
+  - series_id: "ECB:YC:B.U2.EUR.4F.G_N_A.SV_C_YM.SR_20Y"
+    title: ECB Euro Area 20-Year Yield Curve Spot Rate
+    category: rates
+    frequency: d
+    units: Percent
+    active: true
+    source: ecb
+    load_type: incremental
+    expected_update_frequency: daily
+    vintage_enabled: true
+    validation_profile: standard
+    downstream_use_case: yield_curve
+    priority: 2
+    min_value: -5
+    max_value: 25
+    tags: [rates, yield_curve, ecb, euro-area]
+
+  # ---- EURIBOR term structure ------------------------------------------------
+
+  - series_id: "ECB:FM:M.U2.EUR.RT.MM.EURIBOR1MD_.HSTA"
+    title: ECB 1-Month EURIBOR
+    category: rates
+    frequency: m
+    units: Percent
+    active: true
+    source: ecb
+    load_type: incremental
+    expected_update_frequency: monthly
+    vintage_enabled: true
+    validation_profile: standard
+    downstream_use_case: money_market_rates
+    priority: 2
+    min_value: -5
+    max_value: 25
+    tags: [rates, money_market, ecb, euro-area]
+
+  - series_id: "ECB:FM:M.U2.EUR.RT.MM.EURIBOR6MD_.HSTA"
+    title: ECB 6-Month EURIBOR
+    category: rates
+    frequency: m
+    units: Percent
+    active: true
+    source: ecb
+    load_type: incremental
+    expected_update_frequency: monthly
+    vintage_enabled: true
+    validation_profile: standard
+    downstream_use_case: money_market_rates
+    priority: 2
+    min_value: -5
+    max_value: 25
+    tags: [rates, money_market, ecb, euro-area]
+
+  - series_id: "ECB:FM:M.U2.EUR.RT.MM.EURIBOR12MD_.HSTA"
+    title: ECB 12-Month EURIBOR
+    category: rates
+    frequency: m
+    units: Percent
+    active: true
+    source: ecb
+    load_type: incremental
+    expected_update_frequency: monthly
+    vintage_enabled: true
+    validation_profile: standard
+    downstream_use_case: money_market_rates
+    priority: 2
+    min_value: -5
+    max_value: 25
+    tags: [rates, money_market, ecb, euro-area]
+
+  # ---- Euro Short-Term Rate (€STR) ------------------------------------------
+
+  - series_id: "ECB:FM:D.U2.EUR.4F.KR.ESTR.LEV"
+    title: ECB Euro Short-Term Rate (ESTR)
+    category: rates
+    frequency: d
+    units: Percent
+    active: true
+    source: ecb
+    load_type: incremental
+    expected_update_frequency: daily
+    vintage_enabled: true
+    validation_profile: standard
+    downstream_use_case: money_market_rates
+    priority: 2
+    min_value: -5
+    max_value: 25
+    tags: [rates, money_market, ecb, euro-area, estr]
+
+  # ---- Euro Area HICP -------------------------------------------------------
+
+  - series_id: "ECB:ICP:M.U2.N.000000.4"
+    title: ECB Euro Area HICP - All Items (Annual Rate of Change)
+    category: prices
+    frequency: m
+    units: Percent
+    active: true
+    source: ecb
+    load_type: incremental
+    expected_update_frequency: monthly
+    vintage_enabled: true
+    validation_profile: standard
+    downstream_use_case: inflation
+    priority: 2
+    min_value: -10
+    max_value: 30
+    tags: [prices, inflation, hicp, ecb, euro-area]
+
+  # ---- Additional FX pairs --------------------------------------------------
+
+  - series_id: "ECB:EXR:D.KRW.EUR.SP00.A"
+    title: ECB Reference Exchange Rate - KRW per EUR
+    category: international
+    frequency: d
+    units: KRW per EUR
+    active: true
+    source: ecb
+    load_type: incremental
+    expected_update_frequency: daily
+    vintage_enabled: true
+    validation_profile: standard
+    downstream_use_case: fx_rates
+    priority: 2
+    min_value: 0
+    tags: [fx, ecb, euro-area]
+
+  - series_id: "ECB:EXR:D.BRL.EUR.SP00.A"
+    title: ECB Reference Exchange Rate - BRL per EUR
+    category: international
+    frequency: d
+    units: BRL per EUR
+    active: true
+    source: ecb
+    load_type: incremental
+    expected_update_frequency: daily
+    vintage_enabled: true
+    validation_profile: standard
+    downstream_use_case: fx_rates
+    priority: 2
+    min_value: 0
+    tags: [fx, ecb, euro-area]
+
+  - series_id: "ECB:EXR:D.MXN.EUR.SP00.A"
+    title: ECB Reference Exchange Rate - MXN per EUR
+    category: international
+    frequency: d
+    units: MXN per EUR
+    active: true
+    source: ecb
+    load_type: incremental
+    expected_update_frequency: daily
+    vintage_enabled: true
+    validation_profile: standard
+    downstream_use_case: fx_rates
+    priority: 2
+    min_value: 0
+    tags: [fx, ecb, euro-area]
+
+  - series_id: "ECB:EXR:D.SGD.EUR.SP00.A"
+    title: ECB Reference Exchange Rate - SGD per EUR
+    category: international
+    frequency: d
+    units: SGD per EUR
+    active: true
+    source: ecb
+    load_type: incremental
+    expected_update_frequency: daily
+    vintage_enabled: true
+    validation_profile: standard
+    downstream_use_case: fx_rates
+    priority: 2
+    min_value: 0
+    tags: [fx, ecb, euro-area]
+
+  - series_id: "ECB:EXR:D.HKD.EUR.SP00.A"
+    title: ECB Reference Exchange Rate - HKD per EUR
+    category: international
+    frequency: d
+    units: HKD per EUR
+    active: true
+    source: ecb
+    load_type: incremental
+    expected_update_frequency: daily
+    vintage_enabled: true
+    validation_profile: standard
+    downstream_use_case: fx_rates
+    priority: 2
+    min_value: 0
+    tags: [fx, ecb, euro-area]
