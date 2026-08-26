@@ -1,0 +1,73 @@
+name: bls_ce_candidates
+description: 'Inactive BLS Current Employment Statistics (CE) candidates: headline
+  nonfarm and total-private payrolls plus average hourly earnings (production & nonsupervisory,
+  total private).'
+version: 1
+series:
+- series_id: CES0000000001
+  title: All employees, thousands, total nonfarm, seasonally adjusted
+  frequency: m
+  category: labor
+  units: ''
+  active: false
+  source: bls
+  load_type: incremental
+  expected_update_frequency: monthly
+  vintage_enabled: false
+  validation_profile: lenient
+  business_owner: ''
+  technical_owner: ''
+  downstream_use_case: bls_candidate_review
+  priority: 3
+  restate_records: null
+  min_value: null
+  max_value: null
+  tags:
+  - bls
+  - ce
+  - labor
+- series_id: CES0500000001
+  title: All employees, thousands, total private, seasonally adjusted
+  frequency: m
+  category: labor
+  units: ''
+  active: false
+  source: bls
+  load_type: incremental
+  expected_update_frequency: monthly
+  vintage_enabled: false
+  validation_profile: lenient
+  business_owner: ''
+  technical_owner: ''
+  downstream_use_case: bls_candidate_review
+  priority: 3
+  restate_records: null
+  min_value: null
+  max_value: null
+  tags:
+  - bls
+  - ce
+  - labor
+- series_id: CES0500000008
+  title: Average hourly earnings of production and nonsupervisory employees, total
+    private, seasonally adjusted
+  frequency: m
+  category: labor
+  units: ''
+  active: false
+  source: bls
+  load_type: incremental
+  expected_update_frequency: monthly
+  vintage_enabled: false
+  validation_profile: lenient
+  business_owner: ''
+  technical_owner: ''
+  downstream_use_case: bls_candidate_review
+  priority: 3
+  restate_records: null
+  min_value: null
+  max_value: null
+  tags:
+  - bls
+  - ce
+  - labor

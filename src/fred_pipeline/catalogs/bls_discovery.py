@@ -43,8 +43,12 @@ from fred_pipeline.sources.base import HTTPSource, SourceError
 BLS_FLATFILE_BASE_URL = "https://download.bls.gov/pub/time.series"
 BLS_SURVEYS_URL = "https://api.bls.gov/publicAPI/v2/surveys"
 
+# BLS's flat-file server 403s a User-Agent with no "@" (live-verified), so the
+# unconfigured default has to look like real contact info, not just describe
+# itself -- keep this in sync with config.PipelineConfig.bls_user_agent.
 _DEFAULT_USER_AGENT = (
-    "fred-bronze-to-gold-pipeline (set BLS_USER_AGENT to your contact)"
+    "fred-bronze-to-gold-pipeline "
+    "(contact: set BLS_USER_AGENT to your own -- placeholder@example.com)"
 )
 
 _MANIFEST_FREQUENCIES = {"d", "w", "m", "q", "sa", "a"}

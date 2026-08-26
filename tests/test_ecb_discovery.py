@@ -5,6 +5,7 @@ import pytest
 from fred_pipeline.catalogs.ecb_discovery import (
     ECBDiscoveryError,
     ECBMetadataClient,
+    ecb_frequency_to_manifest,
     ecb_manifest_to_yaml,
     estimate_candidate_count,
     filter_dataflows,
@@ -216,6 +217,47 @@ def test_generate_ecb_candidate_specs_filters_bounds_and_excludes_existing():
             "reason": "already in manifest",
         }
     ]
+
+
+def test_business_daily_freq_maps_to_manifest_daily_without_breaking_reverse_lookup():
+    """Regression: EST publishes under FREQ=B (business-daily), not D --
+    live-verified against the real ECB API, where a D-keyed query 404s but a
+    B-keyed one returns real data. B must map forward to manifest "d", but
+    --frequency d filtering (the reverse direction, used by flows like EXR/FM
+    that do use D) must still resolve to "D", not get clobbered by B.
+    """
+    assert ecb_frequency_to_manifest("B") == "d"
+    assert ecb_frequency_to_manifest("D") == "d"
+    structure = parse_dataflow_structure_xml(STRUCTURE_XML, flow_ref="EXR")
+    filters = parse_dimension_filters(
+        ["CURRENCY=USD", "CURRENCY_DENOM=EUR", "EXR_TYPE=SP00", "EXR_SUFFIX=A"]
+    )
+    specs, _skipped = generate_ecb_candidate_specs(
+        structure, dimension_filters=filters, frequencies=["d"], max_cartesian=10
+    )
+    assert [s.series_id for s in specs] == ["ECB:EXR:D.USD.EUR.SP00.A"]
+
+
+def test_include_code_does_not_zero_out_a_dimension_pinned_by_frequency():
+    """Regression: --include-code/--exclude-code used to apply to *every*
+    dimension, including ones already pinned via --dimension/--frequency.
+    FREQ's own code names ("Daily") never match a currency-name search term,
+    so combining --frequency with --include-code silently zeroed the whole
+    Cartesian product to 0 candidates. Pinned dimensions must be left alone.
+    """
+    structure = parse_dataflow_structure_xml(STRUCTURE_XML, flow_ref="EXR")
+    filters = parse_dimension_filters(
+        ["CURRENCY_DENOM=EUR", "EXR_TYPE=SP00", "EXR_SUFFIX=A"]
+    )
+    specs, _skipped = generate_ecb_candidate_specs(
+        structure,
+        dimension_filters=filters,
+        frequencies=["d"],
+        include_code=["norwegian"],  # narrows only the unpinned CURRENCY dimension
+        max_cartesian=10000,
+    )
+    assert specs, "FREQ pinned by --frequency should not be filtered by --include-code"
+    assert [s.series_id for s in specs] == ["ECB:EXR:D.NOK.EUR.SP00.A"]
 
 
 def test_generate_ecb_candidate_specs_refuses_unsafe_cartesian_expansion():

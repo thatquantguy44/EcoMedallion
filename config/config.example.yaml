@@ -51,11 +51,6 @@ default:
   #   their clients raise ConfigurationError on startup if a key is absent and
   #   any of their series are active.
   #
-  # SEC needs a descriptive User-Agent (your name + email), not a key; without
-  # it the SEC EDGAR rate-limiter returns 403s.
-  # BLS's flat-file discovery server (used by `discover-bls`) also reads a
-  # User-Agent; the v2 JSON observation API used in production needs no UA.
-  #
   # Active manifests by source (as of current release):
   #   fred:       rates.yml, prices.yml, prices_extra.yml, labor.yml,
   #               labor_extra.yml, national_accounts.yml, financial_conditions.yml,
@@ -77,14 +72,20 @@ default:
   #   ishares:    equity_ishares.yml
 
   bls_api_key: ""       # BLS_API_KEY    — optional; https://www.bls.gov/developers/api_signature_v2.htm
-  bls_user_agent: ""    # BLS_USER_AGENT — optional; used by discover-bls flat-file server only
-                        #                  e.g. "Your Name your@email.com"
   eia_api_key: ""       # EIA_API_KEY    — required if any eia_* manifest is active; https://www.eia.gov/opendata/register.php
   bea_api_key: ""       # BEA_API_KEY    — required if any bea_* manifest is active (UserID); https://apps.bea.gov/API/signup/
   census_api_key: ""    # CENSUS_API_KEY — optional; https://api.census.gov/data/key_signup.html
   stooq_api_key: ""     # STOOQ_API_KEY  — required if equity_stooq.yml is active; generate from a Stooq historical-data CSV link
   tiingo_api_key: ""    # TIINGO_API_KEY — required if equity_tiingo.yml is active; https://www.tiingo.com/account/api/token
-  sec_user_agent: ""    # SEC_USER_AGENT — required if any sec_* manifest is active; e.g. "Your Name your@email.com"
+
+  # SEC EDGAR and BLS's flat-file server (used by discover-bls) both 403 a
+  # User-Agent with no "@" in it, live-verified — the built-in default is an
+  # email-shaped placeholder that satisfies that check, so it works out of
+  # the box. Leave these commented out to use it; uncomment ONLY to set your
+  # own real contact info, since a literal "" here would override that
+  # working default with a blank string and bring the 403 back.
+  # sec_user_agent: "Your Name your@email.com"  # SEC_USER_AGENT — required if any sec_* manifest is active
+  # bls_user_agent: "Your Name your@email.com"  # BLS_USER_AGENT — only used by discover-bls, not routine ingestion
 
   # --- Concurrent extraction ------------------------------------------------
   # extract_workers: thread-pool size for parallel series extraction (I/O-bound).
