@@ -52,6 +52,7 @@ _SETTING_FIELDS = (
     "bea_api_key",
     "census_api_key",
     "sec_user_agent",
+    "bls_user_agent",
     "stooq_api_key",
     "tiingo_api_key",
     "secret_scope",
@@ -79,6 +80,7 @@ _ENV_OVERRIDES = {
     "bea_api_key": "BEA_API_KEY",
     "census_api_key": "CENSUS_API_KEY",
     "sec_user_agent": "SEC_USER_AGENT",
+    "bls_user_agent": "BLS_USER_AGENT",
     "stooq_api_key": "STOOQ_API_KEY",
     "tiingo_api_key": "TIINGO_API_KEY",
     "secret_scope": "FRED_SECRET_SCOPE",
@@ -209,8 +211,19 @@ class PipelineConfig:
     eia_api_key: str = field(repr=False, default="")
     bea_api_key: str = field(repr=False, default="")
     census_api_key: str = field(repr=False, default="")
+    # SEC EDGAR and BLS's flat-file server both reject a User-Agent that
+    # doesn't look like it has real contact info -- specifically, one with no
+    # "@" gets a blanket 403 (live-verified against both), so the unconfigured
+    # default has to satisfy that check too, not just describe itself.
     sec_user_agent: str = (
-        "fred-bronze-to-gold-pipeline (set SEC_USER_AGENT to your contact)"
+        "fred-bronze-to-gold-pipeline "
+        "(contact: set SEC_USER_AGENT to your own -- placeholder@example.com)"
+    )
+    # Sent on requests to BLS's flat-file series-catalog server (used by
+    # discover-bls; the v2 JSON API in fred_pipeline.sources.bls needs no UA).
+    bls_user_agent: str = (
+        "fred-bronze-to-gold-pipeline "
+        "(contact: set BLS_USER_AGENT to your own -- placeholder@example.com)"
     )
     stooq_api_key: str = field(repr=False, default="")  # Stooq CSV download key
     tiingo_api_key: str = field(repr=False, default="")  # equity total return

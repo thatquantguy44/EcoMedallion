@@ -1,0 +1,30 @@
+name: ecb_eon_candidates
+description: 'Inactive ECB EONIA candidate: the euro overnight rate benchmark discontinued
+  2021-12-31 and replaced by the euro short-term rate (EST). Kept for backfilling
+  pre-EST overnight-rate history in backtests. Live-verified end to end; data ends
+  exactly at discontinuation, no future updates expected.'
+version: 1
+series:
+- series_id: ECB:EON:D.EONIA_TO.RATE
+  title: EONIA (Euro OverNight Index Average) - Weighted Average Rate [discontinued
+    2021-12-31, superseded by EST]
+  frequency: d
+  category: rates
+  units: ''
+  active: false
+  source: ecb
+  load_type: incremental
+  expected_update_frequency: daily
+  vintage_enabled: true
+  validation_profile: lenient
+  business_owner: ''
+  technical_owner: ''
+  downstream_use_case: ecb_candidate_review
+  priority: 3
+  restate_records: null
+  min_value: null
+  max_value: null
+  tags:
+  - ecb
+  - eon
+  - rates

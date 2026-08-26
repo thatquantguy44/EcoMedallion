@@ -14,9 +14,7 @@ ECB:<flow_ref>:<key>
 
 Current manifest: `manifests/ecb_rates.yml`
 
-Current active ECB series: 20
-
-## Current Series
+## Current Series (20 active)
 
 | Series ID | Flow | Frequency | Units | Gold category | Description |
 |---|---|---:|---|---|---|

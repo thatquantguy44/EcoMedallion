@@ -251,6 +251,19 @@ def _cmd_discover_ecb(args: argparse.Namespace) -> int:
         force=args.force,
         exclude_ids=exclude_ids,
     )
+    print(
+        f"ECB {structure.flow_id}: estimated {estimate} candidate combination(s); "
+        f"kept {len(specs)}, skipped {len(skipped)}."
+    )
+    if not specs:
+        print(
+            "No candidates matched -- nothing to write. Sample skip reasons:",
+            file=sys.stderr,
+        )
+        for row in skipped[:10]:
+            print(f"  {row}", file=sys.stderr)
+        return 1
+
     manifest_name = args.name or f"ecb_{structure.flow_id.lower()}_candidates"
     description = (
         args.description
@@ -258,11 +271,6 @@ def _cmd_discover_ecb(args: argparse.Namespace) -> int:
     )
     manifest = build_ecb_manifest_dict(manifest_name, specs, description=description)
     yaml_text = ecb_manifest_to_yaml(manifest)
-
-    print(
-        f"ECB {structure.flow_id}: estimated {estimate} candidate combination(s); "
-        f"kept {len(specs)}, skipped {len(skipped)}."
-    )
     if args.dry_run or not args.out:
         print("\n--- manifest (dry run, not written) ---\n")
         print(yaml_text)
@@ -270,6 +278,149 @@ def _cmd_discover_ecb(args: argparse.Namespace) -> int:
         with open(args.out, "w", encoding="utf-8") as fh:
             fh.write(yaml_text)
         print(f"Wrote {len(specs)} inactive ECB candidate series to {args.out}")
+        load_manifests(args.out)
+        print("Validated: generated manifest loads successfully.")
+    return 0
+
+
+def _cmd_discover_bls(args: argparse.Namespace) -> int:
+    import os
+
+    from fred_pipeline.catalogs.bls_discovery import (
+        BLSDiscoveryError,
+        BLSFlatFileClient,
+        bls_manifest_to_yaml,
+        build_bls_manifest_dict,
+        filter_series_rows,
+        filter_surveys,
+        generate_bls_candidate_specs,
+        inspect_series_catalog,
+        parse_column_filters,
+        surveys_to_rows,
+    )
+    from fred_pipeline.pipeline import _rate_limit_for_source
+
+    modes = [
+        bool(args.list_surveys),
+        bool(args.inspect),
+        bool(args.survey and not args.inspect),
+    ]
+    if sum(modes) != 1:
+        print(
+            "ERROR: pass exactly one BLS discovery mode: --list-surveys, "
+            "--survey SURVEY --inspect, or --survey SURVEY for candidate generation",
+            file=sys.stderr,
+        )
+        return 2
+    if modes[2] and not args.frequency:
+        print(
+            "ERROR: --frequency is required for candidate generation (BLS flat "
+            "files don't self-describe it) -- confirm it from the survey's own "
+            "documentation, e.g. --frequency m",
+            file=sys.stderr,
+        )
+        return 2
+
+    config = PipelineConfig.resolve(
+        environment=Environment(args.env), config_file=args.config
+    )
+    client = BLSFlatFileClient(
+        user_agent=config.bls_user_agent,
+        timeout=config.request_timeout_seconds,
+        max_retries=config.max_retries,
+        rate_limit_per_minute=_rate_limit_for_source(config, "bls"),
+    )
+
+    if args.list_surveys:
+        try:
+            surveys = filter_surveys(
+                client.list_surveys(), search=args.search, max_results=args.max
+            )
+        except BLSDiscoveryError as exc:
+            print(f"ERROR: {exc}", file=sys.stderr)
+            return 2
+
+        if args.json:
+            print(json.dumps(surveys_to_rows(surveys), indent=2))
+            return 0
+        print(f"Found {len(surveys)} BLS survey(s).")
+        if not surveys:
+            return 0
+        print(f"{'Survey':10s} Name")
+        print(f"{'-' * 10} {'-' * 60}")
+        for survey in surveys:
+            print(f"{survey.abbreviation:10s} {survey.name}")
+        return 0
+
+    try:
+        rows = client.fetch_series_catalog(args.survey)
+    except BLSDiscoveryError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 2
+
+    if args.inspect:
+        summary = inspect_series_catalog(rows, sample_size=args.sample_values)
+        if args.json:
+            print(json.dumps(summary, indent=2))
+            return 0
+        print(
+            f"Survey: {args.survey.upper()} - {summary['row_count']} series in catalog"
+        )
+        print(f"{'Column':24s} {'Distinct (sample)':>17s}  Sample values")
+        print(f"{'-' * 24} {'-' * 17}  {'-' * 40}")
+        for col in summary["columns"]:
+            sample = ", ".join(col["sample_values"])
+            print(
+                f"{col['column']:24s} {col['distinct_count_in_sample']:17d}  {sample}"
+            )
+        return 0
+
+    column_filters = parse_column_filters(args.column)
+    filtered = filter_series_rows(
+        rows, column_filters=column_filters, search=args.search
+    )
+
+    exclude_ids: set[str] = set()
+    if not args.include_existing and os.path.isdir(args.manifests):
+        try:
+            existing = load_manifests(args.manifests)
+            exclude_ids = {s.series_id for s in all_series(existing, active_only=False)}
+        except (OSError, ValueError):
+            exclude_ids = set()
+
+    try:
+        specs, skipped = generate_bls_candidate_specs(
+            args.survey,
+            filtered,
+            frequency=args.frequency,
+            category=args.category,
+            max_results=args.max,
+            exclude_ids=exclude_ids,
+        )
+    except BLSDiscoveryError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 2
+
+    manifest_name = args.name or f"bls_{args.survey.lower()}_candidates"
+    description = (
+        args.description
+        or f"Inactive BLS candidate series generated from the {args.survey.upper()} "
+        "survey catalog."
+    )
+    manifest = build_bls_manifest_dict(manifest_name, specs, description=description)
+    yaml_text = bls_manifest_to_yaml(manifest)
+
+    print(
+        f"BLS {args.survey.upper()}: {len(rows)} series in catalog, "
+        f"{len(filtered)} after filters; kept {len(specs)}, skipped {len(skipped)}."
+    )
+    if args.dry_run or not args.out:
+        print("\n--- manifest (dry run, not written) ---\n")
+        print(yaml_text)
+    else:
+        with open(args.out, "w", encoding="utf-8") as fh:
+            fh.write(yaml_text)
+        print(f"Wrote {len(specs)} inactive BLS candidate series to {args.out}")
         load_manifests(args.out)
         print("Validated: generated manifest loads successfully.")
     return 0
@@ -1105,6 +1256,81 @@ def build_parser() -> argparse.ArgumentParser:
         help="YAML config path for ECB_BASE_URL/proxy overrides",
     )
     de.set_defaults(func=_cmd_discover_ecb)
+
+    db_ = sub.add_parser(
+        "discover-bls",
+        help="inspect BLS survey flat-file catalogs and generate candidate manifests",
+    )
+    db_.add_argument("--list-surveys", action="store_true", help="list BLS surveys")
+    db_.add_argument(
+        "--survey",
+        default=None,
+        help="BLS survey abbreviation to inspect or expand, e.g. CU, CE, LN",
+    )
+    db_.add_argument(
+        "--inspect",
+        action="store_true",
+        help="inspect one --survey's flat-file columns and value samples",
+    )
+    db_.add_argument(
+        "--search",
+        default=None,
+        help="case-insensitive filter on survey name, or on series id/title",
+    )
+    db_.add_argument(
+        "--max",
+        type=int,
+        default=100,
+        help="maximum surveys or generated candidates to print/write",
+    )
+    db_.add_argument(
+        "--sample-values",
+        type=int,
+        default=8,
+        help="distinct sample values to show per column when inspecting",
+    )
+    db_.add_argument(
+        "--column",
+        action="append",
+        default=[],
+        help="flat-file column filter COLUMN=VALUE[,VALUE]; repeatable",
+    )
+    db_.add_argument(
+        "--frequency",
+        default=None,
+        help=(
+            "manifest frequency for generated candidates (d/w/m/q/sa/a) -- "
+            "required; BLS flat files don't self-describe this the way ECB's "
+            "SDMX FREQ dimension does"
+        ),
+    )
+    db_.add_argument(
+        "--include-existing",
+        action="store_true",
+        help="do not dedupe against series already in --manifests",
+    )
+    db_.add_argument(
+        "--manifests",
+        default="manifests",
+        help="manifest directory used for duplicate exclusion",
+    )
+    db_.add_argument("--name", default=None, help="generated manifest name")
+    db_.add_argument("--category", default=None, help="generated manifest category")
+    db_.add_argument(
+        "--description", default=None, help="generated manifest description"
+    )
+    db_.add_argument("--dry-run", action="store_true", help="print instead of writing")
+    db_.add_argument("--out", default=None, help="path for generated manifest YAML")
+    db_.add_argument(
+        "--json", action="store_true", help="print machine-readable metadata"
+    )
+    db_.add_argument("--env", default="dev", choices=[e.value for e in Environment])
+    db_.add_argument(
+        "--config",
+        default=None,
+        help="YAML config path for BLS_USER_AGENT overrides",
+    )
+    db_.set_defaults(func=_cmd_discover_bls)
 
     rc = sub.add_parser(
         "reconcile",

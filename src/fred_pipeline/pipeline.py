@@ -558,7 +558,17 @@ class FredPipeline:
                 log.info("Gold layer refreshed for run %s", run.run_id)
             gold_stage = tracker.get("gold")
             if gold_stage is not None and gold_stage.error_message:
-                log.exception("Gold refresh failed for run %s", run.run_id)
+                # log.exception() needs a *live* exception context; by this
+                # point tracker.stage(swallow=True) has already caught and
+                # exited, so sys.exc_info() is empty and log.exception() would
+                # print "NoneType: None" instead of the real error. Log the
+                # type/message the tracker already captured instead.
+                log.error(
+                    "Gold refresh failed for run %s: %s: %s",
+                    run.run_id,
+                    gold_stage.error_type,
+                    gold_stage.error_message,
+                )
             elif gold_stage is not None and gold_stage.detail.get("tables_not_ok"):
                 tracker.warn(
                     "gold",

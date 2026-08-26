@@ -396,6 +396,11 @@ def dataflows_to_rows(flows: Iterable[ECBDataflow]) -> list[dict[str, str]]:
 
 _ECB_TO_MANIFEST_FREQ = {
     "D": "d",
+    # Business-daily (excludes weekends) -- live-verified as what EST
+    # actually publishes under, rather than "D". Still "d" in this repo's
+    # frequency vocabulary (same convention as FRED daily series, which are
+    # also business-day-only without a separate code).
+    "B": "d",
     "W": "w",
     "M": "m",
     "Q": "q",
@@ -406,6 +411,7 @@ _ECB_TO_MANIFEST_FREQ = {
 _MANIFEST_TO_ECB_FREQ = {
     manifest: ecb for ecb, manifest in _ECB_TO_MANIFEST_FREQ.items()
 }
+_MANIFEST_TO_ECB_FREQ["d"] = "D"  # canonical daily code; "B" is forward-only
 _MANIFEST_TO_ECB_FREQ["sa"] = "S"
 _MANIFEST_TO_ECB_FREQ.update(
     {
@@ -489,7 +495,13 @@ def _selected_codes(
                         "reason": "filter code not in dimension code list",
                     }
                 )
-        if include_needles:
+        # --include-code/--exclude-code are free-text narrowing for dimensions
+        # the caller did *not* already pin with --dimension/--frequency. Applying
+        # them to every dimension unconditionally silently zeroes out the whole
+        # result whenever the search text doesn't also happen to match an
+        # already-pinned dimension's own code id/name (e.g. FREQ's "Daily"
+        # never contains a rate-name search term) -- skip pinned dimensions.
+        if not requested and include_needles:
             codes = [
                 code
                 for code in codes
@@ -498,7 +510,7 @@ def _selected_codes(
                     for needle in include_needles
                 )
             ]
-        if exclude_needles:
+        if not requested and exclude_needles:
             codes = [
                 code
                 for code in codes

@@ -185,6 +185,14 @@ class BLSClient(HTTPSource):
             # pipeline's incremental plan often supplies only observation_start,
             # so bound the request through the current year.
             end_year = str(datetime.now(timezone.utc).year)
+        elif not start_year:
+            # Full load (no observation_start supplied): BLS without year params
+            # returns only the current year, which leaves all prior months
+            # permanently null because the incremental restate window never
+            # reaches back past the first date stored. Default to a 20-year
+            # window so first-ingestion captures meaningful history.
+            end_year = str(datetime.now(timezone.utc).year)
+            start_year = str(datetime.now(timezone.utc).year - 19)
 
         params: dict[str, Any] = {}
         if start_year:

@@ -1,0 +1,163 @@
+name: ecb_yc_pub_candidates
+description: 'Inactive ECB euro area yield curve candidates beyond what manifests/ecb_rates.yml
+  already covers (2Y/5Y/10Y/30Y spot): two new spot tenors (3M, 1Y), four instantaneous
+  forward rates, and the 10Y-1Y curve spread. Live-verified end to end via a wildcard
+  flow query -- YC_PUB''s real published tenor set (3M/1Y/2Y/5Y/10Y spot, four forwards,
+  one spread) does NOT include 30Y, confirmed by a live 404 on that key.'
+version: 1
+series:
+- series_id: ECB:YC_PUB:B.U2.EUR.4F.G_N_A.SV_C_YM.SR_3M
+  title: ECB euro area 3-month yield curve spot rate (AAA-rated, Svensson model)
+  frequency: d
+  category: rates
+  units: ''
+  active: false
+  source: ecb
+  load_type: incremental
+  expected_update_frequency: daily
+  vintage_enabled: true
+  validation_profile: lenient
+  business_owner: ''
+  technical_owner: ''
+  downstream_use_case: ecb_candidate_review
+  priority: 3
+  restate_records: null
+  min_value: null
+  max_value: null
+  tags:
+  - ecb
+  - yc_pub
+  - rates
+- series_id: ECB:YC_PUB:B.U2.EUR.4F.G_N_A.SV_C_YM.SR_1Y
+  title: ECB euro area 1-year yield curve spot rate (AAA-rated, Svensson model)
+  frequency: d
+  category: rates
+  units: ''
+  active: false
+  source: ecb
+  load_type: incremental
+  expected_update_frequency: daily
+  vintage_enabled: true
+  validation_profile: lenient
+  business_owner: ''
+  technical_owner: ''
+  downstream_use_case: ecb_candidate_review
+  priority: 3
+  restate_records: null
+  min_value: null
+  max_value: null
+  tags:
+  - ecb
+  - yc_pub
+  - rates
+- series_id: ECB:YC_PUB:B.U2.EUR.4F.G_N_A.SV_C_YM.IF_1Y
+  title: ECB euro area 1-year instantaneous forward rate (AAA-rated, Svensson model)
+  frequency: d
+  category: rates
+  units: ''
+  active: false
+  source: ecb
+  load_type: incremental
+  expected_update_frequency: daily
+  vintage_enabled: true
+  validation_profile: lenient
+  business_owner: ''
+  technical_owner: ''
+  downstream_use_case: ecb_candidate_review
+  priority: 3
+  restate_records: null
+  min_value: null
+  max_value: null
+  tags:
+  - ecb
+  - yc_pub
+  - rates
+- series_id: ECB:YC_PUB:B.U2.EUR.4F.G_N_A.SV_C_YM.IF_2Y
+  title: ECB euro area 2-year instantaneous forward rate (AAA-rated, Svensson model)
+  frequency: d
+  category: rates
+  units: ''
+  active: false
+  source: ecb
+  load_type: incremental
+  expected_update_frequency: daily
+  vintage_enabled: true
+  validation_profile: lenient
+  business_owner: ''
+  technical_owner: ''
+  downstream_use_case: ecb_candidate_review
+  priority: 3
+  restate_records: null
+  min_value: null
+  max_value: null
+  tags:
+  - ecb
+  - yc_pub
+  - rates
+- series_id: ECB:YC_PUB:B.U2.EUR.4F.G_N_A.SV_C_YM.IF_5Y
+  title: ECB euro area 5-year instantaneous forward rate (AAA-rated, Svensson model)
+  frequency: d
+  category: rates
+  units: ''
+  active: false
+  source: ecb
+  load_type: incremental
+  expected_update_frequency: daily
+  vintage_enabled: true
+  validation_profile: lenient
+  business_owner: ''
+  technical_owner: ''
+  downstream_use_case: ecb_candidate_review
+  priority: 3
+  restate_records: null
+  min_value: null
+  max_value: null
+  tags:
+  - ecb
+  - yc_pub
+  - rates
+- series_id: ECB:YC_PUB:B.U2.EUR.4F.G_N_A.SV_C_YM.IF_10Y
+  title: ECB euro area 10-year instantaneous forward rate (AAA-rated, Svensson model)
+  frequency: d
+  category: rates
+  units: ''
+  active: false
+  source: ecb
+  load_type: incremental
+  expected_update_frequency: daily
+  vintage_enabled: true
+  validation_profile: lenient
+  business_owner: ''
+  technical_owner: ''
+  downstream_use_case: ecb_candidate_review
+  priority: 3
+  restate_records: null
+  min_value: null
+  max_value: null
+  tags:
+  - ecb
+  - yc_pub
+  - rates
+- series_id: ECB:YC_PUB:B.U2.EUR.4F.G_N_A.SV_C_YM.SRS_10Y_1Y
+  title: ECB euro area 10-year minus 1-year yield curve spread (AAA-rated, Svensson
+    model)
+  frequency: d
+  category: rates
+  units: ''
+  active: false
+  source: ecb
+  load_type: incremental
+  expected_update_frequency: daily
+  vintage_enabled: true
+  validation_profile: lenient
+  business_owner: ''
+  technical_owner: ''
+  downstream_use_case: ecb_candidate_review
+  priority: 3
+  restate_records: null
+  min_value: null
+  max_value: null
+  tags:
+  - ecb
+  - yc_pub
+  - rates

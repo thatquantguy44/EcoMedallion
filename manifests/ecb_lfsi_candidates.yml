@@ -1,0 +1,31 @@
+name: ecb_lfsi_candidates
+description: Inactive ECB euro area unemployment rate candidate (Eurostat Labour Force
+  Survey, published via ECB's LFSI_PUB). Monthly, seasonally adjusted, ages 15-74,
+  both sexes -- the classic headline euro area unemployment rate. Live-verified end
+  to end; note the euro-area reference area code here is I9 (Euro area 20, fixed composition),
+  not U2 -- LFSI_PUB uses Eurostat's fixed-composition area convention, not ECB's
+  changing-composition one used elsewhere in this catalog.
+version: 1
+series:
+- series_id: ECB:LFSI_PUB:M.I9.S.UNEHRT.TOTAL0.15_74.T
+  title: Unemployment Rate, Euro Area, Ages 15-74, Total (SA)
+  frequency: m
+  category: labor
+  units: ''
+  active: false
+  source: ecb
+  load_type: incremental
+  expected_update_frequency: monthly
+  vintage_enabled: true
+  validation_profile: lenient
+  business_owner: ''
+  technical_owner: ''
+  downstream_use_case: ecb_candidate_review
+  priority: 3
+  restate_records: null
+  min_value: null
+  max_value: null
+  tags:
+  - ecb
+  - lfsi_pub
+  - labor

@@ -33,7 +33,8 @@ def test_normalize_tiingo_keys_accepts_string_or_list():
 
 def test_make_tiingo_wires_primary_and_backup_keys():
     config = PipelineConfig(
-        environment=Environment.DEV, fred_api_key="k",
+        environment=Environment.DEV,
+        fred_api_key="k",
         tiingo_api_key=["primary", "backup1", "backup2"],
     )
     client = _make_tiingo(config)
@@ -43,7 +44,9 @@ def test_make_tiingo_wires_primary_and_backup_keys():
 
 def test_make_tiingo_still_accepts_a_single_string_key():
     config = PipelineConfig(
-        environment=Environment.DEV, fred_api_key="k", tiingo_api_key="only",
+        environment=Environment.DEV,
+        fred_api_key="k",
+        tiingo_api_key="only",
     )
     client = _make_tiingo(config)
     assert client.api_key == "only"
@@ -86,12 +89,19 @@ def test_concurrent_extraction_preserves_order_and_isolation(
     assert run.series_succeeded == 5
     assert run.series_failed == 1
     # audit rows preserve the original spec order regardless of thread timing
-    assert [sr.series_id for sr in run.series_runs] == ["A", "B", "C", "D", "BAD_E", "F"]
+    assert [sr.series_id for sr in run.series_runs] == [
+        "A",
+        "B",
+        "C",
+        "D",
+        "BAD_E",
+        "F",
+    ]
     bad = run.series_runs[4]
     assert bad.status == RunStatus.FAILED
     assert "boom" in bad.error_message
     for sid in ("A", "B", "C", "D", "F"):
-        sr = [s for s in run.series_runs if s.series_id == sid][0]
+        sr = next(s for s in run.series_runs if s.series_id == sid)
         assert sr.status == RunStatus.SUCCEEDED
 
 
@@ -104,9 +114,8 @@ def test_extraction_streams_completed_series_before_slow_future(
         source_name = "fred"
 
         def get_observations(self, series_id, **kwargs):
-            if series_id == "SLOW":
-                if not fast_written.wait(timeout=2):
-                    raise AssertionError("SLOW completed before FAST was written")
+            if series_id == "SLOW" and not fast_written.wait(timeout=2):
+                raise AssertionError("SLOW completed before FAST was written")
             return observations_payload
 
     class StreamingWarehouse:
@@ -131,7 +140,9 @@ def test_extraction_streams_completed_series_before_slow_future(
             pass
 
         def persist_run_state(self, run):
-            self.run_states.append((run.status, run.series_succeeded, run.series_failed))
+            self.run_states.append(
+                (run.status, run.series_succeeded, run.series_failed)
+            )
 
         def persist_series_run(self, series_run):
             self.series_audit.append(series_run.series_id)
@@ -146,7 +157,9 @@ def test_extraction_streams_completed_series_before_slow_future(
             pass
 
     wh = StreamingWarehouse()
-    cfg = PipelineConfig(environment=Environment.DEV, fred_api_key="k", extract_workers=2)
+    cfg = PipelineConfig(
+        environment=Environment.DEV, fred_api_key="k", extract_workers=2
+    )
     pipe = FredPipeline(cfg, client=BlockingClient(), warehouse=wh)
 
     run = pipe.run([_spec("SLOW"), _spec("FAST")], build_gold_layer=False)
@@ -169,7 +182,7 @@ def test_series_failure_is_isolated(observations_payload, fake_client_cls):
     assert run.status == RunStatus.PARTIAL
     assert run.series_succeeded == 1
     assert run.series_failed == 1
-    bad = [s for s in run.series_runs if s.series_id == "BAD"][0]
+    bad = next(s for s in run.series_runs if s.series_id == "BAD")
     assert bad.status == RunStatus.FAILED
     assert "boom" in bad.error_message
 
@@ -197,12 +210,22 @@ def test_tiingo_incremental_plan_uses_adjclose_watermark():
 
 
 def test_strict_profile_fails_run_on_dq(fake_client_cls):
-    all_missing = {"observations": [
-        {"date": "2024-01-01", "value": ".", "realtime_start": "2024-01-02",
-         "realtime_end": "9999-12-31"},
-        {"date": "2024-01-02", "value": ".", "realtime_start": "2024-01-03",
-         "realtime_end": "9999-12-31"},
-    ]}
+    all_missing = {
+        "observations": [
+            {
+                "date": "2024-01-01",
+                "value": ".",
+                "realtime_start": "2024-01-02",
+                "realtime_end": "9999-12-31",
+            },
+            {
+                "date": "2024-01-02",
+                "value": ".",
+                "realtime_start": "2024-01-03",
+                "realtime_end": "9999-12-31",
+            },
+        ]
+    }
     client = fake_client_cls({"CPIAUCSL": all_missing})
     pipe = FredPipeline(_config(), client=client, spark=None, persist_audit=False)
     run = pipe.run([_spec("CPIAUCSL", validation_profile=ValidationProfile.STRICT)])
@@ -222,18 +245,23 @@ def test_vintage_series_requests_full_realtime_window(observations_payload):
             captured.update(kwargs)
             return observations_payload
 
-    pipe = FredPipeline(_config(), client=RecordingClient(), spark=None, persist_audit=False)
+    pipe = FredPipeline(
+        _config(), client=RecordingClient(), spark=None, persist_audit=False
+    )
     pipe.run([_spec("GDP", vintage_enabled=True)])
     assert captured.get("realtime_start") == "1776-07-04"
     assert captured.get("realtime_end") == "9999-12-31"
 
 
 def test_run_from_manifest_series_filter(observations_payload, fake_client_cls):
-    client = fake_client_cls({sid: observations_payload for sid in
-                              ("DGS10", "UNRATE", "GDP")})
+    client = fake_client_cls(
+        {sid: observations_payload for sid in ("DGS10", "UNRATE", "GDP")}
+    )
     pipe = FredPipeline(_config(), client=client, spark=None, persist_audit=False)
     run = pipe.run_from_manifest(
-        "manifests", series=["DGS10", "GDP"], build_gold_layer=False,
+        "manifests",
+        series=["DGS10", "GDP"],
+        build_gold_layer=False,
     )
     assert {s.series_id for s in run.series_runs} == {"DGS10", "GDP"}
     assert set(client.requested) == {"DGS10", "GDP"}
@@ -306,7 +334,9 @@ def test_run_from_manifest_source_include_exclude(
 
 
 def test_source_worker_defaults_and_overrides():
-    cfg = PipelineConfig(environment=Environment.DEV, fred_api_key="k", extract_workers=16)
+    cfg = PipelineConfig(
+        environment=Environment.DEV, fred_api_key="k", extract_workers=16
+    )
     assert _extract_workers_for_source(cfg, "fred") == 16
     assert _extract_workers_for_source(cfg, "tiingo") == 2
     assert _extract_workers_for_source(cfg, "stooq") == 2
@@ -346,9 +376,10 @@ def test_source_rate_defaults_and_overrides():
 
 
 def test_force_full_ignores_watermark(observations_payload):
-    from fred_pipeline.local_store import LocalWarehouse
     import os
     import tempfile
+
+    from fred_pipeline.local_store import LocalWarehouse
 
     captured = []
 
@@ -358,11 +389,12 @@ def test_force_full_ignores_watermark(observations_payload):
             return observations_payload
 
     with tempfile.TemporaryDirectory() as d:
-        cfg = PipelineConfig(environment=Environment.DEV, fred_api_key="k",
-                             restate_last_n=2)
+        cfg = PipelineConfig(
+            environment=Environment.DEV, fred_api_key="k", restate_last_n=2
+        )
         wh = LocalWarehouse(cfg, db_path=os.path.join(d, "f.db"))
         pipe = FredPipeline(cfg, client=RecordingClient(), warehouse=wh)
-        pipe.run([_spec("DGS10")])              # first load (full)
+        pipe.run([_spec("DGS10")])  # first load (full)
         pipe.run([_spec("DGS10")], force_full=True)  # force full despite data
         assert all("observation_start" not in c for c in captured)
         wh.close()
@@ -379,15 +411,69 @@ def test_missing_source_keys():
         "stooq": "stooq_api_key",
     }
 
-    cfg2 = PipelineConfig(environment=Environment.DEV, fred_api_key="",
-                          eia_api_key="e", stooq_api_key="s")
+    cfg2 = PipelineConfig(
+        environment=Environment.DEV, fred_api_key="", eia_api_key="e", stooq_api_key="s"
+    )
     # fred required but empty; eia/stooq satisfied
     assert missing_source_keys(cfg2, ["fred", "eia", "stooq"]) == {
         "fred": "fred_api_key"
     }
 
 
+def test_gold_failure_logs_the_real_error_not_noneType_none(
+    observations_payload, fake_client_cls, caplog
+):
+    """Regression: log.exception() outside the tracker's except block used to
+    print "NoneType: None" (no live exception context left to report) instead
+    of the actual Gold-build failure. The stage tracker already captures
+    error_type/error_message before swallowing -- the log line must use those.
+    """
+
+    class FailingGoldWarehouse:
+        def restate_start(self, series_id, n):
+            return None
+
+        def write_bronze(self, rows):
+            return len(rows)
+
+        def merge_silver(self, rows):
+            return len(rows)
+
+        def persist_dq(self, run_id, report):
+            pass
+
+        def persist_run_state(self, run):
+            pass
+
+        def persist_series_run(self, series_run):
+            pass
+
+        def build_gold(self):
+            raise ValueError("table gold_dim_date has no column named is_imm_date")
+
+        def write_release_calendar(self, rows):
+            return len(rows)
+
+        def persist_run(self, run):
+            pass
+
+    client = fake_client_cls({"DGS10": observations_payload})
+    pipe = FredPipeline(
+        _config(), client=client, warehouse=FailingGoldWarehouse(), persist_audit=False
+    )
+    with caplog.at_level("ERROR"):
+        pipe.run([_spec("DGS10")])
+
+    gold_failures = [r for r in caplog.records if "Gold refresh failed" in r.message]
+    assert len(gold_failures) == 1
+    assert "NoneType: None" not in gold_failures[0].message
+    assert "ValueError" in gold_failures[0].message
+    assert "is_imm_date" in gold_failures[0].message
+
+
 def test_config_table_naming():
     cfg = PipelineConfig(environment=Environment.PROD, fred_api_key="k")
     assert cfg.catalog == "macro_prod"
-    assert cfg.table("silver", "fred_observation") == "macro_prod.silver.fred_observation"
+    assert (
+        cfg.table("silver", "fred_observation") == "macro_prod.silver.fred_observation"
+    )

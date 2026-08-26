@@ -78,6 +78,20 @@ def test_keyless_omits_registrationkey(fake_session_cls, fake_response_cls):
     assert "registrationkey" not in session.calls[0]["params"]
 
 
+def test_full_load_sends_default_year_window(fake_session_cls, fake_response_cls):
+    """No observation_start → default 20-year window so new-series first ingestion
+    gets historical data. Without this, BLS returns only the current year and
+    recent-but-past months (e.g. the previous October) are permanently null because
+    the subsequent incremental restate window never reaches back past the earliest
+    stored date."""
+    session = fake_session_cls([fake_response_cls(_payload(MONTHLY))])
+    _client(session).get_observations("CUUR0000SA0")
+    params = session.calls[0]["params"]
+    current_year = datetime.now(timezone.utc).year
+    assert params["endyear"] == str(current_year)
+    assert params["startyear"] == str(current_year - 19)
+
+
 def test_logical_failure_raises_even_on_http_200(fake_session_cls, fake_response_cls):
     # BLS returns HTTP 200 with a failure status; the client must surface it.
     session = fake_session_cls(
