@@ -93,8 +93,8 @@ protocol before any data is bought.
 
 - **Not** building a PFOF / Rule 606 source. It is not FRED and not EDGAR; it
   is per-broker website scraping with no common schema. That is its own spec,
-  and §2.2 argues it should not be written until the FRED-only baseline in §8
-  has been run.
+  and §2.2 plus §8.1 argue it should be the last source attempted, not the
+  first.
 - **Not** building the downstream model. This spec delivers the feature
   substrate and the handoff contract only.
 - **Not** adding a source client or new Bronze/Silver schemas. The `fred`
@@ -167,7 +167,39 @@ manifest at all, rather than a guessed id:
   is already active and is a near substitute; add a 100-specific level only if
   verification shows one exists and the composite proves inadequate.
 
-### 5.1 What is deliberately absent from FRED
+### 5.1 History truncation — a live risk to the entire volatility layer
+
+FRED's CBOE series carry a licensing constraint that undercuts the plan above,
+and it affects the **already-active** `VIXCLS`, not only the candidates.
+
+Public FRED pages for `VIXCLS` and `VXVCLS` state that **starting in April
+2026 these series include only a rolling three years of observations**, with
+users directed to the source for anything longer. That date has already
+passed. `VXOCLS` is separately confirmed as discontinued.
+
+Consequences, in order of severity:
+
+- A rolling three-year window cannot support a backtest that needs to span
+  more than one volatility regime. Three years from today reaches back to
+  2023 — no 2020, no 2018, no 2008. A dealer-hedging model calibrated only on
+  that window has never seen the conditions it exists to trade.
+- Any existing Gold history the repo already holds for `VIXCLS` becomes more
+  valuable than the upstream series, because the pipeline's Bronze archive and
+  point-in-time tables retain what FRED itself has now dropped. **Do not
+  replay or full-refresh `VIXCLS` from FRED without first confirming what the
+  API currently returns** — a `--full` reload could truncate locally held
+  history to match the shortened upstream window.
+- It moves the volatility complex from "ingest from FRED" toward "ingest from
+  CBOE directly." CBOE publishes full VIX-family history free on its own CDN
+  (§8.2). FRED's advantage was convenience and a single client, not coverage,
+  and that advantage is now largely gone for this family.
+
+Verify the current state in §9 step 1 before writing the manifest. If the
+truncation is confirmed, the recommended shape of this spec changes: the
+volatility complex becomes a small CBOE source addition, and FRED's role
+narrows to the macro conditioners it is genuinely best at.
+
+### 5.2 What is deliberately absent from FRED
 
 State this in `docs/catalog/fred.md` so the next person does not go looking:
 
@@ -273,26 +305,51 @@ The downstream model consumes one daily frame keyed on
 | `vxn`, `rvx` and their ratios to `vix` | This spec | This spec |
 | `nfci_leverage_z`, `regime_composite` | Existing configs | Available |
 | `dealer_margin_receivables`, `household_equity_share` | Existing `money_banking.yml` | Available, quarterly, conditioner only |
-| `retail_net_long_pct` | **No public source at daily grain** | **Unfilled — see below** |
-| `dealer_gamma_sign`, `gamma_notional` | OCC/CBOE open interest by strike | **Unfilled** |
+| `small_trader_net_long` | CFTC Commitments of Traders, nonreportable line | **Unfilled**, free, weekly — the closest public directional retail proxy (§8.1) |
+| `put_call_ratio` | CBOE daily archives | **Unfilled**, free, daily with history (§8.1) |
+| `dealer_gamma_sign`, `gamma_notional` | CBOE delayed-quotes JSON (greeks and open interest per strike) | **Unfilled**, free daily snapshot, no history — must be accumulated (§8.1) |
+| `retail_net_long_pct` as literally specified | CBOE Open-Close Volume Summary | **Unfilled and not free** (§8.1) |
 
-The two unfilled rows are the hypothesis's actual content. Ranked candidates
-for filling them, none of them FRED:
+The unfilled rows are the hypothesis's actual content. Ranked candidates for
+filling them:
 
-1. **CBOE equity/index put-call ratios** — daily, free, published by CBOE. The
-   cheapest usable retail-tilt proxy, and the right first attempt.
-2. **OCC open interest by series** — daily, free, the input a real gamma
-   estimate requires. Needs a strike-level parser and a pricing model to turn
-   into gamma notional.
-3. **Rule 606 reports** — quarterly, per-broker website scraping, and per
-   §2.2 structurally incapable of producing the stated signal. Last, not
-   first, despite being the premise's headline claim.
+see §8.1. None is FRED, and the best of them is not free.
 
-### 8.1 Falsification protocol, pre-registered
+### 8.1 Free non-FRED sources that can fill the unfilled rows
+
+Reachability could not be tested here (§9 blocks every one of these hosts too),
+so treat every endpoint shape below as **needing live confirmation before it is
+written into a source client**. Ranked by how directly each one answers the
+question the model is actually asking.
+
+| Source | What it gives | Grain | Cost | Verdict |
+|---|---|---|---|---|
+| **Cboe delayed-quotes JSON** (`cdn.cboe.com/api/global/delayed_quotes/options/_SPX.json`, and the `SPY` equivalent) | Full option chain: every strike × expiry with bid/ask, volume, **open interest, implied vol, and per-contract delta and gamma** | Snapshot, ~15-min delayed intraday, end-of-day values after the close | Free, no key | **Best free option.** This is the direct input to a dealer gamma-exposure calculation — no pricing model needed, since Cboe publishes the greeks. Its limitation is decisive: it is a *snapshot*, with no history. You must capture it daily going forward and accumulate your own archive. That is exactly what this repo's Bronze layer already does for every other source. |
+| **CFTC Commitments of Traders** (`publicreporting.cftc.gov`, Socrata API) | Long/short/spread positions by trader class on E-mini S&P 500 futures, including the **"nonreportable positions"** line — small traders, i.e. the closest thing to an official retail long/short series | Weekly (Tuesday positions, Friday release, ~3-day lag) | Free, no key | **Best free source with actual direction.** It is futures rather than options, weekly rather than daily, and small-trader is a proxy for retail rather than a measurement of it. But it is directional, long-history, revision-free, and government-published — the only candidate here with all four. Weekly grain makes it a conditioner for a 3–5 day signal, not a trigger. |
+| **OCC volume and open interest** (`theocc.com` market data reports), notably **Volume by Account Type** | Daily volume and open interest, split **customer / firm / market maker** | Daily | Free | Strong second input. The customer-versus-market-maker split is a direct read on which side of aggregate volume the customer base sits, and OCC open interest by series is the alternative gamma input if the Cboe endpoint proves unusable. No buy/sell direction. |
+| **Cboe put/call ratio archives** (`cdn.cboe.com/resources/options/volume_and_call_put_ratios/`) | Daily equity, index, and total put/call ratios, with a downloadable historical archive | Daily, with history | Free | The cheapest first attempt, and it has the history the FRED volatility series no longer do (§5.1). A ratio is a crude tilt proxy — it conflates opening and closing trades and hedging with speculation — but it is the classic sentiment input and costs almost nothing to add. |
+| **Cboe VIX-family history** (`cdn.cboe.com`, e.g. the VIX history CSV) | Full history for VIX, VIX3M, VIX9D and the rest of the family | Daily, full history | Free | The replacement for the FRED volatility complex if §5.1's truncation is confirmed. |
+| **FINRA daily short sale volume** (`cdn.finra.org` / `regsho.finra.org`, plus a free Query API at `api.finra.org`) | Per-ticker short volume, including a **consolidated off-exchange** file across the trade reporting facilities | Daily, posted by 6pm ET same day | Free | Useful and underused. Retail marketable flow is internalized off-exchange, so off-exchange share and its short component are a genuine retail-activity proxy — arguably closer to the premise's actual intent than anything on EDGAR. Short volume is not short interest and is widely misread; document that distinction wherever it lands. |
+| **FINRA margin statistics** | Aggregate customer margin debt and credit balances | Monthly | Free | The series most people mean by "margin debt." Slower and cleaner than the Z.1 broker-dealer receivables already ingested; a leverage conditioner, not a signal. |
+| **SEC Rule 606 reports** | Quarterly routed-order share and payment per hundred shares, per broker, per venue | Quarterly | Free, but per-broker website scraping with no common schema | **Last.** Per §2.2 it is structurally incapable of producing the stated signal, despite being the premise's headline claim. |
+
+And the dataset that would actually answer the question, for completeness:
+
+- **Cboe Open-Close Volume Summary** classifies every trade by participant type
+  (customer, professional customer, broker-dealer, market maker), by buy versus
+  sell, by **open versus close**, and breaks customer activity into contract-size
+  tiers (under 100, 100–199, 200+). Small-tier customer *opening buys* is, as
+  close as any public dataset gets, the literal quantity the premise describes,
+  with history for one exchange back to 2011.
+- It is a paid Cboe DataShop product. That is the honest bottom line: the exact
+  data exists, it is well-documented, and it is neither free nor on EDGAR. The
+  free stack above approximates it; it does not replace it.
+
+### 8.2 Falsification protocol, pre-registered
 
 Fix these before any of the above is built:
 
-- The FRED-only baseline runs first: can the volatility term structure alone
+- The cheap baseline runs first: can the volatility term structure alone
   reproduce any part of a 3–5 day directional edge? `config/stats_pairs.yml`
   (§6) answers this from existing Gold at effectively zero cost. If the answer
   is no, that is informative; if the answer is yes, the positioning data must
@@ -310,12 +367,23 @@ Fix these before any of the above is built:
 
 `specs/spec001` and `specs/spec002` were written against live API checks.
 This one could not be. In the authoring environment the network egress policy
-rejects both FRED hosts at the proxy:
+rejects every relevant host at the proxy — the FRED hosts, and every
+alternative source evaluated in §8.1:
 
 ```text
-fred.stlouisfed.org:443   gateway answered 403 to CONNECT (policy denial)
-api.stlouisfed.org:443    connection refused by policy
+fred.stlouisfed.org:443     gateway answered 403 to CONNECT (policy denial)
+api.stlouisfed.org:443      gateway answered 403 to CONNECT (policy denial)
+cdn.cboe.com:443            gateway answered 403 to CONNECT (policy denial)
+www.cboe.com:443            gateway answered 403 to CONNECT (policy denial)
+publicreporting.cftc.gov:443  gateway answered 403 to CONNECT (policy denial)
+cdn.finra.org:443           gateway answered 403 to CONNECT (policy denial)
+api.finra.org:443           gateway answered 403 to CONNECT (policy denial)
+www.theocc.com:443          gateway answered 403 to CONNECT (policy denial)
 ```
+
+Everything in §8.1 therefore rests on published documentation rather than a
+live call, and every endpoint shape there needs the same confirmation step as
+the §5 series ids.
 
 So **every candidate id in §5 is unverified**, and the manifest must ship
 inactive until someone with FRED reachability runs the following. This is the
@@ -355,16 +423,28 @@ daily feature.
    and it comes before any modeling work.
 5. Decide §6.1 (realized-vol transform in Gold vs in the model), implement it,
    and add the variance-risk-premium feature.
-6. Write the handoff doc under `docs/handoffs/` describing the §8 frame, then
-   open a follow-on spec for the CBOE put/call ingestion — as a new source,
-   not as FRED.
+6. Write the handoff doc under `docs/handoffs/` describing the §8 frame.
+7. Open a follow-on spec for a `cboe` source covering, in order: the VIX-family
+   history (which §5.1 may make mandatory rather than optional), the put/call
+   archives, and the delayed-quotes chain snapshot that feeds a gamma estimate.
+   Start the chain snapshot capture early even if nothing consumes it yet — it
+   has no history, so every day not captured is permanently lost.
+8. Open a second follow-on for the CFTC Commitments of Traders source. It is a
+   clean Socrata API with long history and no snapshot urgency, so it can wait,
+   but it is the only free source here that carries actual position direction.
 
 ## 11. Open Questions
 
-- Does `VXVCLS` still update on FRED under that id, or did the CBOE VIX3M
-  rename break it? The whole term-structure feature depends on the answer, and
-  §9 step 1 settles it. If it is dead, the fallback is ingesting VIX3M from
-  CBOE directly, which turns slice 3 into a source addition.
+- **Partly answered, and it is bad news.** `VXVCLS` does still exist on FRED
+  under that id, but public FRED pages state that both it and `VIXCLS` carry
+  only a rolling three years of observations from April 2026 (§5.1). If §9
+  confirms that, the volatility complex should come from CBOE's own free CDN
+  rather than FRED, which turns slice 3 into a small source addition and
+  narrows this spec's FRED footprint to the macro conditioners. Settle this
+  first; more of the plan depends on it than on anything else here.
+- What does the pipeline currently hold for `VIXCLS`, and would a `--full`
+  refresh destroy history FRED has already dropped upstream? Check before any
+  replay touches that series.
 - Is a `realized_vol` transform in `gold_fred_feature_transforms` the right
   home, given that most FRED series are macro levels where realized vol is
   meaningless? Possibly it belongs to the equity/price path only.
