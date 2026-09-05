@@ -1,8 +1,12 @@
 # Warehouse Configuration — Pluggable Storage Backends
 
-**Purpose:** Configure where Gold layer tables are persisted (SQLite, Databricks, DuckDB, or in-memory).  
-**File:** `config/warehouse.yml`  
+**Purpose:** Configure where Gold layer tables are persisted (SQLite, Databricks, Postgres, DuckDB, or in-memory).
+**File:** `config/warehouse.yml`
 **Code:** `src/fred_pipeline/io/warehouse_factory.py`
+
+> **Adding Postgres?** This doc is the operator guide (setup/query/troubleshooting).
+> For the full design rationale, the `market_terminal` contract it has to satisfy,
+> and the phased build plan, see **[`specs/spec004`](../../specs/spec004/README.md)**.
 
 ---
 
@@ -57,6 +61,31 @@ sqlite3 fred.db "SELECT * FROM gold_fred_latest_observation LIMIT 10;"
 - Single-user only (SQLite doesn't support concurrent writes)
 - Not suitable for production
 - Limited query performance on large datasets
+
+### Local (Postgres) — Planned, not yet implemented
+
+**Status:** Scoped in [`specs/spec004`](../../specs/spec004/README.md); no
+code yet. Priority: this is the **next** backend to build, ahead of DuckDB —
+a sibling project (`market_terminal`) is blocked on a Postgres write path
+from this pipeline (see the spec's §1 for the exact dependency).
+
+**Why you'd want this over SQLite:** concurrent local writes (SQLite allows
+only one writer at a time), and a schema-qualified `gold.<table>` naming
+convention that matches what downstream consumers expect from a real
+Postgres/Delta deployment — unlike SQLite's flat `gold_<table>` naming.
+
+**Planned configuration shape** (see the spec for the finalized field names):
+
+```yaml
+default:
+  primary_backend: postgres
+  backends:
+    postgres:
+      dsn: postgresql://fred:fred@localhost:5432/fred_dev
+```
+
+Until this ships, use `local` (SQLite) for local development — it remains the
+zero-setup default regardless of when Postgres lands.
 
 ### Databricks (Delta Lake) — Production
 
@@ -191,7 +220,7 @@ conn = sqlite3.connect("fred.db")
 
 # List all Gold tables
 tables = conn.execute("""
-    SELECT name FROM sqlite_master 
+    SELECT name FROM sqlite_master
     WHERE type='table' AND name LIKE 'gold_%'
 """).fetchall()
 
@@ -324,6 +353,7 @@ python -m fred_pipeline run --local
 | `DATABRICKS_HOST` | Databricks workspace URL | `https://my.cloud.databricks.com` |
 | `DATABRICKS_TOKEN` | Personal access token | `dapi123...` |
 | `FRED_LOCAL_DB_PATH` | Override local SQLite path | `/tmp/fred.db` |
+| `FRED_POSTGRES_DSN` | Postgres connection string (planned — see `specs/spec004`) | `postgresql://fred:fred@localhost:5432/fred_dev` |
 
 **Note:** Environment variables override the config file but are overridden by CLI flags.
 
@@ -331,21 +361,39 @@ python -m fred_pipeline run --local
 
 ## Adding New Backends
 
-To add a new warehouse backend (e.g., BigQuery, PostgreSQL, Snowflake):
+To add a new warehouse backend (e.g., Postgres, BigQuery, Snowflake):
 
-1. **Implement** `Warehouse` protocol in `src/fred_pipeline/io/warehouse.py`
-   - Methods: `sync_meta`, `write_bronze`, `merge_silver`, `build_gold`, `persist_run`, etc.
+1. **Implement** a new module implementing the `Warehouse` protocol
+   (`src/fred_pipeline/io/warehouse.py:24-45`) — a self-contained class in its
+   own sibling module (e.g. `src/fred_pipeline/io/postgres_store.py`),
+   structured like `LocalWarehouse` (`src/fred_pipeline/io/local_store.py`),
+   not an edit to `warehouse.py` itself.
+   - Methods: `sync_meta`, `restate_start`, `write_bronze`, `read_bronze`,
+     `merge_silver`, `build_gold`, `write_lifecycle`, `write_drift`,
+     `latest_observation_dates`, `write_staleness`, `write_release_calendar`,
+     `persist_run`, `persist_dq`, `close`.
+   - Reuse the same pure-Python compute-module layer `LocalWarehouse` already
+     depends on (`features`, `transform`, `terminal_views`, etc.) — do **not**
+     delegate to `fred_pipeline.bronze`/`.silver`/`.gold`/`.meta`, which are
+     hard-locked to a live Spark session.
 
 2. **Register** in `warehouse_factory.py::WarehouseFactory._build_backend()`
    ```python
-   elif backend_name == "bigquery":
-       from fred_pipeline.bigquery_warehouse import BigQueryWarehouse
-       return BigQueryWarehouse(self.config, **backend_config)
+   elif backend_name == "postgres":
+       from fred_pipeline.io.postgres_store import PostgresWarehouse
+       return PostgresWarehouse(self.config, **backend_config)
    ```
 
 3. **Document** in `config/warehouse.yml` with example config
 
-4. **Test** with `tests/test_warehouse_factory.py`
+4. **Test** with a new `tests/test_<backend>_warehouse.py` (there is no
+   `tests/test_warehouse_factory.py` today — only `test_local_store.py` and
+   `test_spark_integration.py` cover this layer, so a new backend needs its
+   own test file, not an addition to a shared factory test)
+
+See [`specs/spec004`](../../specs/spec004/README.md) for the full Postgres
+design (driver choice, DDL strategy, table-naming contract, phased plan) —
+follow that spec rather than re-deriving these decisions from scratch.
 
 ---
 
@@ -355,9 +403,10 @@ To add a new warehouse backend (e.g., BigQuery, PostgreSQL, Snowflake):
 |---|---|---|
 | Local (SQLite) | ✅ Production-ready | Default, fully tested |
 | Databricks | ✅ Production-ready | Requires workspace |
-| DuckDB | ⏳ Planned | Not yet implemented |
-| BigQuery | ⏳ Planned | Community contribution welcome |
-| PostgreSQL | ⏳ Planned | Community contribution welcome |
+| Local (Postgres) | 📋 Spec'd, not implemented | See `specs/spec004` — next backend to build |
+| DuckDB | ⏳ Planned | Write side stubbed (`NotImplementedError`); read side (`DuckDBConnection`) already works |
+| BigQuery | ⏳ Planned | No design yet; low priority (no known demand) |
+| Snowflake | ⏳ Planned | No design yet; low priority (no known demand) |
 
 ---
 
@@ -367,3 +416,9 @@ To add a new warehouse backend (e.g., BigQuery, PostgreSQL, Snowflake):
 - `src/fred_pipeline/io/warehouse_factory.py` — Factory implementation
 - `src/fred_pipeline/io/local_store.py` — LocalWarehouse implementation
 - `src/fred_pipeline/io/warehouse.py` — Warehouse protocol definition
+- `src/fred_pipeline/io/database_connection.py` — the separate **read-path**
+  `DatabaseConnection` protocol/factory (used by `scripts/query_gold_layer.py`
+  and Power BI) — a different abstraction from the write-path `Warehouse`
+  protocol above; a new backend usually needs both.
+- [`specs/spec004`](../../specs/spec004/README.md) — Postgres backend design
+  and build plan
