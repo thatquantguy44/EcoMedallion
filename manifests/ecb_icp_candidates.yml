@@ -9,7 +9,7 @@ series:
   frequency: m
   category: inflation
   units: ''
-  active: false
+  active: true
   source: ecb
   load_type: incremental
   expected_update_frequency: monthly
@@ -32,7 +32,7 @@ series:
   frequency: m
   category: inflation
   units: ''
-  active: false
+  active: true
   source: ecb
   load_type: incremental
   expected_update_frequency: monthly

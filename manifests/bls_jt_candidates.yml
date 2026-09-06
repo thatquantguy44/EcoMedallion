@@ -8,7 +8,7 @@ series:
   frequency: m
   category: labor
   units: ''
-  active: false
+  active: true
   source: bls
   load_type: incremental
   expected_update_frequency: monthly
@@ -30,7 +30,7 @@ series:
   frequency: m
   category: labor
   units: ''
-  active: false
+  active: true
   source: bls
   load_type: incremental
   expected_update_frequency: monthly
@@ -53,7 +53,7 @@ series:
   frequency: m
   category: labor
   units: ''
-  active: false
+  active: true
   source: bls
   load_type: incremental
   expected_update_frequency: monthly
@@ -75,7 +75,7 @@ series:
   frequency: m
   category: labor
   units: ''
-  active: false
+  active: true
   source: bls
   load_type: incremental
   expected_update_frequency: monthly
@@ -97,7 +97,7 @@ series:
   frequency: m
   category: labor
   units: ''
-  active: false
+  active: true
   source: bls
   load_type: incremental
   expected_update_frequency: monthly

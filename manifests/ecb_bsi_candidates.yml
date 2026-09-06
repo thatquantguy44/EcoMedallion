@@ -11,7 +11,7 @@ series:
   frequency: m
   category: money_banking
   units: ''
-  active: false
+  active: true
   source: ecb
   load_type: incremental
   expected_update_frequency: monthly
@@ -34,7 +34,7 @@ series:
   frequency: m
   category: money_banking
   units: ''
-  active: false
+  active: true
   source: ecb
   load_type: incremental
   expected_update_frequency: monthly
@@ -57,7 +57,7 @@ series:
   frequency: m
   category: money_banking
   units: ''
-  active: false
+  active: true
   source: ecb
   load_type: incremental
   expected_update_frequency: monthly
