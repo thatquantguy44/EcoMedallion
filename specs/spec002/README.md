@@ -1,7 +1,7 @@
 # Spec 002: ECB Metadata Discovery and Candidate Manifest Generation
 
-Status: in progress
-Last verified: 2026-08-22
+Status: implemented
+Last verified: 2026-09-09
 Primary owner: TBD
 Target source key: `ecb`
 Depends on: `specs/spec001`
@@ -31,16 +31,19 @@ source: ecb
 
 ## 2. Current ECB Footprint
 
-The repository currently has **20 active ECB series** in
-`manifests/ecb_rates.yml`:
+The repository currently has a reviewed ECB footprint across the hand-curated
+`manifests/ecb_rates.yml` file and several generated candidate manifests. As of
+the last verification:
 
-- 12 daily euro foreign exchange reference rates from `EXR`.
-- 3 ECB policy rates from `FM`.
-- 1 monthly 3-month EURIBOR series from `FM`.
-- 4 euro area yield-curve spot rates from `YC`.
+- `manifests/ecb_rates.yml` contains 34 active ECB rates/FX/yield-curve series.
+- Reviewed generated candidate manifests activate additional ECB money, HICP,
+  and `YC_PUB` yield-curve rows.
+- Other generated ECB candidate manifests remain inactive until deliberately
+  reviewed and activated.
 
-All 20 are also present in `config/series_catalog.yml`, so they appear in the
-Gold terminal/dashboard presentation views after refresh.
+Generated entries from `discover-ecb` still default to `active: false`; active
+candidate manifests represent follow-on review work after the discovery helper
+landed.
 
 ## 3. Non-Goals
 
@@ -303,16 +306,18 @@ Use fixtures under `tests/fixtures/ecb/` if the metadata samples are large.
 
 ## 8. Acceptance Criteria
 
-- `python -m fred_pipeline discover-ecb --list-flows --dry-run` can list ECB
+- Implemented: `python -m fred_pipeline discover-ecb --list-flows` can list ECB
   flows with no API key.
-- `python -m fred_pipeline discover-ecb --flow EXR --inspect` prints dimension
-  order and sample code-list values.
-- `python -m fred_pipeline discover-ecb --flow EXR --frequency d --max 25
-  --dry-run` produces a valid inactive candidate manifest.
-- Generated manifests pass `PYTHONPATH=src python -m fred_pipeline validate`.
-- Existing `manifests/ecb_rates.yml` remains the only active ECB manifest unless
-  the user deliberately activates more ECB rows elsewhere.
-- Tests pass without network access.
+- Implemented: `python -m fred_pipeline discover-ecb --flow EXR --inspect`
+  prints dimension order and sample code-list values.
+- Implemented: `python -m fred_pipeline discover-ecb --flow EXR --frequency d
+  --max 25 --dry-run` produces a valid inactive candidate manifest.
+- Implemented: generated manifests validate through
+  `PYTHONPATH=src python -m fred_pipeline validate`.
+- Implemented: generated ECB manifests default inactive; later reviewed
+  candidate manifests may be deliberately activated.
+- Implemented: focused tests pass without network access
+  (`PYTHONPATH=src pytest -q tests/test_ecb_discovery.py`).
 
 ## 9. Suggested First Implementation Slice
 
@@ -324,6 +329,11 @@ Build the smallest useful version first:
 4. Add docs for listing flows. Status: implemented.
 5. Add `--flow FLOW --inspect` structure inspection. Status: implemented.
 6. Add bounded inactive candidate manifest generation. Status: implemented.
+
+Verification on 2026-09-09:
+
+- `PYTHONPATH=src pytest -q tests/test_ecb_discovery.py` -> 13 passed.
+- `PYTHONPATH=src python -m fred_pipeline validate --manifests manifests` -> OK.
 
 ## 10. Candidate Dataflow Backlog
 
@@ -342,6 +352,9 @@ Then add live smoke-test assistance for generated candidates.
 
 ## 11. Follow-Ups
 
+- Optional sample-data key discovery (`--sample-data --last-n-observations N`)
+  remains unimplemented; use explicit dimension filters and bounded metadata
+  expansion for now.
 - Add an interactive review report that groups candidates by flow, frequency,
   geography, and unit.
 - Add curated ECB flow presets for high-value domains:

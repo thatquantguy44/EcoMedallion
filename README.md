@@ -486,16 +486,21 @@ where it matters, and commit it like any other manifest.
 
 ### 4. Discover ECB dataflows
 
-ECB discovery is keyless. The first helper lists SDMX dataflows so you can pick
-which ECB domains to inspect before generating candidate manifests.
+ECB discovery is keyless. The helper lists SDMX dataflows, inspects one flow's
+dimension order/code lists, and generates bounded inactive candidate manifests
+for review.
 
 ```bash
 PYTHONPATH=src python -m fred_pipeline discover-ecb --list-flows --search exchange
 PYTHONPATH=src python -m fred_pipeline discover-ecb --list-flows --search rates --json
+PYTHONPATH=src python -m fred_pipeline discover-ecb --flow EXR --inspect
+PYTHONPATH=src python -m fred_pipeline discover-ecb --flow EXR \
+    --frequency d --dimension CURRENCY=USD,NOK \
+    --dimension CURRENCY_DENOM=EUR --dimension EXR_TYPE=SP00 \
+    --dimension EXR_SUFFIX=A --dry-run
 ```
 
-Follow `specs/spec002` for the planned next slices: flow structure inspection,
-bounded key expansion, and inactive candidate manifest generation.
+See `specs/spec002` for implementation notes and follow-ups.
 
 ## Open decisions (before non-FRED go-live)
 
