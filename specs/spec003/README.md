@@ -1,7 +1,7 @@
 # Spec 003: Local Pipeline Performance (Gold Rebuild + Full Refresh)
 
-Status: proposed build plan
-Last verified: 2026-08-24
+Status: in progress
+Last verified: 2026-09-09
 Primary owner: TBD
 Target: `python -m fred_pipeline gold` and `python -m fred_pipeline run` against
 a production-scale local SQLite warehouse (`fred_local.db`)
@@ -205,6 +205,18 @@ lands, not a default assumed here.
 2. Phase 2 re-baseline, written back into this spec's §2 table.
 3. Decide from the re-baseline whether Phase 3, Phase 4, both, or neither are
    worth doing — do not build them speculatively.
+
+Progress on 2026-09-09:
+
+- Phase 1 is implemented on the `spec003-performanceupgrade` branch:
+  `LocalWarehouse` now rebuilds `gold_fred_point_in_time` and
+  `gold_fred_latest_observation` with set-based SQLite statements before
+  loading Silver/Latest rows for downstream Python engines.
+- A local parity regression test covers the SQL output against the previous
+  pure-Python latest-observation behavior.
+- Phase 2 is still pending: run a full-size `fred_local.db` re-baseline and
+  record the before/after timing here before deciding on incremental Gold or
+  further parallelization.
 
 ## 9. Follow-Ups
 
