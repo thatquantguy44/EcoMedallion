@@ -277,24 +277,34 @@ fixtures rather than live calls.
 
 ## 9. Open Decisions
 
-**🔴 #1 — Is non-US macro actually wanted?** Tier 1 is built on the premise
-that the §2 "global macro above annual frequency" gap is worth filling. If
-the near-term consumer is `market_terminal` (US-centric macro + rates +
-equities per its own module list), IMF/OECD may be lower value than Kenneth
-French factor data despite scoring better structurally. **This ordering
-should be confirmed against actual downstream demand before building.**
+**✅ RESOLVED #1 — build order: OECD first, Kenneth French second.**
+*Decided 2026-09-12.* The question was whether non-US macro is wanted at all,
+since if `market_terminal` (US-centric) were the only near-term consumer,
+Kenneth French factor data would outrank OECD despite OECD being the cheaper
+build. Answer: **do both, OECD first.** That also happens to be the
+lowest-risk sequencing — OECD's parser transfer is already proven (§5.1), so
+the first build tests the "add a source" path with a known-good structural
+fit, and Kenneth French (which needs a licensing call first, #3) follows once
+that path is warm.
 
-**🔴 #2 — Does positioning data (CFTC COT) matter enough to justify a
-different ingestion shape?** It's the clearest "nothing covers this" gap, but
-weekly bulk fixed-width files fit the `SourceClient` series model
-awkwardly. Worth it only if positioning is genuinely wanted downstream.
+**✅ RESOLVED #2 — yes, CFTC COT is worth a different ingestion shape.**
+*Decided 2026-09-12.* Positioning data is wanted, and the weekly bulk
+fixed-width/CSV format is accepted as a deliberate departure from the
+one-series-per-REST-call model the other clients use. Closest existing
+precedent is `sources/ishares.py`, which already fetches a bulk CSV and
+explodes it into many scalar series — COT should follow that shape rather
+than pretending to be a series API. Sequenced after OECD and Kenneth French.
 
-**🔴 #3 — Licensing posture for academic data.** Kenneth French / Shiller /
-Damodaran are freely published for research, but this pipeline's gate asks a
-sharper question: may we *redistribute* derived Gold tables built on them? If
-the answer is "internal use only," they can still be ingested — they just
-need an honest `redistribution_allowed: false`, like `tiingo`/`stooq`/`ishares`
-already carry. **Decide the posture before ingesting, not after.**
+**✅ RESOLVED #3 — internal use only; `redistribution_allowed: false`.**
+*Decided 2026-09-12.* The project's posture is internal use, not external
+redistribution. This is a **simplifying** answer, not a limiting one: the
+`validate --licensing-review` gate only fails sources that *permit*
+redistribution while unverified, so an honest `redistribution_allowed: false`
+clears it immediately — the same posture `tiingo`/`stooq`/`ishares` already
+carry. Applies to Kenneth French / Shiller / Damodaran, and is the safe
+default for any new source whose terms haven't had a primary read.
+**If that posture ever changes, every such entry needs a real
+`reviewed_by` sign-off before anything derived from them goes out.**
 
 **🟡 #5 — IMF's 114 vintage dataflows: ignore, or exploit?** Verification
 found IMF publishes most of its catalogue as month-stamped vintage flows
