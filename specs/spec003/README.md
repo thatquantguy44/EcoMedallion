@@ -1,7 +1,7 @@
 # Spec 003: Local Pipeline Performance (Gold Rebuild + Full Refresh)
 
 Status: in progress
-Last verified: 2026-09-09
+Last verified: 2026-09-12
 Primary owner: TBD
 Target: `python -m fred_pipeline gold` and `python -m fred_pipeline run` against
 a production-scale local SQLite warehouse (`fred_local.db`)
@@ -217,6 +217,22 @@ Progress on 2026-09-09:
 - Phase 2 is still pending: run a full-size `fred_local.db` re-baseline and
   record the before/after timing here before deciding on incremental Gold or
   further parallelization.
+
+Phase 2 attempt on 2026-09-12:
+
+- `PYTHONPATH=src python -m fred_pipeline gold --local --db-path fred_local.db`
+  completed successfully on the full local database; every reported Gold table
+  returned `"ok"`.
+- Post-run row checks: `silver_fred_observation` = 33,957,274,
+  `gold_fred_point_in_time` = 33,957,274,
+  `gold_fred_latest_observation` = 20,523,966,
+  `gold_ml_feature_matrix` = 9,099,
+  `gold_recession_probability_daily` = 2,061.
+- `/usr/bin/time -p` reported `real 121053.13`, `user 4241.25`, `sys 1030.70`.
+  Treat the wall-clock value as contaminated by an interrupted/suspended
+  session, not as a clean baseline. The successful completion is useful; the
+  timing should be re-run in one uninterrupted shell before using it to decide
+  Phase 3/4 scope.
 
 ## 9. Follow-Ups
 
