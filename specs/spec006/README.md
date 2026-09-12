@@ -1,9 +1,12 @@
 # Spec 006: Free Source Expansion — Evaluating New APIs and Scrapeable Data
 
-Status: evaluation framework + ranked candidate list (no implementation)
+Status: evaluation framework + ranked candidate list (no implementation).
+IMF/OECD endpoints **live-verified 2026-09-12** (§5.1); Kenneth French
+licensing still unverified.
 Last verified: 2026-09-12
 Primary owner: TBD
 Target: decide which free sources are worth adding next, and on what evidence
+Recommended first build: **OECD** (`DSD_STES@DF_CLI`) — see §7
 
 ## 1. Goal
 
@@ -144,11 +147,15 @@ convention trap, the "structurally valid ≠ actually published" problem, the
 wildcard-query technique for finding what really exists). Another SDMX source
 reuses that machinery and that experience rather than starting cold.
 
-| Source | Fills | Notes / risk |
+**✅ VERIFIED LIVE 2026-09-12** — IMF and OECD were probed end to end (structure
+*and* data queries). Findings below are measured, not assumed. The probe
+changed the recommendation: these two are **not** equivalent first builds.
+
+| Source | Fills | Verified status (2026-09-12) |
 |---|---|---|
-| **IMF** (SDMX) | Global macro at monthly/quarterly frequency — IFS, Balance of Payments, Direction of Trade | Best single fit: keyless, SDMX, covers the "global macro above World Bank's annual cadence" gap directly. IMF has reorganized its data portal more than once — **endpoint stability is the main risk to verify first.** |
-| **OECD** (SDMX) | Composite Leading Indicators, Main Economic Indicators, quarterly national accounts, cross-country unemployment | Strong analytical value (CLI is a genuine leading indicator this pipeline has no equivalent of). OECD also migrated its SDMX endpoint recently — verify the current base URL, not the one in older docs. |
-| **Eurostat** (SDMX 2.1) | EU data ECB doesn't republish | Notable: this pipeline *already* consumes Eurostat data indirectly — `ECB:LFSI_PUB` runs on Eurostat's `EUROSTAT_LFS1` structure (found this session, including its `I9`-not-`U2` area-code convention). Direct access is a smaller step than it looks. |
+| **OECD** (SDMX **2.1**) | Composite Leading Indicators, quarterly national accounts, G20/COICOP consumer prices, cross-country unemployment | **✅ Best first build — reuses existing machinery essentially as-is.** Base URL `https://sdmx.oecd.org/public/rest` (the legacy `stats.oecd.org/restsdmx` path is **dead — 404**). Returns `application/vnd.sdmx.structure+xml; version=2.1` — *the exact Accept type `ecb_discovery.py:24` already requests*. **`parse_dataflows_xml()` parsed all 1,546 OECD dataflows with zero modification** (its `_NS` map matches by namespace URI, so OECD's `structure:` prefix vs ECB's `str:` is irrelevant). Data query verified: `DSD_STES@DF_CLI` (Composite Leading Indicators) returned real US values (99.54 for 2025-06). Data comes back as SDMX-CSV close to the shape `sources/ecb.py` already parses. |
+| **IMF** (SDMX **3.0**) | Global macro monthly/quarterly — COFER, BOP/IIP, International Liquidity, Labor Statistics, quarterly GDP | **✅ Alive, but a bigger build than OECD.** Base URL `https://api.imf.org/external/sdmx/3.0` (legacy `dataservices.imf.org` is **dead — connection refused**). Serves **SDMX 3.0 JSON** structures, *not* 2.1 XML — so `ecb_discovery.py`'s parser does **not** transfer; a new structure parser is required. Data query verified (COFER 2024 → real reserve values). **191 dataflows, of which only 77 have stable IDs — the other 114 are vintage-suffixed** (e.g. `MFS_FMP_2026_JAN_VINTAGE`, annotated `VINTAGE: "Vintage for 2026-M01"`), which rotate monthly and therefore fail rubric gate 4.1.4 (stable identifiers). Build against the 77 stable flows; treat the vintage ones as a separate, interesting point-in-time question (§9 #5). |
+| **Eurostat** (SDMX 2.1) | EU data ECB doesn't republish | *Not probed in this pass.* Notable: this pipeline *already* consumes Eurostat data indirectly — `ECB:LFSI_PUB` runs on Eurostat's `EUROSTAT_LFS1` structure (found this session, including its `I9`-not-`U2` area-code convention). Given OECD's 2.1 XML parsed unmodified, Eurostat (also 2.1) is likely the same story — verify before assuming. |
 
 ### 5.2 Tier 2 — high-value, non-SDMX, clean APIs
 
@@ -217,22 +224,37 @@ fetcher with a checksum and a fixture is far more durable than a DOM parser.
 
 ## 7. Suggested First Implementation Slice
 
-**Verification before code.** Before any client is written, run a live probe
-of the top candidates and record what actually responds — the same
-wildcard/inspect discipline that worked for ECB this session:
+**Verification before code** — the same wildcard/inspect discipline that
+worked for ECB this session:
 
-1. Confirm the current base URL and one working request for **IMF** and
-   **OECD** SDMX (highest Tier-1 value, highest endpoint-churn risk).
+1. ~~Confirm the current base URL and one working request for **IMF** and
+   **OECD** SDMX.~~ **✅ DONE 2026-09-12 — see §5.1.** Both are alive at new
+   endpoints; both legacy endpoints are dead. The probe *changed the
+   recommendation* (below).
 2. Pull one **Kenneth French** file and confirm its current license terms.
-3. Record findings in this spec (amend §5/§6 with verified-vs-assumed status),
-   *then* pick one source to implement.
+   *(Still outstanding.)*
+3. ~~Record findings in this spec.~~ **✅ DONE for IMF/OECD** (§5.1).
 
-**Recommended first build: one SDMX source (IMF or OECD).** Rationale: it
-reuses `ecb_discovery.py`'s machinery and this session's hard-won SDMX
-operational knowledge, so it's the cheapest real test of whether "add a
-source" is now a well-trodden path here. Kenneth French is the strongest
-*standalone-value* candidate and a good second, since it feeds Gold tables
-that already exist and currently have no authoritative input.
+**Recommended first build — now evidence-backed: OECD, specifically.** The
+original draft of this spec said "IMF or OECD" as if they were equivalent.
+They are not. Verification showed:
+
+- **OECD is SDMX 2.1 XML and `ecb_discovery.py` parsed its full 1,546-dataflow
+  catalogue with zero code changes.** That is the single strongest structural-fit
+  signal available, and it was measured rather than assumed. Its data also
+  returns as SDMX-CSV close to what `sources/ecb.py` already handles, so the
+  data client is likely a small delta too.
+- **IMF is SDMX 3.0 JSON** — genuinely valuable (COFER, BOP/IIP, International
+  Liquidity are real gaps), but it needs a new structure parser, and only 77 of
+  its 191 dataflows carry stable IDs. It's a second build, not a co-equal first.
+
+Concretely: start with OECD `DSD_STES@DF_CLI` (Composite Leading Indicators) —
+verified working, genuinely additive (no CLI equivalent exists in the pipeline
+today), and small enough to prove the path end to end.
+
+Kenneth French remains the strongest *standalone-value* candidate and a good
+parallel track, since it feeds Gold tables that already exist with no
+authoritative input.
 
 Follow the existing per-source checklist: new client in `src/fred_pipeline/sources/`,
 a `config/data_licensing.yml` entry (honest `review_status`), a manifest
@@ -273,6 +295,16 @@ sharper question: may we *redistribute* derived Gold tables built on them? If
 the answer is "internal use only," they can still be ingested — they just
 need an honest `redistribution_allowed: false`, like `tiingo`/`stooq`/`ishares`
 already carry. **Decide the posture before ingesting, not after.**
+
+**🟡 #5 — IMF's 114 vintage dataflows: ignore, or exploit?** Verification
+found IMF publishes most of its catalogue as month-stamped vintage flows
+(`MFS_FMP_2026_JAN_VINTAGE`, annotated `historySettingType: FULL_HISTORY`).
+Rotating IDs fail the stable-identifier gate, so the straightforward answer is
+"build against the 77 stable flows and ignore them." But this repo treats
+point-in-time correctness as a first-class principle and already carries
+`realtime_start`/`realtime_end` vintage machinery — a source that publishes
+explicit monthly vintages is an unusually clean PIT input. Worth a deliberate
+decision rather than a default skip, though **not** in the first build.
 
 **🟡 #4 — Should `docs/adding_a_source.md` exist?** `docs/deployment/deployment_runbook.md`
 references it as the place to look when adding a source, but **the file does
