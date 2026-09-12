@@ -24,12 +24,16 @@ Series id convention: raw BLS series IDs, unprefixed (e.g. `CES0000000001`,
 `CUSR0000SA0`) — unlike ECB's `SOURCE:flow:key` convention, BLS series IDs are
 already globally unique on their own.
 
-## Current Coverage (60 active series)
+## Current Coverage (79 active series)
 
 | Manifest | Active series | What |
 |---|---:|---|
 | `manifests/bls_cpi_basket.yml` | 30 | CPI-U, NSA item hierarchy (headline, core, major groups, sub-strata) |
 | `manifests/bls_cpi_basket_sa.yml` | 29 | CPI-U, SA mirror of the same item hierarchy |
+| `manifests/bls_productivity.yml` | 7 | Productivity and costs |
+| `manifests/bls_jt_candidates.yml` | 5 | JOLTS national headline levels — job openings, hires, quits, layoffs & discharges, total separations |
+| `manifests/bls_ppi.yml` | 4 | PPI Final Demand — headline, core, goods, services |
+| `manifests/bls_ce_candidates.yml` | 3 | Nonfarm + total-private payrolls, average hourly earnings |
 | `manifests/bls_labor.yml` | 1 | `LNS14000000` — unemployment rate (SA), kept as a deliberate cross-source validation pair against FRED's `UNRATE` |
 
 The CPI item trees feed `config/inflation_items.yml` (weights + waterfall

@@ -12,9 +12,30 @@ Series id convention:
 ECB:<flow_ref>:<key>
 ```
 
-Current manifest: `manifests/ecb_rates.yml`
+## Current Series (46 active)
 
-## Current Series (20 active)
+Coverage now spans four manifests, not just `ecb_rates.yml`:
+
+| Manifest | Active series | What |
+|---|---:|---|
+| `manifests/ecb_rates.yml` | 34 | FX reference rates, policy/money-market rates, yield curve — the table below covers the original 20 of these |
+| `manifests/ecb_yc_pub_candidates.yml` | 7 | Yield curve beyond `ecb_rates.yml` — 3M/1Y spot, 1Y/2Y/5Y/10Y instantaneous forwards, 10Y-1Y spread |
+| `manifests/ecb_bsi_candidates.yml` | 3 | Monetary aggregates — M1/M2/M3 annual growth rates |
+| `manifests/ecb_icp_candidates.yml` | 2 | HICP — headline and core (ex energy/food) annual rates |
+
+Still shipped **inactive**: `ecb_est_candidates.yml` (€STR),
+`ecb_eon_candidates.yml` (EONIA, discontinued 2021-12-31),
+`ecb_lfsi_candidates.yml` (euro area unemployment rate).
+
+⚠️ The per-series table below is **no longer exhaustive** — it documents the
+original 20 `ecb_rates.yml` series. Three entries in that manifest are known
+to fail live (`ECB:FM:M.U2.EUR.RT.MM.EURIBOR12MD_.HSTA`,
+`ECB:ICP:M.U2.N.000000.4`, `ECB:FM:D.U2.EUR.4F.KR.ESTR.LEV`) — unverified
+guesses from commit `c6a7bbb` that 404 on every run. The `ICP` one is
+superseded by the verified `ECB:ICP_PUB:M.U2.N.000000.4.ANR` in
+`ecb_icp_candidates.yml`.
+
+### Original `ecb_rates.yml` series
 
 | Series ID | Flow | Frequency | Units | Gold category | Description |
 |---|---|---:|---|---|---|
