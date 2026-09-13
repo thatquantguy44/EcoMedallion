@@ -1,0 +1,194 @@
+name: oecd_cli
+description: >
+  OECD Composite Leading Indicators (CLI) — the first OECD series set, added
+  per specs/spec006. CLI is amplitude-adjusted and normalised to 100 = long-run
+  trend, so readings above 100 signal above-trend momentum and below 100
+  below-trend. This is genuinely additive: the pipeline has no leading-indicator
+  equivalent today (FRED carries US activity indexes like CFNAI, but not a
+  consistent cross-country CLI panel).
+
+  Dataflow: OECD.SDD.STES:DSD_STES@DF_CLI. Series-id shape is
+  OECD:<agency>:<dataflow>:<key> — see src/fred_pipeline/sources/oecd.py.
+
+  ✅ LIVE-VERIFIED 2026-09-12: every series below was confirmed to return real
+  observations through OECDClient before being written here — a wildcard query
+  on the REF_AREA dimension returned exactly 22 publishing areas, and these are
+  drawn from that list. This is NOT the usual "assembled from documentation,
+  verify before activating" case.
+
+  Ships inactive anyway, per spec006's acceptance criteria (a new source's
+  first manifest is inactive; activation is a separate, deliberate commit).
+version: 1
+
+series:
+  - series_id: "OECD:OECD.SDD.STES:DSD_STES@DF_CLI:G7.M.LI...AA...H"
+    title: OECD Composite Leading Indicator — G7
+    category: growth
+    frequency: m
+    units: Index (100 = trend)
+    active: false
+    source: oecd
+    load_type: incremental
+    expected_update_frequency: monthly
+    # OECD SDMX CSV carries no VALID_FROM/VALID_TO, so there are no vintages
+    # to track -- point-in-time resolves to latest-revised only.
+    vintage_enabled: false
+    validation_profile: lenient
+    downstream_use_case: oecd_leading_indicators
+    priority: 3
+    min_value: 80
+    max_value: 120
+    tags: [oecd, cli, leading-indicator, growth, g7]
+
+  - series_id: "OECD:OECD.SDD.STES:DSD_STES@DF_CLI:G20.M.LI...AA...H"
+    title: OECD Composite Leading Indicator — G20
+    category: growth
+    frequency: m
+    units: Index (100 = trend)
+    active: false
+    source: oecd
+    load_type: incremental
+    expected_update_frequency: monthly
+    vintage_enabled: false
+    validation_profile: lenient
+    downstream_use_case: oecd_leading_indicators
+    priority: 3
+    min_value: 80
+    max_value: 120
+    tags: [oecd, cli, leading-indicator, growth, g20]
+
+  - series_id: "OECD:OECD.SDD.STES:DSD_STES@DF_CLI:USA.M.LI...AA...H"
+    title: OECD Composite Leading Indicator — United States
+    category: growth
+    frequency: m
+    units: Index (100 = trend)
+    active: false
+    source: oecd
+    load_type: incremental
+    expected_update_frequency: monthly
+    vintage_enabled: false
+    validation_profile: lenient
+    downstream_use_case: oecd_leading_indicators
+    priority: 3
+    min_value: 80
+    max_value: 120
+    tags: [oecd, cli, leading-indicator, growth, united-states]
+
+  - series_id: "OECD:OECD.SDD.STES:DSD_STES@DF_CLI:CHN.M.LI...AA...H"
+    title: OECD Composite Leading Indicator — China
+    category: growth
+    frequency: m
+    units: Index (100 = trend)
+    active: false
+    source: oecd
+    load_type: incremental
+    expected_update_frequency: monthly
+    vintage_enabled: false
+    validation_profile: lenient
+    downstream_use_case: oecd_leading_indicators
+    priority: 3
+    min_value: 80
+    max_value: 120
+    tags: [oecd, cli, leading-indicator, growth, china]
+
+  - series_id: "OECD:OECD.SDD.STES:DSD_STES@DF_CLI:DEU.M.LI...AA...H"
+    title: OECD Composite Leading Indicator — Germany
+    category: growth
+    frequency: m
+    units: Index (100 = trend)
+    active: false
+    source: oecd
+    load_type: incremental
+    expected_update_frequency: monthly
+    vintage_enabled: false
+    validation_profile: lenient
+    downstream_use_case: oecd_leading_indicators
+    priority: 3
+    min_value: 80
+    max_value: 120
+    tags: [oecd, cli, leading-indicator, growth, germany]
+
+  - series_id: "OECD:OECD.SDD.STES:DSD_STES@DF_CLI:JPN.M.LI...AA...H"
+    title: OECD Composite Leading Indicator — Japan
+    category: growth
+    frequency: m
+    units: Index (100 = trend)
+    active: false
+    source: oecd
+    load_type: incremental
+    expected_update_frequency: monthly
+    vintage_enabled: false
+    validation_profile: lenient
+    downstream_use_case: oecd_leading_indicators
+    priority: 3
+    min_value: 80
+    max_value: 120
+    tags: [oecd, cli, leading-indicator, growth, japan]
+
+  - series_id: "OECD:OECD.SDD.STES:DSD_STES@DF_CLI:GBR.M.LI...AA...H"
+    title: OECD Composite Leading Indicator — United Kingdom
+    category: growth
+    frequency: m
+    units: Index (100 = trend)
+    active: false
+    source: oecd
+    load_type: incremental
+    expected_update_frequency: monthly
+    vintage_enabled: false
+    validation_profile: lenient
+    downstream_use_case: oecd_leading_indicators
+    priority: 3
+    min_value: 80
+    max_value: 120
+    tags: [oecd, cli, leading-indicator, growth, united-kingdom]
+
+  - series_id: "OECD:OECD.SDD.STES:DSD_STES@DF_CLI:FRA.M.LI...AA...H"
+    title: OECD Composite Leading Indicator — France
+    category: growth
+    frequency: m
+    units: Index (100 = trend)
+    active: false
+    source: oecd
+    load_type: incremental
+    expected_update_frequency: monthly
+    vintage_enabled: false
+    validation_profile: lenient
+    downstream_use_case: oecd_leading_indicators
+    priority: 3
+    min_value: 80
+    max_value: 120
+    tags: [oecd, cli, leading-indicator, growth, france]
+
+  - series_id: "OECD:OECD.SDD.STES:DSD_STES@DF_CLI:IND.M.LI...AA...H"
+    title: OECD Composite Leading Indicator — India
+    category: growth
+    frequency: m
+    units: Index (100 = trend)
+    active: false
+    source: oecd
+    load_type: incremental
+    expected_update_frequency: monthly
+    vintage_enabled: false
+    validation_profile: lenient
+    downstream_use_case: oecd_leading_indicators
+    priority: 3
+    min_value: 80
+    max_value: 120
+    tags: [oecd, cli, leading-indicator, growth, india]
+
+  - series_id: "OECD:OECD.SDD.STES:DSD_STES@DF_CLI:BRA.M.LI...AA...H"
+    title: OECD Composite Leading Indicator — Brazil
+    category: growth
+    frequency: m
+    units: Index (100 = trend)
+    active: false
+    source: oecd
+    load_type: incremental
+    expected_update_frequency: monthly
+    vintage_enabled: false
+    validation_profile: lenient
+    downstream_use_case: oecd_leading_indicators
+    priority: 3
+    min_value: 80
+    max_value: 120
+    tags: [oecd, cli, leading-indicator, growth, brazil]

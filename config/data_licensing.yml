@@ -208,6 +208,30 @@ sources:
       last_reviewed_date before relying on this for a real compliance
       decision, particularly before any commercial distribution.
 
+  - source: oecd
+    license_type: requires-agreement
+    review_status: provisional
+    source_of_truth: >
+      Not a primary read. OECD publishes its statistics openly via a keyless
+      public SDMX API, but its terms distinguish OECD-owned material from
+      third-party data redistributed through the same catalogue (the dataflow
+      list includes flows owned by ESTAT and IAEG-SDGs, not just OECD), so a
+      blanket "open data" assumption would be wrong.
+    redistribution_allowed: false
+    commercial_use_allowed: false
+    attribution_required: true
+    terms_url: https://www.oecd.org/en/about/terms-conditions.html
+    last_reviewed_date: "2026-09-12"
+    notes: >
+      Added with specs/spec006's first OECD series set (Composite Leading
+      Indicators). redistribution_allowed is false by deliberate project
+      decision, not by a finding that OECD forbids it -- spec006 open decision
+      #3 settled the posture as internal use only. That is also what keeps
+      `validate --licensing-review` green without a primary terms read, since
+      that gate only fails sources which *permit* redistribution while
+      unverified. If the posture ever changes to external redistribution, this
+      entry needs a real primary read and a named reviewed_by first.
+
   - source: tiingo
     license_type: free-tier-personal-use
     review_status: provisional

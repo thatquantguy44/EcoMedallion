@@ -157,8 +157,9 @@ def list_tables(args: argparse.Namespace) -> int:
         for table in tables:
             print(f"  - {table}")
 
-        # Filter to Gold tables
-        gold_tables = [t for t in tables if t.startswith("gold_")]
+        # Filter to Gold tables across flat SQLite names and schema-qualified
+        # backends such as Postgres/Databricks.
+        gold_tables = [t for t in tables if _is_gold_table(t, args)]
         if gold_tables:
             print(f"\nGold layer tables ({len(gold_tables)}):")
             for table in gold_tables:
@@ -186,18 +187,36 @@ def _build_backend_args(args: argparse.Namespace) -> dict[str, str]:
     elif args.backend == "duckdb":
         backend_args["db_path"] = args.db_path
 
+    elif args.backend in ("postgres", "postgresql"):
+        backend_args["target"] = args.postgres_target
+        if args.postgres_dsn:
+            backend_args["dsn"] = args.postgres_dsn
+        if args.postgres_dsn_env:
+            backend_args["dsn_env"] = args.postgres_dsn_env
+
     return backend_args
+
+
+def _is_gold_table(table: str, args: argparse.Namespace) -> bool:
+    if args.backend in ("local", "sqlite"):
+        return table.startswith("gold_")
+    if getattr(args, "schema", None) == "gold":
+        return True
+    return table == "gold" or table.startswith("gold.")
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Query the FRED pipeline's Gold layer using any backend (SQLite, Databricks, DuckDB)."
+        description=(
+            "Query the FRED pipeline's Gold layer using any backend "
+            "(SQLite, Databricks, DuckDB, Postgres)."
+        )
     )
 
     # Common arguments
     parser.add_argument(
         "--backend",
-        choices=["local", "sqlite", "databricks", "duckdb"],
+        choices=["local", "sqlite", "databricks", "duckdb", "postgres", "postgresql"],
         default="local",
         help="Database backend (default: local SQLite)",
     )
@@ -221,6 +240,20 @@ def main() -> int:
     parser.add_argument(
         "--catalog",
         help="Databricks catalog (e.g., macro_prod). Optional; defaults from config.",
+    )
+    parser.add_argument(
+        "--postgres-target",
+        choices=["local", "service"],
+        default="local",
+        help="Postgres target profile for DSN resolution (default: local)",
+    )
+    parser.add_argument(
+        "--postgres-dsn",
+        help="Postgres connection string; overrides target defaults/env lookup",
+    )
+    parser.add_argument(
+        "--postgres-dsn-env",
+        help="Environment variable containing the Postgres connection string",
     )
 
     # Operation arguments (mutually exclusive)
@@ -250,7 +283,7 @@ def main() -> int:
     )
     parser.add_argument(
         "--schema",
-        help="Schema name (for Databricks/DuckDB only)",
+        help="Schema name (for Databricks/DuckDB/Postgres)",
     )
 
     args = parser.parse_args()

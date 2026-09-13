@@ -5,7 +5,7 @@ from fred_pipeline.config import Environment, PipelineConfig
 from fred_pipeline.local_store import LocalWarehouse
 from fred_pipeline.manifest import SeriesSpec
 from fred_pipeline.pipeline import FredPipeline
-from fred_pipeline.transform import daily_feature_matrix
+from fred_pipeline.transform import daily_feature_matrix, latest_by_observation
 
 
 def _config():
@@ -16,6 +16,35 @@ def _spec(series_id, **kw):
     kw.setdefault("title", series_id)
     kw.setdefault("frequency", "d")
     return SeriesSpec(series_id=series_id, **kw)
+
+
+def _silver_row(
+    series_id: str,
+    observation_date: str,
+    realtime_start: str,
+    value: float | None,
+    revision_number: int,
+    *,
+    is_missing: bool = False,
+    realtime_end: str = "9999-12-31",
+    source: str = "fred",
+    ingested_at: str = "2024-01-01T00:00:00+00:00",
+):
+    raw_value = "." if is_missing else str(value)
+    return {
+        "source": source,
+        "series_id": series_id,
+        "observation_date": observation_date,
+        "realtime_start": realtime_start,
+        "realtime_end": realtime_end,
+        "value": value,
+        "raw_value": raw_value,
+        "is_missing": is_missing,
+        "row_hash": f"h-{source}-{series_id}-{observation_date}-{realtime_start}",
+        "revision_number": revision_number,
+        "ingested_at": ingested_at,
+        "run_id": "r",
+    }
 
 
 def test_local_run_persists_all_layers(tmp_path, observations_payload, fake_client_cls):
@@ -122,6 +151,88 @@ def test_local_backend_gold_views_exist_and_match_tables(
     wh.close()
 
 
+def test_local_sql_core_gold_rebuild_matches_python_output(tmp_path):
+    wh = LocalWarehouse(_config(), db_path=str(tmp_path / "f.db"))
+    rows = [
+        _silver_row(
+            "PAYEMS",
+            "2024-01-01",
+            "2024-02-01",
+            100.0,
+            1,
+            realtime_end="2024-02-29",
+        ),
+        _silver_row("PAYEMS", "2024-01-01", "2024-03-01", 101.5, 2),
+        _silver_row(
+            "PAYEMS",
+            "2024-02-01",
+            "2024-02-01",
+            None,
+            1,
+            is_missing=True,
+        ),
+        _silver_row("DGS10", "2024-01-02", "", 4.25, 1, realtime_end=""),
+    ]
+    wh.merge_silver(rows)
+
+    wh._rebuild_gold_point_in_time_sql()
+    wh._rebuild_gold_latest_observation_sql()
+
+    pit_cols = [
+        "series_id",
+        "observation_date",
+        "realtime_start",
+        "realtime_end",
+        "value",
+        "revision_number",
+        "is_missing",
+        "ingested_at",
+    ]
+    pit_sql = (
+        "SELECT "
+        + ", ".join(pit_cols)
+        + " FROM gold_fred_point_in_time"
+        + " ORDER BY series_id, observation_date, realtime_start"
+    )
+    pit_expected = [
+        {col: (int(row[col]) if col == "is_missing" else row[col]) for col in pit_cols}
+        for row in sorted(
+            rows,
+            key=lambda r: (r["series_id"], r["observation_date"], r["realtime_start"]),
+        )
+    ]
+    assert wh.query(pit_sql) == pit_expected
+
+    latest_cols = [
+        "series_id",
+        "observation_date",
+        "value",
+        "realtime_start",
+        "realtime_end",
+        "is_missing",
+        "revision_number",
+        "ingested_at",
+    ]
+    latest_sql = (
+        "SELECT "
+        + ", ".join(latest_cols)
+        + " FROM gold_fred_latest_observation"
+        + " ORDER BY series_id, observation_date"
+    )
+    python_latest = latest_by_observation(
+        [{**row, "is_missing": bool(row["is_missing"])} for row in rows]
+    )
+    latest_expected = [
+        {
+            col: (int(row[col]) if col == "is_missing" else row[col])
+            for col in latest_cols
+        }
+        for row in python_latest
+    ]
+    assert wh.query(latest_sql) == latest_expected
+    wh.close()
+
+
 def test_local_gold_rebuild_rolls_back_on_failure(tmp_path, monkeypatch):
     wh = LocalWarehouse(_config(), db_path=str(tmp_path / "f.db"))
     wh.conn.execute(
@@ -152,14 +263,11 @@ def test_local_gold_rebuild_rolls_back_on_failure(tmp_path, monkeypatch):
         ]
     )
 
-    original_insert = wh._insert
+    def fail_point_in_time_sql():
+        wh.conn.execute("DELETE FROM gold_fred_point_in_time")
+        raise RuntimeError("boom")
 
-    def fail_first_gold_insert(table, rows, upsert_keys=None):
-        if table == "gold_fred_point_in_time":
-            raise RuntimeError("boom")
-        return original_insert(table, rows, upsert_keys)
-
-    monkeypatch.setattr(wh, "_insert", fail_first_gold_insert)
+    monkeypatch.setattr(wh, "_rebuild_gold_point_in_time_sql", fail_point_in_time_sql)
 
     with pytest.raises(RuntimeError, match="boom"):
         wh.build_gold()

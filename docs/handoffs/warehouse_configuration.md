@@ -62,30 +62,58 @@ sqlite3 fred.db "SELECT * FROM gold_fred_latest_observation LIMIT 10;"
 - Not suitable for production
 - Limited query performance on large datasets
 
-### Local (Postgres) — Planned, not yet implemented
+### Postgres — Configurable Local or Service Target
 
-**Status:** Scoped in [`specs/spec004`](../../specs/spec004/README.md); no
-code yet. Priority: this is the **next** backend to build, ahead of DuckDB —
-a sibling project (`market_terminal`) is blocked on a Postgres write path
-from this pipeline (see the spec's §1 for the exact dependency).
+**Status:** Config/DSN resolution, read-only query connection, local Docker
+service, SQLite-to-Postgres sync tooling, and write-side `PostgresWarehouse`
+are wired. Deployment/secrets runbook work is still pending in
+[`specs/spec004`](../../specs/spec004/README.md), gated on a confirmed
+managed-service target.
 
-**Why you'd want this over SQLite:** concurrent local writes (SQLite allows
-only one writer at a time), and a schema-qualified `gold.<table>` naming
-convention that matches what downstream consumers expect from a real
-Postgres/Delta deployment — unlike SQLite's flat `gold_<table>` naming.
+**Why you'd want this over SQLite:** concurrent writes (SQLite allows only one
+writer at a time), and a schema-qualified `gold.<table>` naming convention
+that matches what downstream consumers expect from a real Postgres/Delta
+deployment — unlike SQLite's flat `gold_<table>` naming.
 
-**Planned configuration shape** (see the spec for the finalized field names):
+**Local Postgres target** (Docker Compose/Homebrew/etc.):
 
 ```yaml
 default:
   primary_backend: postgres
   backends:
     postgres:
-      dsn: postgresql://fred:fred@localhost:5432/fred_dev
+      target: local
+      dsn_env: FRED_POSTGRES_LOCAL_DSN
+      # Defaults to postgresql://fred:fred@localhost:55432/macro_medallion
 ```
 
-Until this ships, use `local` (SQLite) for local development — it remains the
-zero-setup default regardless of when Postgres lands.
+Start the provided local service with:
+
+```bash
+docker compose up -d postgres
+```
+
+**Managed/service Postgres target**:
+
+```yaml
+default:
+  primary_backend: postgres
+  backends:
+    postgres:
+      target: service
+      dsn_env: FRED_POSTGRES_SERVICE_DSN
+```
+
+Service mode intentionally has no built-in DSN default. Set
+`FRED_POSTGRES_SERVICE_DSN`, `DATABASE_URL`, `FRED_POSTGRES_DSN`, or an
+explicit `dsn` in a secrets-managed config.
+
+Use `primary_backend: postgres` to write pipeline runs directly to Postgres.
+The read path can query an existing local or service database with:
+
+```bash
+python scripts/query_gold_layer.py --backend postgres --schema gold --list-tables
+```
 
 ### Databricks (Delta Lake) — Production
 
@@ -353,7 +381,10 @@ python -m fred_pipeline run --local
 | `DATABRICKS_HOST` | Databricks workspace URL | `https://my.cloud.databricks.com` |
 | `DATABRICKS_TOKEN` | Personal access token | `dapi123...` |
 | `FRED_LOCAL_DB_PATH` | Override local SQLite path | `/tmp/fred.db` |
-| `FRED_POSTGRES_DSN` | Postgres connection string (planned — see `specs/spec004`) | `postgresql://fred:fred@localhost:5432/fred_dev` |
+| `FRED_POSTGRES_LOCAL_DSN` | Local Postgres connection string | `postgresql://fred:fred@localhost:55432/macro_medallion` |
+| `FRED_POSTGRES_SERVICE_DSN` | Managed/service Postgres connection string | `postgresql://user:pass@host:5432/db` |
+| `FRED_POSTGRES_DSN` | Generic Postgres connection string fallback | `postgresql://fred:fred@localhost:55432/macro_medallion` |
+| `DATABASE_URL` | Service Postgres DSN fallback | `postgresql://user:pass@host:5432/db` |
 
 **Note:** Environment variables override the config file but are overridden by CLI flags.
 
@@ -403,7 +434,7 @@ follow that spec rather than re-deriving these decisions from scratch.
 |---|---|---|
 | Local (SQLite) | ✅ Production-ready | Default, fully tested |
 | Databricks | ✅ Production-ready | Requires workspace |
-| Local (Postgres) | 📋 Spec'd, not implemented | See `specs/spec004` — next backend to build |
+| Local (Postgres) | ✅ Implemented | Write/read backend, local Docker service, and SQLite sync tool |
 | DuckDB | ⏳ Planned | Write side stubbed (`NotImplementedError`); read side (`DuckDBConnection`) already works |
 | BigQuery | ⏳ Planned | No design yet; low priority (no known demand) |
 | Snowflake | ⏳ Planned | No design yet; low priority (no known demand) |

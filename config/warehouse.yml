@@ -5,6 +5,7 @@
 # Backends:
 #   - local       : SQLite file on disk (development, default)
 #   - databricks  : Delta Lake on Databricks (production)
+#   - postgres    : PostgreSQL (planned write backend; read config available)
 #   - duckdb      : DuckDB file (future, experimental)
 #   - none        : In-memory only (dry-run, no writes)
 #
@@ -39,6 +40,27 @@ default:
       # Catalog name (maps to macro_dev / macro_test / macro_prod per environment)
       # Omit to use PipelineConfig.environment.catalog
       catalog: macro_dev
+
+    postgres:
+      # Select the Postgres target profile:
+      #   local   = localhost/Docker/dev database; defaults to
+      #             postgresql://fred:fred@localhost:55432/macro_medallion unless a DSN
+      #             env var is provided.
+      #   service = managed/hosted Postgres; requires a DSN from dsn, dsn_env,
+      #             FRED_POSTGRES_SERVICE_DSN, DATABASE_URL, or
+      #             FRED_POSTGRES_DSN.
+      target: local
+      dsn_env: FRED_POSTGRES_LOCAL_DSN
+      # dsn: postgresql://fred:fred@localhost:55432/macro_medallion
+      # For service mode, prefer secrets in env vars:
+      # target: service
+      # dsn_env: FRED_POSTGRES_SERVICE_DSN
+      # Or use discrete fields when appropriate:
+      # host: localhost
+      # port: 55432
+      # database: macro_medallion
+      # user: fred
+      # password: ${FRED_POSTGRES_PASSWORD}
 
     duckdb:
       # DuckDB file path (not yet implemented)
@@ -101,5 +123,9 @@ environments:
 #   - DATABRICKS_HOST        : Databricks workspace URL (if not in config)
 #   - DATABRICKS_TOKEN       : Databricks personal access token
 #   - FRED_LOCAL_DB_PATH     : SQLite path override
+#   - FRED_POSTGRES_LOCAL_DSN   : Local Postgres DSN override
+#   - FRED_POSTGRES_SERVICE_DSN : Managed/service Postgres DSN
+#   - FRED_POSTGRES_DSN         : Generic Postgres DSN fallback
+#   - DATABASE_URL              : Service Postgres DSN fallback
 #
 # Logs will show which backend was selected and any fallback attempts.

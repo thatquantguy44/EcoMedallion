@@ -1,6 +1,6 @@
 # Power BI Database Connections — All Backends
 
-**Purpose:** Connect Power BI to your Gold layer (SQLite, Databricks, DuckDB) to build reports.
+**Purpose:** Connect Power BI to your Gold layer (SQLite, Databricks, Postgres, DuckDB) to build reports.
 **Code:** `src/fred_pipeline/io/database_connection.py`
 
 ---
@@ -34,6 +34,26 @@
 **Setup required:**
 - Databricks connector for Power BI installed
 - Personal Access Token (PAT) from Databricks workspace
+
+### Postgres
+
+Use this for either a local Postgres target or a managed/service Postgres
+target once Gold tables are published there.
+
+1. **Home** → **Get Data** → **PostgreSQL database**
+2. **Server:** `localhost:55432` for local, or your service host/port
+3. **Database:** `macro_medallion` locally, or the service database name
+4. **Data Connectivity mode:** Select **Import** for snapshots or
+   **DirectQuery** for live reads
+
+Local default DSN:
+
+```text
+postgresql://fred:fred@localhost:55432/macro_medallion
+```
+
+Service targets should use a secrets-backed DSN such as
+`FRED_POSTGRES_SERVICE_DSN` or `DATABASE_URL`.
 
 ### DuckDB
 
@@ -98,20 +118,33 @@ rows = db.query("SELECT * FROM gold.macro_indicator_dashboard")
 db.close()
 ```
 
+Connect to Postgres:
+
+```python
+db = DatabaseConnectionFactory.create(
+    backend="postgres",
+    target="service",
+    dsn_env="FRED_POSTGRES_SERVICE_DSN",
+)
+
+rows = db.query("SELECT * FROM gold.macro_indicator_dashboard")
+db.close()
+```
+
 ---
 
 ## Backend Comparison
 
-| Aspect | SQLite | Databricks | DuckDB |
-|---|---|---|---|
-| **Installation** | Built-in | Cloud service | `pip install duckdb` |
-| **Setup Time** | <1 min | 15–30 min | 5 min |
-| **Cost** | Free | $0.30–$5/hr | Free |
-| **Multi-user** | No | Yes | No |
-| **Concurrent Writes** | No | Yes | No |
-| **Query Performance** | Slow on 1M+ rows | Fast | Very fast |
-| **Power BI Native** | Yes | Yes | Workaround (export) |
-| **Best For** | Local dev | Production | High-speed analytics |
+| Aspect | SQLite | Databricks | Postgres | DuckDB |
+|---|---|---|---|---|
+| **Installation** | Built-in | Cloud service | Local service or managed DB | `pip install duckdb` |
+| **Setup Time** | <1 min | 15–30 min | 5–15 min | 5 min |
+| **Cost** | Free | $0.30–$5/hr | Free local; service varies | Free |
+| **Multi-user** | No | Yes | Yes | No |
+| **Concurrent Writes** | No | Yes | Yes | No |
+| **Query Performance** | Slow on 1M+ rows | Fast | Good | Very fast |
+| **Power BI Native** | Yes | Yes | Yes | Workaround (export) |
+| **Best For** | Local dev | Production | Shared dev/deploy target | High-speed analytics |
 
 ---
 

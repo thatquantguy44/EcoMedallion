@@ -1,8 +1,8 @@
 """Warehouse factory: configurable storage backend selection.
 
 Resolves warehouse configuration to a concrete backend (LocalWarehouse,
-SparkWarehouse, etc.). Supports tiered fallback: primary backend, then
-fallback backends, then in-memory dry-run.
+SparkWarehouse, PostgresWarehouse, etc.). Supports tiered fallback: primary
+backend, then fallback backends, then in-memory dry-run.
 
 Configuration is environment-aware and file-based (config/warehouse.yml) or
 explicit arguments.
@@ -29,11 +29,9 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
-from typing import Any, Iterable, Optional
+from typing import Any
 
 from fred_pipeline.config import PipelineConfig
-from fred_pipeline.manifest import Manifest
-from fred_pipeline.quality import QualityReport
 from fred_pipeline.warehouse import Warehouse
 
 
@@ -41,7 +39,8 @@ from fred_pipeline.warehouse import Warehouse
 class WarehouseConfig:
     """Warehouse backend configuration."""
 
-    # Primary backend: "local", "databricks", "duckdb", or None for dry-run
+    # Primary backend: "local", "databricks", "postgres", "duckdb",
+    # or None for dry-run
     primary_backend: str = "local"
 
     # Fallback backends to try if primary fails (e.g., ["duckdb", "local"])
@@ -58,7 +57,7 @@ class WarehouseConfig:
 
 
 def load_warehouse_config(
-    path: Optional[str] = None, environment: str = "dev"
+    path: str | None = None, environment: str = "dev"
 ) -> WarehouseConfig:
     """Load warehouse configuration from YAML file.
 
@@ -88,7 +87,7 @@ def load_warehouse_config(
         data = yaml.safe_load(fh) or {}
 
     if not isinstance(data, dict):
-        raise ValueError(f"Warehouse config {resolved} must be a mapping")
+        raise TypeError(f"Warehouse config {resolved} must be a mapping")
 
     # Merge default + environment-specific settings
     settings = dict(data.get("default") or {})
@@ -113,7 +112,7 @@ class WarehouseFactory:
         self.config = config
         self.warehouse_config = warehouse_config
 
-    def build(self, force_dry_run: bool = False) -> Optional[Warehouse]:
+    def build(self, force_dry_run: bool = False) -> Warehouse | None:
         """Build a warehouse, with fallback on error.
 
         Parameters
@@ -138,8 +137,9 @@ class WarehouseFactory:
                 warehouse = self._build_backend(backend_name)
                 if warehouse is not None:
                     return warehouse
-            except Exception as e:
-                # Log the failure and continue to fallback
+            except Exception as e:  # noqa: BLE001 -- must survive any backend's
+                # own exception type (Delta, psycopg, sqlite3, ...) to fall
+                # through to the next backend rather than aborting the run.
                 import logging
 
                 log = logging.getLogger("fred_pipeline")
@@ -152,12 +152,10 @@ class WarehouseFactory:
         import logging
 
         log = logging.getLogger("fred_pipeline")
-        log.warning(
-            f"All warehouse backends failed. Falling back to in-memory dry-run."
-        )
+        log.warning("All warehouse backends failed. Falling back to in-memory dry-run.")
         return None
 
-    def _build_backend(self, backend_name: str) -> Optional[Warehouse]:
+    def _build_backend(self, backend_name: str) -> Warehouse | None:
         """Build a single backend by name."""
         if not backend_name or backend_name == "none":
             return None
@@ -178,8 +176,9 @@ class WarehouseFactory:
             except ImportError:
                 raise ImportError("Spark required for Databricks backend")
 
-            # For Databricks, we may need to set up Spark with connection details
-            # This is a simplified version; in production you'd handle auth/workspace details
+            # For Databricks, we may need to set up Spark with connection
+            # details. This is a simplified version; in production you'd
+            # handle auth/workspace details.
             spark = get_spark()
             if spark is None:
                 raise RuntimeError("Could not initialize Spark for Databricks backend")
@@ -192,15 +191,20 @@ class WarehouseFactory:
                 "DuckDB backend not yet implemented. Use 'local' for now."
             )
 
+        elif backend_name == "postgres":
+            from fred_pipeline.io.postgres_store import PostgresWarehouse
+
+            return PostgresWarehouse(self.config, **backend_config)
+
         else:
             raise ValueError(f"Unknown warehouse backend: {backend_name}")
 
 
 def warehouse_from_config(
     pipeline_config: PipelineConfig,
-    warehouse_config_path: Optional[str] = None,
+    warehouse_config_path: str | None = None,
     force_dry_run: bool = False,
-) -> Optional[Warehouse]:
+) -> Warehouse | None:
     """One-line convenience: load config and build warehouse.
 
     Returns None if dry_run is True or all backends fail.

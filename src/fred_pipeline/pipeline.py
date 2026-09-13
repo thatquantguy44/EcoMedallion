@@ -31,6 +31,7 @@ from fred_pipeline.sources.ecb import ECBClient
 from fred_pipeline.sources.eia import EIAClient
 from fred_pipeline.sources.fred import FredClient
 from fred_pipeline.sources.ishares import ISharesClient
+from fred_pipeline.sources.oecd import OECDClient
 from fred_pipeline.sources.sec import SECClient
 from fred_pipeline.sources.stooq import StooqClient
 from fred_pipeline.sources.tiingo import TiingoClient
@@ -83,6 +84,14 @@ def _make_ecb(config: PipelineConfig) -> SourceClient:
         timeout=config.request_timeout_seconds,
         max_retries=config.max_retries,
         rate_limit_per_minute=_rate_limit_for_source(config, "ecb"),
+    )
+
+
+def _make_oecd(config: PipelineConfig) -> SourceClient:
+    return OECDClient(
+        timeout=config.request_timeout_seconds,
+        max_retries=config.max_retries,
+        rate_limit_per_minute=_rate_limit_for_source(config, "oecd"),
     )
 
 
@@ -195,6 +204,7 @@ SOURCE_FACTORIES = {
     "bls": _make_bls,
     "eia": _make_eia,
     "ecb": _make_ecb,
+    "oecd": _make_oecd,
     "treasury": _make_treasury,
     "worldbank": _make_worldbank,
     "bis": _make_bis,
@@ -275,6 +285,7 @@ def _rate_limit_for_source(config: PipelineConfig, source: str) -> int:
         "bls": 25,
         "eia": 60,
         "ecb": 60,
+        "oecd": 30,
         "treasury": 120,
         "worldbank": 60,
         "bis": 30,

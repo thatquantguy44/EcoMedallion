@@ -38,7 +38,6 @@ from fred_pipeline.config import PipelineConfig
 from fred_pipeline.manifest import Manifest
 from fred_pipeline.meta import build_meta_rows
 from fred_pipeline.quality import QualityReport
-from fred_pipeline.transform import latest_by_observation
 
 log = logging.getLogger(__name__)
 from fred_pipeline.warehouse import dq_rows
@@ -730,6 +729,64 @@ class LocalWarehouse:
         cur = self.conn.execute(f"SELECT * FROM {table}")
         return [dict(row) for row in cur.fetchall()]
 
+    def _rebuild_gold_point_in_time_sql(self) -> int:
+        """Rebuild the 1:1 point-in-time table inside SQLite."""
+        self.conn.execute("DELETE FROM gold_fred_point_in_time")
+        cur = self.conn.execute(
+            """
+            INSERT INTO gold_fred_point_in_time (
+                series_id, observation_date, realtime_start, realtime_end, value,
+                revision_number, is_missing, ingested_at
+            )
+            SELECT
+                series_id, observation_date, realtime_start, realtime_end, value,
+                revision_number, is_missing, ingested_at
+            FROM silver_fred_observation
+            """
+        )
+        return max(cur.rowcount, 0)
+
+    def _rebuild_gold_latest_observation_sql(self) -> int:
+        """Rebuild latest-revision observations with a set-based window query."""
+        self.conn.execute("DELETE FROM gold_fred_latest_observation")
+        cur = self.conn.execute(
+            """
+            INSERT INTO gold_fred_latest_observation (
+                series_id, observation_date, value, realtime_start, realtime_end,
+                is_missing, revision_number, ingested_at
+            )
+            WITH ranked AS (
+                SELECT
+                    series_id,
+                    observation_date,
+                    value,
+                    realtime_start,
+                    realtime_end,
+                    is_missing,
+                    revision_number,
+                    ingested_at,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY series_id, observation_date
+                        ORDER BY COALESCE(realtime_start, '') DESC, rowid DESC
+                    ) AS rn
+                FROM silver_fred_observation
+            )
+            SELECT
+                series_id,
+                observation_date,
+                value,
+                realtime_start,
+                realtime_end,
+                is_missing,
+                revision_number,
+                ingested_at
+            FROM ranked
+            WHERE rn = 1
+            ORDER BY series_id, observation_date
+            """
+        )
+        return max(cur.rowcount, 0)
+
     # ---- Warehouse surface ---------------------------------------------
 
     def sync_meta(self, manifests: Iterable[Manifest]) -> dict[str, int]:
@@ -805,44 +862,19 @@ class LocalWarehouse:
             self._defer_commits = False
 
     def _build_gold_inner(self) -> dict[str, str]:
+        # The two largest Gold tables are simple relational transforms. Keep
+        # them inside SQLite instead of materializing tens of millions of
+        # Python dicts before the downstream Python engines need their inputs.
+        self._rebuild_gold_point_in_time_sql()
+        self._rebuild_gold_latest_observation_sql()
+
         silver = self._read("silver_fred_observation")
         for r in silver:
             r["is_missing"] = bool(r.get("is_missing"))
 
-        # point-in-time = every vintage row
-        self.conn.execute("DELETE FROM gold_fred_point_in_time")
-        pit = [
-            {
-                "series_id": r["series_id"],
-                "observation_date": r["observation_date"],
-                "realtime_start": r["realtime_start"],
-                "realtime_end": r["realtime_end"],
-                "value": r["value"],
-                "revision_number": r["revision_number"],
-                "is_missing": r["is_missing"],
-                "ingested_at": r["ingested_at"],
-            }
-            for r in silver
-        ]
-        self._insert("gold_fred_point_in_time", pit)
-
-        # latest revision per (series, date)
-        latest = latest_by_observation(silver)
-        self.conn.execute("DELETE FROM gold_fred_latest_observation")
-        latest_rows = [
-            {
-                "series_id": r["series_id"],
-                "observation_date": r["observation_date"],
-                "value": r["value"],
-                "realtime_start": r["realtime_start"],
-                "realtime_end": r["realtime_end"],
-                "is_missing": r["is_missing"],
-                "revision_number": r.get("revision_number"),
-                "ingested_at": r["ingested_at"],
-            }
-            for r in latest
-        ]
-        self._insert("gold_fred_latest_observation", latest_rows)
+        latest = self._read("gold_fred_latest_observation")
+        for r in latest:
+            r["is_missing"] = bool(r.get("is_missing"))
 
         # daily forward-filled feature matrix; quant transforms (mom/yoy/diff/
         # zscore); curve spreads; revision-magnitude stats. Prefers the
