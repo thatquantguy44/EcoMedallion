@@ -1,11 +1,9 @@
 # Spec 007: Due-Date Gating on Extraction
 
 Status: first implementation slice shipped behind --skip-not-due (§8 steps 1-3
-complete); cadence intervals validated against real publish calendars (§5) --
-daily/business_daily confirmed safe, weekly/monthly/annual need tightening,
-quarterly has an unresolved correctness gap (§10 item 5) and should not be
-enabled in production yet; not the default, not re-baselined against real
-timing
+complete); cadence intervals validated against real publish calendars and
+retuned to match (§5/§10 item 5 -- all five intervals now in code); still not
+the default, still not re-baselined against real timing
 Last verified: 2026-09-13
 Primary owner: TBD
 Target: `Pipeline.run()` (`src/fred_pipeline/pipeline.py`) — every `run`
@@ -196,62 +194,64 @@ per-entity skipping there low-value (see `docs/handoffs/pipeline_performance.md`
     are genuinely business-day-only with no revision-cycle complications.
     The weekend-adjacent case is already covered by
     `test_series_is_due_weekend_adjacent_daily_case`. No change needed.
-  - ⚠️ **`weekly` — safe but with zero margin, not "generous."** `ICSA`
-    (Initial Claims) publishes every Thursday, pulled forward by one
-    business day in a week containing a federal holiday — the observed
-    worst-case gap between two consecutive releases is **exactly 6 days**
-    (Thu → Wed). Since `_series_is_due`'s boundary is inclusive (`>=`),
-    the current ~6-day interval technically still catches this case on
-    the day it lands, but with no slack at all — a second holiday
-    adjustment in the same window, or a slightly different pull time of
-    day, would miss it. Recommend tightening to **5 days** to restore a
-    real margin, consistent with the stated design principle.
-  - 🔴 **`monthly` — not actually generous; recommend tightening.** The
-    real, published 2026 CPI release calendar (Sep 11 → Oct 14 → Nov 10)
-    has a **minimum observed gap of exactly 27 days** (Oct 14 → Nov 10).
-    The current interval is *equal to*, not looser than, this real
-    minimum — meaning zero safety margin, the opposite of "generous
-    rather than tight." The Employment Situation calendar compounds this:
-    real 2026 releases regularly land on the *second* Friday of a month
-    instead of the first (holiday shifts, and once a government-shutdown
-    delay), which lengthens some gaps but does not rule out a short one
-    following it. Recommend tightening to **~24-25 days**.
-  - 🔴 **`quarterly` — miscalibrated for the series actually tagged this
-    way; likely the most important finding here.** `GDP`, BEA's NIPA
-    quarterly series, and BLS productivity/costs are all tagged
-    `quarterly` in this repo's manifests, but none of them publish only
-    once per quarter — each gets **three official estimates within the
-    quarter's own revision cycle**: BEA GDP's advance/second/third
-    estimates land at ~30, ~55-60, and ~90 days after each quarter ends
-    (official BEA definitions); BLS Productivity and Costs follows the
-    same shape, tied to the GDP schedule. The real gap *between*
-    consecutive updates to one of these series is on the order of
-    **25-35 days, not 85**. An 85-day re-check interval doesn't just cut
-    it close here — it silently **skips the second and third estimate
-    revisions entirely** for a GDP-like series, catching only roughly one
-    of the three updates in a quarter instead of all three. This is a
-    correctness gap (stale data served for up to ~2 months longer than
-    intended), not just an efficiency tuning question. Fixing it isn't a
-    one-line interval change: shortening the "quarterly" interval enough
-    to catch these revisions (~30 days) makes it behave like `monthly` in
-    practice, defeating the point of a separate bucket. This needs a
-    design decision — see the new open decision below — not a silent
-    number change; **do not enable gating for quarterly-tagged series
-    until this is resolved.**
-  - ⚠️ **`annual` — likely safe for the primary release, but World Bank
-    (the only source using this tag here — `worldbank_global.yml`'s GDP
-    and population series) revises data outside its own nominal annual
-    cycle.** The World Development Indicators database's own last update
-    landed July 17, 2026; a related World Bank dataset (Global
-    Development Finance) is explicitly updated *twice* a year (January
-    and April); and WDI's own documentation notes historical values can
-    be recalculated retroactively on a methodology revision, independent
-    of the regular annual refresh. A 360-day interval would miss any of
+  - ✅ **`weekly` — FIXED (6 → 5 days).** `ICSA` (Initial Claims)
+    publishes every Thursday, pulled forward by one business day in a
+    week containing a federal holiday — the observed worst-case gap
+    between two consecutive releases is **exactly 6 days** (Thu → Wed).
+    Since `_series_is_due`'s boundary is inclusive (`>=`), the old 6-day
+    interval technically still caught this case on the day it landed, but
+    with no slack at all — a second holiday adjustment in the same
+    window, or a slightly different pull time of day, would have missed
+    it. Tightened to 5 days to restore a real margin.
+  - ✅ **`monthly` — FIXED (27 → 25 days).** The real, published 2026 CPI
+    release calendar (Sep 11 → Oct 14 → Nov 10) has a **minimum observed
+    gap of exactly 27 days** (Oct 14 → Nov 10). The old interval was
+    *equal to*, not looser than, this real minimum — zero safety margin,
+    the opposite of "generous rather than tight." The Employment
+    Situation calendar compounds this: real 2026 releases regularly land
+    on the *second* Friday of a month instead of the first (holiday
+    shifts, and once a government-shutdown delay), which lengthens some
+    gaps but does not rule out a short one following it. Tightened to 25
+    days.
+  - ✅ **`quarterly` — FIXED (85 → 25 days); was the most important
+    finding here.** `GDP`, BEA's NIPA quarterly series, and BLS
+    productivity/costs are all tagged `quarterly` in this repo's
+    manifests, but none of them publish only once per quarter — each gets
+    **three official estimates within the quarter's own revision cycle**:
+    BEA GDP's advance/second/third estimates land at ~30, ~55-60, and ~90
+    days after each quarter ends (official BEA definitions); BLS
+    Productivity and Costs follows the same shape, tied to the GDP
+    schedule. The real gap *between* consecutive updates to one of these
+    series is on the order of **25-35 days, not 85**. The old 85-day
+    re-check interval didn't just cut it close here — it would have
+    silently **skipped the second and third estimate revisions entirely**
+    for a GDP-like series, catching only roughly one of the three updates
+    in a quarter instead of all three: a correctness gap (stale data
+    served for up to ~2 months longer than intended), not just an
+    efficiency tuning question. Resolved per open decision #5 below by
+    tightening to the same 25-day value as `monthly` — `quarterly` now
+    functionally behaves like `monthly` for these series, a deliberate
+    safety-first choice rather than a taxonomy redesign (see that
+    decision for the reasoning and the door left open for a future
+    single-release vs. multi-revision split).
+  - ✅ **`annual` — FIXED (360 → 180 days).** World Bank (the only source
+    using this tag here — `worldbank_global.yml`'s GDP and population
+    series) revises data outside its own nominal annual cycle: the World
+    Development Indicators database's own last update landed July 17,
+    2026; a related World Bank dataset (Global Development Finance) is
+    explicitly updated *twice* a year (January and April); and WDI's own
+    documentation notes historical values can be recalculated
+    retroactively on a methodology revision, independent of the regular
+    annual refresh. The old 360-day interval would have missed any of
     these out-of-cycle corrections for up to a year. Lower severity than
     the quarterly finding (a stale annual macro figure is less
-    market-critical than stale GDP), but worth tightening to **~180
-    days** for World Bank-sourced annual series specifically if/when this
-    ships.
+    market-critical than stale GDP), tightened to 180 days.
+
+  All four tightened values are live in `_CADENCE_MIN_INTERVAL`
+  (`pipeline.py`) as of 2026-09-13; `tests/test_pipeline.py`'s
+  `test_series_is_due_just_inside_and_outside_interval_per_cadence` reads
+  the real dict rather than a duplicated literal, so it can't silently
+  drift from these values on a future retune.
 
   **Sources:** [BLS Employment Situation 2026 schedule](https://www.bls.gov/schedule/2026/home.htm),
   [BLS CPI release schedule](https://www.bls.gov/cpi/),
@@ -401,18 +401,23 @@ re-litigating them:
 4. ✅ Back-filling `expected_update_frequency` for manifest entries missing
    it is separate, follow-up work — not blocking this spec's first slice
    (§9).
-5. 🔴 **DECISION NEEDED (new, 2026-09-13) — what to do about `quarterly`.**
+5. ✅ **RESOLVED (2026-09-13) — what to do about `quarterly`: tighten it
+   to the same 25-day value as `monthly`, live in `_CADENCE_MIN_INTERVAL`.**
    The validation above found that `quarterly`-tagged series in this
    repo's manifests (`GDP`, BEA NIPA quarterly series, BLS productivity)
    don't publish once per quarter — they get three revisions per quarter
    at roughly 30/55-60/90 days after quarter-end, a real update cadence
-   of ~25-35 days, not ~91. The current 85-day interval would silently
-   skip the second and third revisions for these series entirely: a
-   correctness gap, not a tuning nit. Fixing the interval alone
-   (shortening it to ~30 days) makes `quarterly` behave like `monthly`,
-   which may be the right call, but is a real semantic change to what
-   the cadence label means, not a number tweak — decide explicitly rather
-   than defaulting either way. **Do not enable `--skip-not-due` for
-   quarterly-tagged series in production until this is decided**, since
-   the failure mode is silently stale GDP-family data, not just a missed
-   efficiency win.
+   of ~25-35 days, not ~91. The old 85-day interval would have silently
+   skipped the second and third revisions for these series entirely: a
+   correctness gap, not a tuning nit. Chose the safety-first fix
+   (converge `quarterly` onto `monthly`'s real cadence) over leaving the
+   silent-staleness gap live while a taxonomy redesign is debated — this
+   is a deliberate, documented trade-off, not a "the numbers happen to
+   match" coincidence: it gives up the efficiency benefit of a separate,
+   longer `quarterly` bucket for single-release quarterly series (if any
+   exist in this manifest set) in exchange for correctness on the
+   multi-revision ones, which is the safer failure mode per this spec's
+   own stated principle. Revisit only if a genuine single-release
+   quarterly series is found that would benefit from a longer, separately
+   tracked interval — that would need a new sub-cadence, not a reversion
+   of this fix.

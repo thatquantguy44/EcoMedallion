@@ -215,35 +215,35 @@ with a new `RunStatus.SKIPPED_NOT_DUE` audit trail. Default behavior
 (flag omitted) is unchanged. Still owed before this goes further: real
 extraction timing with gating on vs. off (not done).
 
-**🔴 HIGH PRIORITY — two findings from validating the cadence→interval
-mapping against real publish calendars (spec007 §5, done 2026-09-13,
-`specs/spec007/README.md` §10 item 5 and the "Cadence validation findings"
-subsection):**
+**✅ FIXED (2026-09-13) — the two high-priority findings from validating the
+cadence→interval mapping against real publish calendars are resolved in
+code** (`_CADENCE_MIN_INTERVAL` in `pipeline.py`; spec007 §5/§10 item 5 and
+the "Cadence validation findings" subsection have the full evidence):
 
-1. **The `quarterly` interval (85 days) is a correctness gap, not a tuning
-   nit.** `GDP`, BEA's NIPA quarterly series, and BLS productivity are
-   tagged `quarterly` in this repo's manifests, but none of them publish
-   once per quarter — each gets three official revisions per quarter
-   (advance/second/third estimates at ~30/55-60/90 days after quarter-end).
-   Real gap between updates is ~25-35 days, not ~91. An 85-day interval
-   would silently **skip the second and third revisions entirely** for a
-   GDP-like series if gating shipped as-is — stale data served for up to
-   two months longer than intended. **Do not enable `--skip-not-due` for
-   quarterly-tagged series in production until this is resolved** — see
-   spec007 §10 item 5 for the open decision (shortening the number alone
-   makes `quarterly` behave like `monthly`, a semantic change that needs
-   a deliberate call).
-2. **The `monthly` interval (27 days) has zero safety margin, not the
-   "generous" buffer the design intends.** The real 2026 CPI release
-   calendar has a minimum observed gap of exactly 27 days (Oct 14 → Nov
-   10) — identical to the current interval, not looser than it. A single
-   scheduling shift (holiday, agency delay) could cause a missed print
-   with no slack to absorb it. Recommend tightening to ~24-25 days before
-   this flag is ever turned on for monthly series.
+1. **`quarterly` (was 85 days, a correctness gap, not a tuning nit) →
+   tightened to 25 days.** `GDP`, BEA's NIPA quarterly series, and BLS
+   productivity are tagged `quarterly` in this repo's manifests, but none
+   of them publish once per quarter — each gets three official revisions
+   per quarter (advance/second/third estimates at ~30/55-60/90 days after
+   quarter-end). Real gap between updates is ~25-35 days, not ~91. The old
+   85-day interval would have silently **skipped the second and third
+   revisions entirely** for a GDP-like series — stale data served for up
+   to two months longer than intended. Resolved by converging `quarterly`
+   onto the same interval as `monthly`, a deliberate safety-first choice
+   (see spec007 §10 item 5 for the full reasoning and what would justify
+   revisiting it).
+2. **`monthly` (was 27 days, zero safety margin) → tightened to 25 days.**
+   The real 2026 CPI release calendar has a minimum observed gap of
+   exactly 27 days (Oct 14 → Nov 10) — identical to the old interval, not
+   looser than it as the design intends. A single scheduling shift
+   (holiday, agency delay) could have caused a missed print with no slack
+   to absorb it.
 
-(`weekly` and `annual` have smaller versions of the same margin problem —
-tighten to ~5 days and ~180 days respectively — but are lower severity
-than the two above.)
+`weekly` (6 → 5 days) and `annual` (360 → 180 days) got the same tightening
+for smaller versions of the same margin problem. `daily`/`business_daily`
+were confirmed already safe and left unchanged. None of this has been
+re-baselined against real timing yet (see below) — these are correctness
+fixes to the interval math, not a performance measurement.
 
 By default, `Pipeline.run()` still restates *every* series passed to it on
 *every* invocation — nothing consults each series' `expected_update_frequency`
@@ -266,6 +266,6 @@ watermark lives, interaction with `restate_last_n`, `--full` semantics,
 manifest-level overrides) are scoped in
 [`specs/spec007/README.md`](../../specs/spec007/README.md). Rollout and
 `--full` semantics are decided (§5/§10); the cadence→interval mapping is
-now validated against real publish calendars (§5/§10 item 5) — read the
-two high-priority findings above before enabling `--skip-not-due` for
-anything beyond `daily`/`business_daily`.
+now validated against real publish calendars and retuned to match
+(§5/§10 item 5) — nothing left blocking `--skip-not-due` on interval
+safety grounds, only on the still-owed real timing re-baseline above.
