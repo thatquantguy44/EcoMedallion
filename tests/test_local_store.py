@@ -894,3 +894,108 @@ def test_funding_stress_daily_matches_full_recompute_and_updates_with_new_data(
     assert [dict(r) for r in got2] == expected2
     assert len(got2) == 2
     wh.close()
+
+
+# ---- spec003 Phase 3: gold_series_correlation incremental end-to-end ------
+
+
+def _correlation_rows(wh, series_a="DGS2", series_b="DGS10", window=0):
+    return wh.query(
+        "SELECT * FROM gold_series_correlation WHERE series_a=? AND series_b=? "
+        "AND window=? ORDER BY observation_date",
+        (series_a, series_b, window),
+    )
+
+
+def _corr_days(days_and_values_a, days_and_values_b):
+    rows = []
+    for d, v in days_and_values_a:
+        rows.append(_obs_row("DGS2", d, v, f"{d}T00:00:00Z"))
+    for d, v in days_and_values_b:
+        rows.append(_obs_row("DGS10", d, v, f"{d}T00:00:00Z"))
+    return rows
+
+
+def test_incremental_series_correlation_skip_then_append(tmp_path):
+    wh = LocalWarehouse(_config(), db_path=str(tmp_path / "f.db"))
+    a = [
+        ("2024-01-02", 4.2),
+        ("2024-01-03", 4.3),
+        ("2024-01-04", 4.1),
+        ("2024-01-05", 4.4),
+    ]
+    b = [
+        ("2024-01-02", 4.0),
+        ("2024-01-03", 4.1),
+        ("2024-01-04", 3.9),
+        ("2024-01-05", 4.2),
+    ]
+    wh.merge_silver(_corr_days(a, b))
+    wh.build_gold()
+
+    first = _correlation_rows(wh)
+    assert len(first) >= 1  # expanding window (w=0) starts at the 3rd diff obs
+    checkpoint = _checkpoint(wh, "DGS2|DGS10", "gold_series_correlation")
+    assert checkpoint is not None
+    assert checkpoint["frontier_date"] == "2024-01-05"
+
+    # No changes -> skipped, not recomputed.
+    wh.build_gold()
+    assert _correlation_rows(wh) == first
+    assert (
+        _checkpoint(wh, "DGS2|DGS10", "gold_series_correlation")["updated_at"]
+        == checkpoint["updated_at"]
+    )
+
+    # A new day for both legs -> appended.
+    wh.merge_silver(_corr_days([("2024-01-08", 4.5)], [("2024-01-08", 4.3)]))
+    wh.build_gold()
+    after = _correlation_rows(wh)
+    assert len(after) == len(first) + 1
+    assert after[: len(first)] == first
+    assert (
+        _checkpoint(wh, "DGS2|DGS10", "gold_series_correlation")["frontier_date"]
+        == "2024-01-08"
+    )
+    wh.close()
+
+
+def test_incremental_series_correlation_backfill_matches_full_recompute(tmp_path):
+    from fred_pipeline.regime_stats import compute_series_correlation
+    from fred_pipeline.regime_stats_config import load_stats_config
+
+    wh = LocalWarehouse(_config(), db_path=str(tmp_path / "f.db"))
+    a = [
+        ("2024-01-02", 4.2),
+        ("2024-01-03", 4.3),
+        ("2024-01-04", 4.1),
+        ("2024-01-05", 4.4),
+    ]
+    b = [
+        ("2024-01-02", 4.0),
+        ("2024-01-03", 4.1),
+        ("2024-01-04", 3.9),
+        ("2024-01-05", 4.2),
+    ]
+    wh.merge_silver(_corr_days(a, b))
+    wh.build_gold()
+    assert (
+        _checkpoint(wh, "DGS2|DGS10", "gold_series_correlation")["frontier_date"]
+        == "2024-01-05"
+    )
+
+    # Revise an older date -> backfill branch.
+    wh.merge_silver([_obs_row("DGS2", "2024-01-03", 4.35, "2024-06-01T00:00:00Z")])
+    wh.build_gold()
+
+    got = _correlation_rows(wh)
+    latest = wh.query("SELECT * FROM gold_fred_latest_observation")
+    for r in latest:
+        r["is_missing"] = bool(r["is_missing"])
+    expected = [
+        r
+        for r in compute_series_correlation(latest, load_stats_config())
+        if r["series_a"] == "DGS2" and r["series_b"] == "DGS10" and r["window"] == 0
+    ]
+    assert [dict(r) for r in got] == expected
+    wh.close()
