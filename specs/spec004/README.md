@@ -1,7 +1,12 @@
 # Spec 004: Database Backend Integration — Postgres (Priority) and Beyond
 
-Status: proposed build plan
-Last verified: 2026-09-04
+Status: **Phases 2-4 shipped** (commit `95b2ccd`) — `PostgresConnection`,
+`postgres_config.py` DSN resolution, `docker-compose.yml` local Postgres,
+`scripts/copy_sqlite_to_postgres.py` (verified against a real 34M-row
+warehouse: 74 tables, all 5 schemas). **Phase 1 (`PostgresWarehouse`, the
+actual write path) is in progress** — see the Phase 1 section below for the
+concrete, live-verified plan.
+Last verified: 2026-09-12
 Primary owner: TBD
 Target: `PostgresWarehouse` (write path) + `PostgresConnection` (read path),
 local-first
