@@ -18,7 +18,7 @@ from fred_pipeline.curve_config import (
     TenorDef,
     load_curve_defs,
 )
-from fred_pipeline.features import compute_curve_spreads
+from fred_pipeline.features import _group_sorted, compute_curve_spreads
 from fred_pipeline.spread_config import SpreadDef
 from fred_pipeline.terminal_views import (
     MARKET_CALENDARS,
@@ -1203,6 +1203,7 @@ from fred_pipeline.terminal_views import (
     compute_benchmark_rate_board,
     compute_credit_spread_daily,
     compute_funding_features,
+    resume_credit_spread_daily,
 )
 
 
@@ -1387,6 +1388,89 @@ def test_credit_spread_daily_stress_and_recession():
 def test_credit_spread_daily_absent_series_emit_nothing():
     cfg = CreditConfig(instruments=(CreditInstrumentDef("IG_OAS", "BAMLC0A0CM"),))
     assert compute_credit_spread_daily([_row("DGS10", "2024-01-02", 4.0)], cfg) == []
+
+
+# ---- spec003 Phase 3: resumable credit_spread_daily --------------------------
+
+
+def _credit_test_rows():
+    return [
+        _row("BAMLH0A0HYM2", "2020-02-01", 3.5),
+        _row("BAMLH0A0HYM2", "2020-03-01", 4.0),
+        _row("BAMLH0A0HYM2", "2020-03-20", 8.7),
+        _row("BAMLH0A0HYM2", "2020-04-10", 7.5),
+        _row("USREC", "2020-03-01", 1.0),
+    ]
+
+
+def _credit_points(rows):
+    """(date, value) pairs for BAMLH0A0HYM2, sorted -- the exact input shape
+    resume_credit_spread_daily expects."""
+    by_series = _group_sorted(rows)
+    return by_series.get("BAMLH0A0HYM2", [])
+
+
+def test_resume_credit_spread_daily_matches_full_recompute_in_one_shot():
+    cfg = CreditConfig(
+        instruments=(CreditInstrumentDef("HY_OAS", "BAMLH0A0HYM2", "headline"),),
+        stress_percentile=0.75,
+    )
+    rows = _credit_test_rows()
+    expected = compute_credit_spread_daily(rows, cfg)
+
+    points = _credit_points(rows)
+    flags = _recession_flags(rows)
+    _state, out = resume_credit_spread_daily(
+        "HY_OAS", "BAMLH0A0HYM2", "headline", 0.75, points, None, flags
+    )
+    assert out == expected
+
+
+@pytest.mark.parametrize("k", [0, 1, 2, 3, 4])
+def test_resume_credit_spread_daily_is_exact_across_a_split_point(k):
+    cfg = CreditConfig(
+        instruments=(CreditInstrumentDef("HY_OAS", "BAMLH0A0HYM2", "headline"),),
+        stress_percentile=0.75,
+    )
+    rows = _credit_test_rows()
+    expected = compute_credit_spread_daily(rows, cfg)
+
+    points = _credit_points(rows)
+    flags = _recession_flags(rows)
+    state, out1 = resume_credit_spread_daily(
+        "HY_OAS", "BAMLH0A0HYM2", "headline", 0.75, points[:k], None, flags
+    )
+    _state, out2 = resume_credit_spread_daily(
+        "HY_OAS", "BAMLH0A0HYM2", "headline", 0.75, points[k:], state, flags
+    )
+    assert out1 + out2 == expected
+
+
+def test_resume_credit_spread_daily_carries_last_value_across_a_resume():
+    """change_bps needs the prior observation's raw value -- the one piece
+    of state beyond the two shared primitives. A naive resume that only
+    carried mean_std/percentile state would silently emit change_bps=None
+    for the first point of every resumed chunk instead of the real delta."""
+    cfg = CreditConfig(
+        instruments=(CreditInstrumentDef("HY_OAS", "BAMLH0A0HYM2", "headline"),),
+        stress_percentile=0.75,
+    )
+    rows = _credit_test_rows()
+    expected = compute_credit_spread_daily(rows, cfg)
+    assert expected[2]["change_bps"] == pytest.approx(470.0)
+
+    points = _credit_points(rows)
+    flags = _recession_flags(rows)
+    # Split right before the big move (index 2) so it lands in the second
+    # chunk -- its change_bps must still reflect the point from chunk one.
+    state, out1 = resume_credit_spread_daily(
+        "HY_OAS", "BAMLH0A0HYM2", "headline", 0.75, points[:2], None, flags
+    )
+    _state, out2 = resume_credit_spread_daily(
+        "HY_OAS", "BAMLH0A0HYM2", "headline", 0.75, points[2:], state, flags
+    )
+    assert out2[0]["change_bps"] == pytest.approx(470.0)
+    assert out1 + out2 == expected
 
 
 # ---- Phase 2: Inflation Explorer -------------------------------------------------

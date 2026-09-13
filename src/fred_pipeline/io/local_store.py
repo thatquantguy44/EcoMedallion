@@ -1093,6 +1093,125 @@ class LocalWarehouse:
             self._insert("gold_curve_spread_daily", new_rows)
         self._write_checkpoints_batch("gold_curve_spread_daily", checkpoint_entries)
 
+    def _build_credit_spread_daily(
+        self,
+        latest_by_series: dict[str, list[dict[str, Any]]],
+        credit_cfg: Any,
+        touched: dict[str, str],
+        full: bool,
+    ) -> None:
+        """spec003 Phase 3, second table: gold_credit_spread_daily restated
+        per-instrument. Simpler than gold_curve_spread_daily's per-spread
+        version -- each instrument is driven by exactly one series (no
+        long_leg/short_leg pair), so the "watched" set is just that one
+        series_id plus RECESSION_SERIES. See resume_credit_spread_daily's
+        docstring for the one extra piece of state (the prior value, for
+        change_bps) this engine carries beyond the two shared primitives."""
+        from fred_pipeline.features import _group_sorted
+        from fred_pipeline.terminal_views import (
+            RECESSION_SERIES,
+            _recession_flags,
+            compute_credit_spread_daily,
+            resume_credit_spread_daily,
+        )
+
+        credit_ids = {cd.series_id for cd in credit_cfg.instruments} | {
+            RECESSION_SERIES
+        }
+        all_rows = _select_series(latest_by_series, credit_ids)
+
+        if full:
+            self._clear_checkpoints("gold_credit_spread_daily")
+            self.conn.execute("DELETE FROM gold_credit_spread_daily")
+            self._insert(
+                "gold_credit_spread_daily",
+                compute_credit_spread_daily(all_rows, credit_cfg),
+            )
+            return
+
+        checkpoints = self._load_checkpoints("gold_credit_spread_daily")
+        flags = _recession_flags(all_rows)
+        by_series = _group_sorted(all_rows)
+
+        to_delete: list[str] = []
+        new_rows: list[dict[str, Any]] = []
+        checkpoint_entries: list[tuple[str, str, dict[str, Any], str]] = []
+
+        for cd in credit_cfg.instruments:
+            checkpoint = checkpoints.get(cd.instrument)
+            watched = {cd.series_id, RECESSION_SERIES}
+            config_hash = hashlib.sha256(
+                f"{cd.series_id}|{cd.category}|{credit_cfg.stress_percentile}".encode()
+            ).hexdigest()
+            config_changed = (
+                checkpoint is not None and checkpoint["config_hash"] != config_hash
+            )
+            if (
+                checkpoint is not None
+                and not config_changed
+                and not (watched & touched.keys())
+            ):
+                continue
+
+            points = by_series.get(cd.series_id, [])
+            if not points:
+                continue  # series not ingested yet -- nothing to build
+
+            min_touched = min(
+                (touched[sid] for sid in watched if sid in touched), default=None
+            )
+            # _group_sorted (unlike compute_curve_spreads) keeps observation
+            # dates as date objects, not ISO strings, so the checkpoint's
+            # stored frontier_date (always a string) is what needs comparing
+            # against .isoformat(), not the other way around.
+            frontier_date = checkpoint["frontier_date"] if checkpoint else None
+            needs_full = (
+                checkpoint is None
+                or config_changed
+                or min_touched is None
+                or min_touched <= frontier_date
+            )
+
+            if needs_full:
+                to_delete.append(cd.instrument)
+                state, out_rows = resume_credit_spread_daily(
+                    cd.instrument,
+                    cd.series_id,
+                    cd.category,
+                    credit_cfg.stress_percentile,
+                    points,
+                    None,
+                    flags,
+                )
+            else:
+                new_points = [
+                    (d, v) for d, v in points if d.isoformat() > frontier_date
+                ]
+                if not new_points:
+                    continue
+                state, out_rows = resume_credit_spread_daily(
+                    cd.instrument,
+                    cd.series_id,
+                    cd.category,
+                    credit_cfg.stress_percentile,
+                    new_points,
+                    checkpoint["state"],
+                    flags,
+                )
+
+            new_rows.extend(out_rows)
+            checkpoint_entries.append(
+                (cd.instrument, points[-1][0].isoformat(), state, config_hash)
+            )
+
+        for name in to_delete:
+            self.conn.execute(
+                "DELETE FROM gold_credit_spread_daily WHERE instrument = ?", (name,)
+            )
+        if new_rows:
+            self._insert("gold_credit_spread_daily", new_rows)
+        self._write_checkpoints_batch("gold_credit_spread_daily", checkpoint_entries)
+
     # ---- Warehouse surface ---------------------------------------------
 
     def sync_meta(self, manifests: Iterable[Manifest]) -> dict[str, int]:
@@ -1346,7 +1465,6 @@ class LocalWarehouse:
             build_dim_date,
             build_dim_series,
             compute_benchmark_rate_board,
-            compute_credit_spread_daily,
             compute_credit_spread_rolling,
             compute_curve_spread_rolling,
             compute_fomc_probability,
@@ -1492,11 +1610,6 @@ class LocalWarehouse:
                         _select_series(latest_by_series, funding_ids), funding_cfg
                     )
                 ),
-                "credit_spread_daily": _stage_timed("pf.credit_spread_daily")(
-                    lambda: compute_credit_spread_daily(
-                        _select_series(latest_by_series, credit_ids), credit_cfg
-                    )
-                ),
                 "inflation": _stage_timed("pf.inflation")(
                     lambda: compute_inflation_explorer(
                         _select_series(latest_by_series, inflation_ids), infl_items
@@ -1596,9 +1709,18 @@ class LocalWarehouse:
         self._insert("gold_funding_tape_daily", funding["tape"])
         self.conn.execute("DELETE FROM gold_funding_stress_daily")
         self._insert("gold_funding_stress_daily", funding["stress"])
-        credit_rows = computed["credit_spread_daily"]
-        self.conn.execute("DELETE FROM gold_credit_spread_daily")
-        self._insert("gold_credit_spread_daily", credit_rows)
+
+        # spec003 Phase 3: second incremental table, same per-entity pattern
+        # as gold_curve_spread_daily above. Unlike that table, downstream
+        # code (compute_recession_probability's hy_oas_zscore feature) needs
+        # the table's full current content, not just this build's delta --
+        # read it back rather than threading the incremental method's
+        # partial output through, since untouched instruments' rows never
+        # leave the table in the first place.
+        _stage_timed("credit_spread_daily_incremental")(
+            self._build_credit_spread_daily
+        )(latest_by_series, credit_cfg, touched, full)
+        credit_rows = self._read("gold_credit_spread_daily")
 
         # Phase 2 Inflation Explorer (config/inflation_items.yml).
         inflation = computed["inflation"]

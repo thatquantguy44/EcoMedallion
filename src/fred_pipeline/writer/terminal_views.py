@@ -1351,6 +1351,67 @@ def compute_credit_spread_daily(
     return sorted(out, key=lambda r: (r["instrument"], r["observation_date"]))
 
 
+def resume_credit_spread_daily(
+    instrument: str,
+    series_id: str,
+    category: str,
+    stress_percentile: float,
+    new_points: list[tuple[date, float]],
+    state: dict[str, Any] | None,
+    flags: list[tuple[date, bool]],
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """spec003 Phase 3: checkpointed/resumable per-instrument body of
+    :func:`compute_credit_spread_daily`, for one instrument at a time.
+
+    ``new_points`` must already be exactly the ``(date, oas_pct)`` pairs past
+    this instrument's checkpoint frontier, sorted by date. ``state`` is
+    ``None`` for an instrument with no checkpoint yet. Beyond the two shared
+    expanding primitives, ``change_bps`` needs the single prior observation's
+    value carried across a resume -- the one piece of state this engine adds.
+    """
+    if state is None:
+        mean_std_state = init_expanding_mean_std_state()
+        pct_state = init_expanding_percentile_state()
+        last_value: float | None = None
+    else:
+        mean_std_state = state["mean_std"]
+        pct_state = state["percentile"]
+        last_value = state["last_value"]
+
+    values = [v for _d, v in new_points]
+    mean_std_state, means, stds = resume_expanding_mean_std(mean_std_state, values)
+    pct_state, pcts = resume_expanding_percentile(pct_state, values)
+
+    out: list[dict[str, Any]] = []
+    prev = last_value
+    for i, (d, v) in enumerate(new_points):
+        pct = pcts[i]
+        out.append(
+            {
+                "instrument": instrument,
+                "series_id": series_id,
+                "category": category,
+                "observation_date": d.isoformat(),
+                "oas_pct": v,
+                "oas_bps": v * 100.0,
+                "change_bps": ((v - prev) * 100.0) if prev is not None else None,
+                "zscore": ((v - means[i]) / stds[i]) if stds[i] else None,
+                "percentile": pct,
+                "is_stress_episode": (
+                    (pct >= stress_percentile) if pct is not None else None
+                ),
+                "is_recession": _recession_at(flags, d),
+            }
+        )
+        prev = v
+    new_state = {
+        "mean_std": mean_std_state,
+        "percentile": pct_state,
+        "last_value": prev,
+    }
+    return new_state, out
+
+
 # ---- INFL inflation explorer -------------------------------------------------
 
 

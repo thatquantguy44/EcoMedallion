@@ -532,12 +532,11 @@ def _obs_row(series_id, observation_date, value, ingested_at, run_id="r"):
     }
 
 
-def _checkpoint(wh, spread_name="T10Y2Y"):
+def _checkpoint(wh, entity_key="T10Y2Y", table_name="gold_curve_spread_daily"):
     row = wh.query(
         "SELECT frontier_date, state_json, updated_at FROM "
-        "gold_incremental_checkpoint WHERE table_name='gold_curve_spread_daily' "
-        "AND entity_key=?",
-        (spread_name,),
+        "gold_incremental_checkpoint WHERE table_name=? AND entity_key=?",
+        (table_name, entity_key),
     )
     return row[0] if row else None
 
@@ -547,6 +546,14 @@ def _spread_rows(wh, spread_name="T10Y2Y"):
         "SELECT * FROM gold_curve_spread_daily WHERE spread_name=? "
         "ORDER BY observation_date",
         (spread_name,),
+    )
+
+
+def _credit_rows(wh, instrument="HY_OAS"):
+    return wh.query(
+        "SELECT * FROM gold_credit_spread_daily WHERE instrument=? "
+        "ORDER BY observation_date",
+        (instrument,),
     )
 
 
@@ -698,4 +705,92 @@ def test_gold_full_bypasses_incrementality_and_resets_checkpoints(tmp_path):
     # The very next (non-full) build re-seeds the checkpoint from scratch.
     wh.build_gold()
     assert _checkpoint(wh) is not None
+    wh.close()
+
+
+# ---- spec003 Phase 3: gold_credit_spread_daily incremental end-to-end -----
+
+
+def test_incremental_credit_spread_daily_second_build_skips_untouched_instrument(
+    tmp_path,
+):
+    wh = LocalWarehouse(_config(), db_path=str(tmp_path / "f.db"))
+    wh.merge_silver(
+        [_obs_row("BAMLH0A0HYM2", "2024-01-02", 3.5, "2024-01-02T00:00:00Z")]
+    )
+    wh.build_gold()
+
+    first_rows = _credit_rows(wh)
+    assert len(first_rows) == 1
+    first_checkpoint = _checkpoint(wh, "HY_OAS", "gold_credit_spread_daily")
+    assert first_checkpoint is not None
+    assert first_checkpoint["frontier_date"] == "2024-01-02"
+
+    wh.build_gold()
+    assert _credit_rows(wh) == first_rows
+    assert (
+        _checkpoint(wh, "HY_OAS", "gold_credit_spread_daily")["updated_at"]
+        == first_checkpoint["updated_at"]
+    )
+    wh.close()
+
+
+def test_incremental_credit_spread_daily_appends_new_observation(tmp_path):
+    wh = LocalWarehouse(_config(), db_path=str(tmp_path / "f.db"))
+    wh.merge_silver(
+        [_obs_row("BAMLH0A0HYM2", "2024-01-02", 3.5, "2024-01-02T00:00:00Z")]
+    )
+    wh.build_gold()
+    before = _credit_rows(wh)
+
+    wh.merge_silver(
+        [_obs_row("BAMLH0A0HYM2", "2024-01-03", 3.6, "2024-01-03T00:00:00Z")]
+    )
+    wh.build_gold()
+    after = _credit_rows(wh)
+    assert [r["observation_date"] for r in after] == ["2024-01-02", "2024-01-03"]
+    assert after[0] == before[0]
+    assert after[1]["change_bps"] == pytest.approx(10.0)
+    assert _checkpoint(wh, "HY_OAS", "gold_credit_spread_daily")["frontier_date"] == (
+        "2024-01-03"
+    )
+    wh.close()
+
+
+def test_incremental_credit_spread_daily_backfill_triggers_full_recompute(tmp_path):
+    from fred_pipeline.rates_complex_config import CreditInstrumentDef
+    from fred_pipeline.terminal_views import compute_credit_spread_daily
+
+    wh = LocalWarehouse(_config(), db_path=str(tmp_path / "f.db"))
+    wh.merge_silver(
+        [
+            _obs_row("BAMLH0A0HYM2", "2024-01-02", 3.5, "2024-01-02T00:00:00Z"),
+            _obs_row("BAMLH0A0HYM2", "2024-01-03", 3.6, "2024-01-03T00:00:00Z"),
+        ]
+    )
+    wh.build_gold()
+    assert (
+        _checkpoint(wh, "HY_OAS", "gold_credit_spread_daily")["frontier_date"]
+        == "2024-01-03"
+    )
+
+    # Revise the older date -> backfill branch, not append.
+    wh.merge_silver(
+        [_obs_row("BAMLH0A0HYM2", "2024-01-02", 4.0, "2024-06-01T00:00:00Z")]
+    )
+    wh.build_gold()
+
+    got = _credit_rows(wh)
+    latest = wh.query("SELECT * FROM gold_fred_latest_observation")
+    for r in latest:
+        r["is_missing"] = bool(r["is_missing"])
+    from fred_pipeline.rates_complex_config import CreditConfig
+
+    expected = compute_credit_spread_daily(
+        latest,
+        CreditConfig(
+            instruments=(CreditInstrumentDef("HY_OAS", "BAMLH0A0HYM2", "headline"),)
+        ),
+    )
+    assert [dict(r) for r in got] == expected
     wh.close()
