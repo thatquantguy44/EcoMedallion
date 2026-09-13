@@ -1297,6 +1297,55 @@ def compute_funding_features(
     return {"tape": tape, "stress": stress}
 
 
+def resume_funding_tape_entry(
+    name: str,
+    metric_type: str,
+    new_points: list[tuple[date, float]],
+    state: dict[str, Any] | None,
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """spec003 Phase 3: checkpointed/resumable body of
+    :func:`compute_funding_features`'s inner ``_emit`` -- one tape entry
+    (either a raw metric or a pre-differenced spread) at a time.
+
+    ``new_points`` must already be exactly the ``(date, value)`` pairs past
+    this entry's checkpoint frontier, sorted by date -- for a spread entry,
+    already differenced (long − short) on dates both legs have a value, the
+    same restriction :func:`compute_funding_features` applies. Unlike
+    credit/curve spreads, this table carries no state beyond the two shared
+    expanding primitives (no change/inversion/recession column here).
+    ``funding_stress_daily`` is deliberately NOT made incremental alongside
+    this -- it's a cross-sectional composite over every stress-component
+    spread's full zscore history at once, small and cheap regardless, so
+    it's simplest and safest left as a full recompute every build, reading
+    this table's current rows back rather than re-deriving from Silver.
+    """
+    if state is None:
+        mean_std_state = init_expanding_mean_std_state()
+        pct_state = init_expanding_percentile_state()
+    else:
+        mean_std_state = state["mean_std"]
+        pct_state = state["percentile"]
+
+    values = [v for _d, v in new_points]
+    mean_std_state, means, stds = resume_expanding_mean_std(mean_std_state, values)
+    pct_state, pcts = resume_expanding_percentile(pct_state, values)
+
+    out: list[dict[str, Any]] = []
+    for i, (d, v) in enumerate(new_points):
+        out.append(
+            {
+                "metric_name": name,
+                "metric_type": metric_type,
+                "observation_date": d.isoformat(),
+                "value": v,
+                "zscore": ((v - means[i]) / stds[i]) if stds[i] else None,
+                "percentile": pcts[i],
+            }
+        )
+    new_state = {"mean_std": mean_std_state, "percentile": pct_state}
+    return new_state, out
+
+
 # ---- CRDT credit spreads ---------------------------------------------------------
 
 

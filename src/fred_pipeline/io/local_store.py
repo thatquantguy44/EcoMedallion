@@ -1212,6 +1212,215 @@ class LocalWarehouse:
             self._insert("gold_credit_spread_daily", new_rows)
         self._write_checkpoints_batch("gold_credit_spread_daily", checkpoint_entries)
 
+    def _build_funding_tape_daily(
+        self,
+        latest_by_series: dict[str, list[dict[str, Any]]],
+        funding_cfg: Any,
+        touched: dict[str, str],
+        full: bool,
+    ) -> None:
+        """spec003 Phase 3, third table: gold_funding_tape_daily restated
+        per-entity, where an entity is either a raw metric (one series) or a
+        spread (long_leg - short_leg, pre-differenced on common dates) --
+        both write the identical row shape through the same shared
+        resumable engine, resume_funding_tape_entry.
+        gold_funding_stress_daily is built separately
+        (_build_funding_stress_daily) and always fully recomputed -- see
+        that method's docstring for why."""
+        from fred_pipeline.features import _group_sorted
+        from fred_pipeline.terminal_views import (
+            compute_funding_features,
+            resume_funding_tape_entry,
+        )
+
+        funding_ids = {m.series_id for m in funding_cfg.metrics} | {
+            s for sp in funding_cfg.spreads for s in (sp.long_leg, sp.short_leg)
+        }
+        all_rows = _select_series(latest_by_series, funding_ids)
+
+        if full:
+            self._clear_checkpoints("gold_funding_tape_daily")
+            self.conn.execute("DELETE FROM gold_funding_tape_daily")
+            self._insert(
+                "gold_funding_tape_daily",
+                compute_funding_features(all_rows, funding_cfg)["tape"],
+            )
+            return
+
+        checkpoints = self._load_checkpoints("gold_funding_tape_daily")
+        by_series = _group_sorted(all_rows)
+
+        to_delete: list[str] = []
+        new_rows: list[dict[str, Any]] = []
+        checkpoint_entries: list[tuple[str, str, dict[str, Any], str]] = []
+
+        for m in funding_cfg.metrics:
+            checkpoint = checkpoints.get(m.name)
+            watched = {m.series_id}
+            config_hash = hashlib.sha256(
+                f"{m.series_id}|{m.metric_type}".encode()
+            ).hexdigest()
+            config_changed = (
+                checkpoint is not None and checkpoint["config_hash"] != config_hash
+            )
+            if (
+                checkpoint is not None
+                and not config_changed
+                and not (watched & touched.keys())
+            ):
+                continue
+
+            points = by_series.get(m.series_id, [])
+            if not points:
+                continue
+
+            min_touched = touched.get(m.series_id)
+            frontier_date = checkpoint["frontier_date"] if checkpoint else None
+            needs_full = (
+                checkpoint is None
+                or config_changed
+                or min_touched is None
+                or min_touched <= frontier_date
+            )
+            if needs_full:
+                to_delete.append(m.name)
+                state, out_rows = resume_funding_tape_entry(
+                    m.name, m.metric_type, points, None
+                )
+            else:
+                new_points = [
+                    (d, v) for d, v in points if d.isoformat() > frontier_date
+                ]
+                if not new_points:
+                    continue
+                state, out_rows = resume_funding_tape_entry(
+                    m.name, m.metric_type, new_points, checkpoint["state"]
+                )
+
+            new_rows.extend(out_rows)
+            checkpoint_entries.append(
+                (m.name, points[-1][0].isoformat(), state, config_hash)
+            )
+
+        for sp in funding_cfg.spreads:
+            checkpoint = checkpoints.get(sp.name)
+            watched = {sp.long_leg, sp.short_leg}
+            config_hash = hashlib.sha256(
+                f"{sp.long_leg}|{sp.short_leg}".encode()
+            ).hexdigest()
+            config_changed = (
+                checkpoint is not None and checkpoint["config_hash"] != config_hash
+            )
+            if (
+                checkpoint is not None
+                and not config_changed
+                and not (watched & touched.keys())
+            ):
+                continue
+
+            long_s = by_series.get(sp.long_leg, [])
+            short_map = dict(by_series.get(sp.short_leg, []))
+            points = [(d, v - short_map[d]) for d, v in long_s if d in short_map]
+            if not points:
+                continue
+
+            min_touched = min(
+                (touched[sid] for sid in watched if sid in touched), default=None
+            )
+            frontier_date = checkpoint["frontier_date"] if checkpoint else None
+            needs_full = (
+                checkpoint is None
+                or config_changed
+                or min_touched is None
+                or min_touched <= frontier_date
+            )
+            if needs_full:
+                to_delete.append(sp.name)
+                state, out_rows = resume_funding_tape_entry(
+                    sp.name, "spread", points, None
+                )
+            else:
+                new_points = [
+                    (d, v) for d, v in points if d.isoformat() > frontier_date
+                ]
+                if not new_points:
+                    continue
+                state, out_rows = resume_funding_tape_entry(
+                    sp.name, "spread", new_points, checkpoint["state"]
+                )
+
+            new_rows.extend(out_rows)
+            checkpoint_entries.append(
+                (sp.name, points[-1][0].isoformat(), state, config_hash)
+            )
+
+        for name in to_delete:
+            self.conn.execute(
+                "DELETE FROM gold_funding_tape_daily WHERE metric_name = ?", (name,)
+            )
+        if new_rows:
+            self._insert("gold_funding_tape_daily", new_rows)
+        self._write_checkpoints_batch("gold_funding_tape_daily", checkpoint_entries)
+
+    def _build_funding_stress_daily(self, funding_cfg: Any) -> list[dict[str, Any]]:
+        """spec003 Phase 3: always a full recompute, never checkpointed.
+        gold_funding_stress_daily is a cross-sectional composite -- one row
+        per date where EVERY configured stress-component spread has a
+        value, weighted by their expanding z-scores -- so a single touched
+        spread can change which historical dates qualify, not just extend
+        the series forward. That breaks the per-entity append/backfill
+        split the other incremental tables rely on. It's also small
+        (bounded by trading days, not by the Silver universe) and cheap
+        regardless, so there's no real cost to always recomputing it --
+        reading gold_funding_tape_daily's now-current rows back (already
+        rebuilt by _build_funding_tape_daily above) rather than
+        re-deriving from Silver."""
+        from fred_pipeline.terminal_views import STRESS_Z_SCALE, _stress_bucket
+
+        if not funding_cfg.stress_components:
+            self.conn.execute("DELETE FROM gold_funding_stress_daily")
+            return []
+
+        spread_names = [c.spread for c in funding_cfg.stress_components]
+        placeholders = ", ".join("?" * len(spread_names))
+        rows = self.conn.execute(
+            f"SELECT metric_name, observation_date, zscore FROM "
+            f"gold_funding_tape_daily WHERE metric_name IN ({placeholders})",
+            spread_names,
+        ).fetchall()
+        spread_z: dict[str, dict[str, float | None]] = {}
+        for r in rows:
+            spread_z.setdefault(r["metric_name"], {})[r["observation_date"]] = r[
+                "zscore"
+            ]
+
+        stress: list[dict[str, Any]] = []
+        if all(name in spread_z for name in spread_names):
+            common = set.intersection(*(set(spread_z[n]) for n in spread_names))
+            total_w = sum(c.weight for c in funding_cfg.stress_components)
+            for d in sorted(common):
+                composite = (
+                    sum(
+                        c.weight * (spread_z[c.spread][d] or 0.0)
+                        for c in funding_cfg.stress_components
+                    )
+                    / total_w
+                )
+                score = min(100.0, max(0.0, 50.0 + STRESS_Z_SCALE * composite))
+                stress.append(
+                    {
+                        "observation_date": d,
+                        "composite_z": composite,
+                        "stress_score": score,
+                        "stress_bucket": _stress_bucket(score),
+                        "n_components": len(funding_cfg.stress_components),
+                    }
+                )
+
+        self.conn.execute("DELETE FROM gold_funding_stress_daily")
+        self._insert("gold_funding_stress_daily", stress)
+        return stress
+
     # ---- Warehouse surface ---------------------------------------------
 
     def sync_meta(self, manifests: Iterable[Manifest]) -> dict[str, int]:
@@ -1468,7 +1677,6 @@ class LocalWarehouse:
             compute_credit_spread_rolling,
             compute_curve_spread_rolling,
             compute_fomc_probability,
-            compute_funding_features,
             compute_inflation_explorer,
             compute_macro_dashboard,
             compute_market_calendar,
@@ -1557,9 +1765,6 @@ class LocalWarehouse:
         board_ids = {rd.series_id for rd in board.rates} | {
             rd.benchmark for rd in board.rates if rd.benchmark
         }
-        funding_ids = {m.series_id for m in funding_cfg.metrics} | {
-            s for sp in funding_cfg.spreads for s in (sp.long_leg, sp.short_leg)
-        }
         credit_ids = {cd.series_id for cd in credit_cfg.instruments} | {
             RECESSION_SERIES
         }
@@ -1603,11 +1808,6 @@ class LocalWarehouse:
                 "benchmark_rate_board": _stage_timed("pf.benchmark_rate_board")(
                     lambda: compute_benchmark_rate_board(
                         _select_series(latest_by_series, board_ids), board
-                    )
-                ),
-                "funding": _stage_timed("pf.funding")(
-                    lambda: compute_funding_features(
-                        _select_series(latest_by_series, funding_ids), funding_cfg
                     )
                 ),
                 "inflation": _stage_timed("pf.inflation")(
@@ -1704,11 +1904,16 @@ class LocalWarehouse:
         # stress gauge, CRDT credit spreads (configs under config/).
         self.conn.execute("DELETE FROM gold_benchmark_rate_board")
         self._insert("gold_benchmark_rate_board", computed["benchmark_rate_board"])
-        funding = computed["funding"]
-        self.conn.execute("DELETE FROM gold_funding_tape_daily")
-        self._insert("gold_funding_tape_daily", funding["tape"])
-        self.conn.execute("DELETE FROM gold_funding_stress_daily")
-        self._insert("gold_funding_stress_daily", funding["stress"])
+        # spec003 Phase 3: third incremental table (tape), plus its always-
+        # full-recompute cross-sectional companion (stress) -- see
+        # _build_funding_stress_daily's docstring for why stress isn't
+        # checkpointed like the tape is.
+        _stage_timed("funding_tape_daily_incremental")(self._build_funding_tape_daily)(
+            latest_by_series, funding_cfg, touched, full
+        )
+        funding_stress_rows = _stage_timed("funding_stress_daily")(
+            self._build_funding_stress_daily
+        )(funding_cfg)
 
         # spec003 Phase 3: second incremental table, same per-entity pattern
         # as gold_curve_spread_daily above. Unlike that table, downstream
@@ -1905,7 +2110,7 @@ class LocalWarehouse:
                 ns_factor_rows=ns_factor_rows,
                 feature_transform_rows=feature_transform_rows,
                 credit_spread_rows=credit_rows,
-                funding_stress_rows=funding["stress"],
+                funding_stress_rows=funding_stress_rows,
                 regime_rows=regime_rows,
                 cfg=rec_cfg,
             ),

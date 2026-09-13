@@ -794,3 +794,103 @@ def test_incremental_credit_spread_daily_backfill_triggers_full_recompute(tmp_pa
     )
     assert [dict(r) for r in got] == expected
     wh.close()
+
+
+# ---- spec003 Phase 3: gold_funding_tape/stress_daily incremental end-to-end -
+
+
+def _funding_tape_rows(wh, name):
+    return wh.query(
+        "SELECT * FROM gold_funding_tape_daily WHERE metric_name=? "
+        "ORDER BY observation_date",
+        (name,),
+    )
+
+
+def test_incremental_funding_tape_daily_metric_skip_then_append(tmp_path):
+    wh = LocalWarehouse(_config(), db_path=str(tmp_path / "f.db"))
+    wh.merge_silver([_obs_row("SOFR", "2024-01-02", 5.31, "2024-01-02T00:00:00Z")])
+    wh.build_gold()
+    first = _funding_tape_rows(wh, "SOFR")
+    assert len(first) == 1
+    checkpoint = _checkpoint(wh, "SOFR", "gold_funding_tape_daily")
+    assert checkpoint is not None and checkpoint["frontier_date"] == "2024-01-02"
+
+    # No changes -> skipped, not recomputed.
+    wh.build_gold()
+    assert _funding_tape_rows(wh, "SOFR") == first
+    assert (
+        _checkpoint(wh, "SOFR", "gold_funding_tape_daily")["updated_at"]
+        == checkpoint["updated_at"]
+    )
+
+    # A new observation -> appended, not a full rebuild.
+    wh.merge_silver([_obs_row("SOFR", "2024-01-03", 5.33, "2024-01-03T00:00:00Z")])
+    wh.build_gold()
+    after = _funding_tape_rows(wh, "SOFR")
+    assert [r["observation_date"] for r in after] == ["2024-01-02", "2024-01-03"]
+    assert after[0] == first[0]
+    wh.close()
+
+
+def test_incremental_funding_tape_daily_spread_entity(tmp_path):
+    wh = LocalWarehouse(_config(), db_path=str(tmp_path / "f.db"))
+    wh.merge_silver(
+        [
+            _obs_row("SOFR", "2024-01-02", 5.31, "2024-01-02T00:00:00Z"),
+            _obs_row("EFFR", "2024-01-02", 5.33, "2024-01-02T00:00:00Z"),
+        ]
+    )
+    wh.build_gold()
+    rows = _funding_tape_rows(wh, "SOFR_EFFR")
+    assert len(rows) == 1
+    assert rows[0]["value"] == pytest.approx(5.31 - 5.33)
+    assert rows[0]["metric_type"] == "spread"
+    assert _checkpoint(wh, "SOFR_EFFR", "gold_funding_tape_daily") is not None
+    wh.close()
+
+
+def test_funding_stress_daily_matches_full_recompute_and_updates_with_new_data(
+    tmp_path,
+):
+    from fred_pipeline.terminal_views import compute_funding_features
+
+    wh = LocalWarehouse(_config(), db_path=str(tmp_path / "f.db"))
+    day1 = [
+        _obs_row("SOFR", "2024-01-02", 5.31, "2024-01-02T00:00:00Z"),
+        _obs_row("EFFR", "2024-01-02", 5.33, "2024-01-02T00:00:00Z"),
+        _obs_row("IORB", "2024-01-02", 5.40, "2024-01-02T00:00:00Z"),
+        _obs_row("TGCRRATE", "2024-01-02", 5.30, "2024-01-02T00:00:00Z"),
+    ]
+    wh.merge_silver(day1)
+    wh.build_gold()
+
+    latest = wh.query("SELECT * FROM gold_fred_latest_observation")
+    for r in latest:
+        r["is_missing"] = bool(r["is_missing"])
+    from fred_pipeline.rates_complex_config import load_funding_config
+
+    expected = compute_funding_features(latest, load_funding_config())["stress"]
+    got = wh.query("SELECT * FROM gold_funding_stress_daily ORDER BY observation_date")
+    assert [dict(r) for r in got] == expected
+    assert len(got) == 1  # the one date with all 3 components
+
+    # A second date must be picked up too, even though stress is never
+    # checkpointed -- it's a fresh full recompute every build.
+    day2 = [
+        _obs_row("SOFR", "2024-01-03", 5.32, "2024-01-03T00:00:00Z"),
+        _obs_row("EFFR", "2024-01-03", 5.33, "2024-01-03T00:00:00Z"),
+        _obs_row("IORB", "2024-01-03", 5.40, "2024-01-03T00:00:00Z"),
+        _obs_row("TGCRRATE", "2024-01-03", 5.31, "2024-01-03T00:00:00Z"),
+    ]
+    wh.merge_silver(day2)
+    wh.build_gold()
+
+    latest = wh.query("SELECT * FROM gold_fred_latest_observation")
+    for r in latest:
+        r["is_missing"] = bool(r["is_missing"])
+    expected2 = compute_funding_features(latest, load_funding_config())["stress"]
+    got2 = wh.query("SELECT * FROM gold_funding_stress_daily ORDER BY observation_date")
+    assert [dict(r) for r in got2] == expected2
+    assert len(got2) == 2
+    wh.close()

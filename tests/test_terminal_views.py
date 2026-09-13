@@ -1204,6 +1204,7 @@ from fred_pipeline.terminal_views import (
     compute_credit_spread_daily,
     compute_funding_features,
     resume_credit_spread_daily,
+    resume_funding_tape_entry,
 )
 
 
@@ -1360,6 +1361,68 @@ def test_funding_stress_requires_all_components():
     out = compute_funding_features(rows, cfg)  # IORB absent
     assert [r["metric_name"] for r in out["tape"]] == ["SOFR_EFFR"]
     assert out["stress"] == []  # gauge needs every component
+
+
+# ---- spec003 Phase 3: resumable funding tape --------------------------------
+
+
+def _funding_test_rows():
+    rows = []
+    for d, sofr, effr in [
+        ("2024-01-02", 5.31, 5.33),
+        ("2024-01-03", 5.31, 5.33),
+        ("2024-01-04", 5.32, 5.33),
+        ("2024-01-05", 5.45, 5.33),
+    ]:
+        rows += [_row("SOFR", d, sofr), _row("EFFR", d, effr)]
+    rows.append(_row("WRESBAL", "2024-01-03", 3500.0))
+    return rows
+
+
+def test_resume_funding_tape_entry_matches_full_recompute_for_a_metric():
+    rows = _funding_test_rows()
+    expected = [
+        r
+        for r in compute_funding_features(rows, _funding_cfg())["tape"]
+        if r["metric_name"] == "SOFR"
+    ]
+    points = _group_sorted(rows).get("SOFR", [])
+    _state, out = resume_funding_tape_entry("SOFR", "rate", points, None)
+    assert out == expected
+
+
+@pytest.mark.parametrize("k", [0, 1, 2, 3, 4])
+def test_resume_funding_tape_entry_is_exact_across_a_split_point_for_a_metric(k):
+    rows = _funding_test_rows()
+    expected = [
+        r
+        for r in compute_funding_features(rows, _funding_cfg())["tape"]
+        if r["metric_name"] == "SOFR"
+    ]
+    points = _group_sorted(rows).get("SOFR", [])
+    state, out1 = resume_funding_tape_entry("SOFR", "rate", points[:k], None)
+    _state, out2 = resume_funding_tape_entry("SOFR", "rate", points[k:], state)
+    assert out1 + out2 == expected
+
+
+def test_resume_funding_tape_entry_matches_full_recompute_for_a_spread():
+    """The spread entity type (long - short, pre-differenced on common
+    dates) must produce the same output as the metric type through the
+    identical resumable function -- confirming the shared engine handles
+    both tape row kinds correctly, not just raw metrics."""
+    rows = _funding_test_rows()
+    expected = [
+        r
+        for r in compute_funding_features(rows, _funding_cfg())["tape"]
+        if r["metric_name"] == "SOFR_EFFR"
+    ]
+    by_series = _group_sorted(rows)
+    short_map = dict(by_series["EFFR"])
+    diff_points = [
+        (d, v - short_map[d]) for d, v in by_series["SOFR"] if d in short_map
+    ]
+    _state, out = resume_funding_tape_entry("SOFR_EFFR", "spread", diff_points, None)
+    assert out == expected
 
 
 def test_credit_spread_daily_stress_and_recession():
