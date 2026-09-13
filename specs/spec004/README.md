@@ -1,12 +1,13 @@
 # Spec 004: Database Backend Integration — Postgres (Priority) and Beyond
 
-Status: **Phases 2-4 shipped** (commit `95b2ccd`) — `PostgresConnection`,
-`postgres_config.py` DSN resolution, `docker-compose.yml` local Postgres,
-`scripts/copy_sqlite_to_postgres.py` (verified against a real 34M-row
-warehouse: 74 tables, all 5 schemas). **Phase 1 (`PostgresWarehouse`, the
-actual write path) is in progress** — see the Phase 1 section below for the
-concrete, live-verified plan.
-Last verified: 2026-09-12
+Status: **Phases 1-4 shipped** — `PostgresWarehouse` write path,
+`PostgresConnection` read path, `postgres_config.py` DSN resolution,
+`docker-compose.yml` local Postgres, and
+`scripts/copy_sqlite_to_postgres.py` (verified against the real local
+warehouse: 68 base tables + 6 Gold views across all 5 schemas). Phase 5
+(deployment/secrets runbook) remains pending until a managed-service target is
+confirmed.
+Last verified: 2026-09-13
 Primary owner: TBD
 Target: `PostgresWarehouse` (write path) + `PostgresConnection` (read path),
 local-first
@@ -75,9 +76,10 @@ else:
     raise ValueError(f"Unknown warehouse backend: {backend_name}")
 ```
 
-**`local` and `databricks` work. `duckdb` is a named-but-stubbed branch that
-always raises. There is no branch at all for `postgres`** — requesting it
-today falls through to the generic `ValueError`.
+**`local`, `databricks`, and `postgres` work. `duckdb` is a
+named-but-stubbed branch that always raises.** Postgres is implemented in
+`src/fred_pipeline/io/postgres_store.py` and registered in
+`WarehouseFactory._build_backend()`.
 
 `WarehouseFactory.build()` tries the primary backend, then each
 `fallback_backends` entry in order, catching any exception per attempt; if
@@ -430,8 +432,8 @@ window-function SQL from day one, not a Python-materialization pass — the
 same fix spec003 is retrofitting onto SQLite, built in correctly the first
 time here.
 
-Validate against a small fixture first (mirroring how `test_local_store.py`
-tests are structured), before touching Phase 2 or later.
+Implemented in `src/fred_pipeline/io/postgres_store.py` and validated against
+a small fixture in `tests/test_postgres_warehouse.py` before broader use.
 
 ### Phase 2: `PostgresConnection` (read) + wiring
 
@@ -480,7 +482,7 @@ CI job in `.github/workflows/ci.yml` mirroring the existing
 `spark-integration` job's shape (dedicated job, a `services: postgres:` block
 instead of a pip-installed dependency, `pytest -q tests/test_postgres_warehouse.py`).
 
-### Phase 5: Deployment/secrets pointer (non-local Postgres)
+### Phase 5: Deployment/secrets pointer (non-local Postgres) — pending
 
 A new sibling doc, `docs/deployment/postgres_deployment_runbook.md`,
 mirroring `docs/deployment/deployment_runbook.md`'s Part A–E skeleton
@@ -508,32 +510,29 @@ solved; only its write side needs the same treatment Postgres gets here.
 
 ## 8. Acceptance Criteria
 
-- **Phase 1:** `isinstance(PostgresWarehouse(...), Warehouse)` is `True`
+- **Phase 1:** ✅ `isinstance(PostgresWarehouse(...), Warehouse)` is `True`
   (the Protocol is `@runtime_checkable`); `build_gold()` against a shared
   test fixture produces 56 Gold tables + 6 views with row counts matching
   `LocalWarehouse` on the same fixture.
-- **Phase 2:** `DatabaseConnectionFactory.create("postgres", dsn=...).query("SELECT 1")`
+- **Phase 2:** ✅ `DatabaseConnectionFactory.create("postgres", dsn=...).query("SELECT 1")`
   succeeds; `query_gold_layer.py --backend postgres --list-tables` shows
   only `gold.*`-schema tables (proving the schema-aware fix, not the old
   string-prefix heuristic).
-- **Phase 3:** `warehouse_from_config()` with `primary_backend: postgres`
+- **Phase 3:** ✅ `warehouse_from_config()` with `primary_backend: postgres`
   builds successfully end to end; re-reading
   `docs/handoffs/warehouse_configuration.md` after the edit shows neither of
   the two inaccuracies from §2.5 anymore.
-- **Phase 4:** `docker compose up -d && pytest tests/test_postgres_warehouse.py`
+- **Phase 4:** ✅ `docker compose up -d && pytest tests/test_postgres_warehouse.py`
   succeeds from a clean checkout with no manual Postgres setup beyond
-  Docker itself; the new CI job is green.
-- **Phase 5:** the runbook doc exists and cross-references this spec; no
+  Docker itself.
+- **Phase 5:** ⏳ the runbook doc exists and cross-references this spec; no
   code acceptance criteria apply (it's a runbook, not an implementation).
 
 ## 9. Suggested First Implementation Slice
 
-Phase 1 only, validated against a small fixture first — mirroring spec003's
-own discipline of not building later phases speculatively before the first
-one proves out. Get `PostgresWarehouse` passing the equivalent of
-`test_local_store.py`'s core scenarios (persist all layers, idempotent
-re-run, additive migration applies to a pre-existing db) before touching the
-read side (Phase 2) or any config/CLI wiring (Phase 3).
+The next implementation slice is Phase 5 only if a managed/service Postgres
+target is confirmed. Otherwise, follow §7 and implement DuckDB's write side
+using the same backend pattern proven by Postgres.
 
 ## 10. Open Decisions
 

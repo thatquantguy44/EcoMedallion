@@ -64,12 +64,11 @@ sqlite3 fred.db "SELECT * FROM gold_fred_latest_observation LIMIT 10;"
 
 ### Postgres — Configurable Local or Service Target
 
-**Status:** Config/DSN resolution and read-only query connection are wired.
-The write-side `PostgresWarehouse` is still pending in
-[`specs/spec004`](../../specs/spec004/README.md). Priority: this is the
-**next** backend to build, ahead of DuckDB — a sibling project
-(`market_terminal`) is blocked on a Postgres write path from this pipeline
-(see the spec's §1 for the exact dependency).
+**Status:** Config/DSN resolution, read-only query connection, local Docker
+service, SQLite-to-Postgres sync tooling, and write-side `PostgresWarehouse`
+are wired. Deployment/secrets runbook work is still pending in
+[`specs/spec004`](../../specs/spec004/README.md), gated on a confirmed
+managed-service target.
 
 **Why you'd want this over SQLite:** concurrent writes (SQLite allows only one
 writer at a time), and a schema-qualified `gold.<table>` naming convention
@@ -109,8 +108,8 @@ Service mode intentionally has no built-in DSN default. Set
 `FRED_POSTGRES_SERVICE_DSN`, `DATABASE_URL`, `FRED_POSTGRES_DSN`, or an
 explicit `dsn` in a secrets-managed config.
 
-Until the write backend ships, use `local` (SQLite) for pipeline writes. The
-Postgres read path can query an existing local or service database with:
+Use `primary_backend: postgres` to write pipeline runs directly to Postgres.
+The read path can query an existing local or service database with:
 
 ```bash
 python scripts/query_gold_layer.py --backend postgres --schema gold --list-tables
@@ -435,7 +434,7 @@ follow that spec rather than re-deriving these decisions from scratch.
 |---|---|---|
 | Local (SQLite) | ✅ Production-ready | Default, fully tested |
 | Databricks | ✅ Production-ready | Requires workspace |
-| Local (Postgres) | 📋 Spec'd, not implemented | See `specs/spec004` — next backend to build |
+| Local (Postgres) | ✅ Implemented | Write/read backend, local Docker service, and SQLite sync tool |
 | DuckDB | ⏳ Planned | Write side stubbed (`NotImplementedError`); read side (`DuckDBConnection`) already works |
 | BigQuery | ⏳ Planned | No design yet; low priority (no known demand) |
 | Snowflake | ⏳ Planned | No design yet; low priority (no known demand) |

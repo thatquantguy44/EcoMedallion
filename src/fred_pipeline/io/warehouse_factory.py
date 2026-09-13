@@ -192,17 +192,9 @@ class WarehouseFactory:
             )
 
         elif backend_name == "postgres":
-            from fred_pipeline.io.postgres_config import (
-                redact_postgres_dsn,
-                resolve_postgres_settings,
-            )
+            from fred_pipeline.io.postgres_store import PostgresWarehouse
 
-            settings = resolve_postgres_settings(backend_config)
-            raise NotImplementedError(
-                "Postgres warehouse write backend is not implemented yet "
-                "(Spec004 Phase 1 pending). Config resolved target="
-                f"{settings.target!r}, dsn={redact_postgres_dsn(settings.dsn)!r}."
-            )
+            return PostgresWarehouse(self.config, **backend_config)
 
         else:
             raise ValueError(f"Unknown warehouse backend: {backend_name}")
