@@ -206,6 +206,11 @@ def test_powerbi_catalog_covers_gold_tables():
     from fred_pipeline import local_store
 
     exempt = {
+        # spec003 Phase 3: internal bookkeeping for incremental Gold rebuilds
+        # (per-entity resumable computation state, last-build watermark) --
+        # not a reportable object, no report should bind to it.
+        "incremental_checkpoint",
+        "build_watermark",
         # Superseded for reporting by the terminal views; kept for backward
         # compatibility with earlier consumers.
         "fred_macro_feature_daily",
@@ -224,9 +229,7 @@ def test_powerbi_catalog_covers_gold_tables():
     }
     objects = set(
         re.findall(r"CREATE TABLE IF NOT EXISTS gold_(\w+)", local_store._SCHEMA)
-    ) | set(
-        re.findall(r"CREATE VIEW IF NOT EXISTS gold_(\w+)", local_store._SCHEMA)
-    )
+    ) | set(re.findall(r"CREATE VIEW IF NOT EXISTS gold_(\w+)", local_store._SCHEMA))
     cataloged = {r["object_name"] for r in POWERBI_CATALOG}
     missing = objects - cataloged - exempt
     assert not missing, (
@@ -244,9 +247,7 @@ def test_powerbi_catalog_has_no_phantom_entries():
 
     objects = set(
         re.findall(r"CREATE TABLE IF NOT EXISTS gold_(\w+)", local_store._SCHEMA)
-    ) | set(
-        re.findall(r"CREATE VIEW IF NOT EXISTS gold_(\w+)", local_store._SCHEMA)
-    )
+    ) | set(re.findall(r"CREATE VIEW IF NOT EXISTS gold_(\w+)", local_store._SCHEMA))
     phantom = {r["object_name"] for r in POWERBI_CATALOG} - objects
     assert not phantom, (
         f"POWERBI_CATALOG lists objects that do not exist in Gold: {sorted(phantom)}"

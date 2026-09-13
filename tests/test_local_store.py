@@ -5,7 +5,11 @@ from fred_pipeline.config import Environment, PipelineConfig
 from fred_pipeline.local_store import LocalWarehouse
 from fred_pipeline.manifest import SeriesSpec
 from fred_pipeline.pipeline import FredPipeline
-from fred_pipeline.transform import daily_feature_matrix, latest_by_observation
+from fred_pipeline.transform import (
+    _row_hash,
+    daily_feature_matrix,
+    latest_by_observation,
+)
 
 
 def _config():
@@ -131,6 +135,9 @@ def test_local_backend_gold_views_exist_and_match_tables(
         "gold_v_series_revision_summary",
         "gold_v_source_coverage",
         "gold_v_company_ratio_ranks",
+        # gold_fred_point_in_time is itself a view now (spec003 section 7) --
+        # a pure 1:1 mirror of Silver, identical to gold_v_point_in_time.
+        "gold_fred_point_in_time",
     }
 
     latest_table = wh.query("SELECT * FROM gold_fred_latest_observation")
@@ -175,7 +182,8 @@ def test_local_sql_core_gold_rebuild_matches_python_output(tmp_path):
     ]
     wh.merge_silver(rows)
 
-    wh._rebuild_gold_point_in_time_sql()
+    # gold_fred_point_in_time is a live VIEW over Silver (spec003 section 7)
+    # -- no rebuild call needed, it already reflects the merge above.
     wh._rebuild_gold_latest_observation_sql()
 
     pit_cols = [
@@ -237,11 +245,11 @@ def test_local_gold_rebuild_rolls_back_on_failure(tmp_path, monkeypatch):
     wh = LocalWarehouse(_config(), db_path=str(tmp_path / "f.db"))
     wh.conn.execute(
         """
-        INSERT INTO gold_fred_point_in_time (
-            series_id, observation_date, realtime_start, realtime_end, value,
-            revision_number, is_missing, ingested_at
+        INSERT INTO gold_fred_latest_observation (
+            series_id, observation_date, value, realtime_start, realtime_end,
+            is_missing, revision_number, ingested_at
         )
-        VALUES ('OLD', '2024-01-01', '', '', 1.0, 1, 0, 'old')
+        VALUES ('OLD', '2024-01-01', 1.0, '', '', 0, 1, 'old')
         """
     )
     wh.conn.commit()
@@ -263,16 +271,18 @@ def test_local_gold_rebuild_rolls_back_on_failure(tmp_path, monkeypatch):
         ]
     )
 
-    def fail_point_in_time_sql():
-        wh.conn.execute("DELETE FROM gold_fred_point_in_time")
+    def fail_latest_observation_sql():
+        wh.conn.execute("DELETE FROM gold_fred_latest_observation")
         raise RuntimeError("boom")
 
-    monkeypatch.setattr(wh, "_rebuild_gold_point_in_time_sql", fail_point_in_time_sql)
+    monkeypatch.setattr(
+        wh, "_rebuild_gold_latest_observation_sql", fail_latest_observation_sql
+    )
 
     with pytest.raises(RuntimeError, match="boom"):
         wh.build_gold()
 
-    rows = wh.query("SELECT series_id FROM gold_fred_point_in_time")
+    rows = wh.query("SELECT series_id FROM gold_fred_latest_observation")
     assert rows == [{"series_id": "OLD"}]
     wh.close()
 
@@ -328,7 +338,7 @@ def test_source_is_part_of_natural_key(tmp_path):
         "value": 1.0,
         "raw_value": "1.0",
         "is_missing": False,
-        "row_hash": "h",
+        "row_hash": _row_hash("X", "2024-01-01", "", "1.0"),
         "revision_number": 1,
         "ingested_at": "t",
         "run_id": "r",
@@ -338,11 +348,87 @@ def test_source_is_part_of_natural_key(tmp_path):
     # same (series_id, date, realtime) but different source -> two distinct rows
     assert wh.query("SELECT count(*) c FROM silver_fred_observation")[0]["c"] == 2
 
-    # re-merging the fred row updates in place (idempotent per source)
-    wh.merge_silver([{**base, "source": "fred", "value": 2.0}])
+    # re-merging the fred row with a genuinely changed value (and thus a
+    # changed row_hash, exactly as real normalize() output would produce)
+    # updates in place (idempotent per source)
+    wh.merge_silver(
+        [
+            {
+                **base,
+                "source": "fred",
+                "value": 2.0,
+                "raw_value": "2.0",
+                "row_hash": _row_hash("X", "2024-01-01", "", "2.0"),
+            }
+        ]
+    )
     assert wh.query("SELECT count(*) c FROM silver_fred_observation")[0]["c"] == 2
     got = wh.query("SELECT value FROM silver_fred_observation WHERE source='fred'")
     assert got[0]["value"] == 2.0
+    wh.close()
+
+
+def test_merge_silver_leaves_ingested_at_unchanged_on_byte_identical_reupsert(
+    tmp_path,
+):
+    """spec003 Phase 3 prerequisite: restate_last_n re-pulls the trailing ~90
+    observations of nearly every series on every routine run regardless of
+    whether any value actually changed. If a byte-identical re-upsert bumped
+    ingested_at anyway, "series touched since the last Gold build" would mean
+    "every series, every run" -- there would be no incremental signal to act
+    on. row_hash (unchanged here) must gate the update, not just the upsert
+    key matching."""
+    wh = LocalWarehouse(_config(), db_path=str(tmp_path / "f.db"))
+    row = {
+        "source": "fred",
+        "series_id": "X",
+        "observation_date": "2024-01-01",
+        "realtime_start": "",
+        "realtime_end": "",
+        "value": 1.0,
+        "raw_value": "1.0",
+        "is_missing": False,
+        "row_hash": _row_hash("X", "2024-01-01", "", "1.0"),
+        "revision_number": 1,
+        "ingested_at": "2024-01-01T00:00:00+00:00",
+        "run_id": "r1",
+    }
+    wh.merge_silver([row])
+
+    # Re-upsert the identical content under a later run_id/ingested_at, the
+    # exact shape a routine run's restate window produces for an unchanged
+    # observation.
+    wh.merge_silver(
+        [{**row, "ingested_at": "2024-06-01T00:00:00+00:00", "run_id": "r2"}]
+    )
+
+    got = wh.query(
+        "SELECT ingested_at, run_id FROM silver_fred_observation WHERE series_id='X'"
+    )
+    assert len(got) == 1
+    assert got[0]["ingested_at"] == "2024-01-01T00:00:00+00:00"
+    assert got[0]["run_id"] == "r1"
+
+    # A genuine value change (different row_hash) still updates in place.
+    wh.merge_silver(
+        [
+            {
+                **row,
+                "value": 2.0,
+                "raw_value": "2.0",
+                "row_hash": _row_hash("X", "2024-01-01", "", "2.0"),
+                "ingested_at": "2024-06-01T00:00:00+00:00",
+                "run_id": "r2",
+            }
+        ]
+    )
+    got = wh.query(
+        "SELECT value, ingested_at, run_id FROM silver_fred_observation WHERE series_id='X'"
+    )
+    assert len(got) == 1
+    assert got[0]["value"] == 2.0
+    assert got[0]["ingested_at"] == "2024-06-01T00:00:00+00:00"
+    assert got[0]["run_id"] == "r2"
     wh.close()
 
 
@@ -423,3 +509,388 @@ def test_daily_feature_matrix_forward_fills():
     assert [r["as_of_date"] for r in rows] == ["2024-01-01", "2024-01-02", "2024-01-03"]
     assert [r["value"] for r in rows] == [1.0, 1.0, 2.0]  # jan-02 forward-filled
     assert rows[1]["raw_value"] is None  # no native release on jan-02
+
+
+# ---- spec003 Phase 3: gold_curve_spread_daily incremental end-to-end -------
+
+
+def _obs_row(series_id, observation_date, value, ingested_at, run_id="r"):
+    raw = str(value)
+    return {
+        "source": "fred",
+        "series_id": series_id,
+        "observation_date": observation_date,
+        "realtime_start": "",
+        "realtime_end": "",
+        "value": value,
+        "raw_value": raw,
+        "is_missing": False,
+        "row_hash": _row_hash(series_id, observation_date, "", raw),
+        "revision_number": 1,
+        "ingested_at": ingested_at,
+        "run_id": run_id,
+    }
+
+
+def _checkpoint(wh, entity_key="T10Y2Y", table_name="gold_curve_spread_daily"):
+    row = wh.query(
+        "SELECT frontier_date, state_json, updated_at FROM "
+        "gold_incremental_checkpoint WHERE table_name=? AND entity_key=?",
+        (table_name, entity_key),
+    )
+    return row[0] if row else None
+
+
+def _spread_rows(wh, spread_name="T10Y2Y"):
+    return wh.query(
+        "SELECT * FROM gold_curve_spread_daily WHERE spread_name=? "
+        "ORDER BY observation_date",
+        (spread_name,),
+    )
+
+
+def _credit_rows(wh, instrument="HY_OAS"):
+    return wh.query(
+        "SELECT * FROM gold_credit_spread_daily WHERE instrument=? "
+        "ORDER BY observation_date",
+        (instrument,),
+    )
+
+
+def test_incremental_curve_spread_daily_second_build_skips_untouched_spread(
+    tmp_path,
+):
+    wh = LocalWarehouse(_config(), db_path=str(tmp_path / "f.db"))
+    wh.merge_silver(
+        [
+            _obs_row("DGS10", "2024-01-02", 4.0, "2024-01-02T00:00:00Z"),
+            _obs_row("DGS2", "2024-01-02", 3.8, "2024-01-02T00:00:00Z"),
+        ]
+    )
+    wh.build_gold()
+
+    first_rows = _spread_rows(wh)
+    assert len(first_rows) == 1
+    first_checkpoint = _checkpoint(wh)
+    assert first_checkpoint is not None
+    assert first_checkpoint["frontier_date"] == "2024-01-02"
+
+    # No Silver changes -> the second build must skip this spread entirely,
+    # not just produce identical output via a redundant recompute.
+    wh.build_gold()
+    assert _spread_rows(wh) == first_rows
+    assert _checkpoint(wh)["updated_at"] == first_checkpoint["updated_at"]
+    wh.close()
+
+
+def test_incremental_curve_spread_daily_appends_new_observation(tmp_path):
+    wh = LocalWarehouse(_config(), db_path=str(tmp_path / "f.db"))
+    wh.merge_silver(
+        [
+            _obs_row("DGS10", "2024-01-02", 4.0, "2024-01-02T00:00:00Z"),
+            _obs_row("DGS2", "2024-01-02", 3.8, "2024-01-02T00:00:00Z"),
+        ]
+    )
+    wh.build_gold()
+    before = _spread_rows(wh)
+    assert [r["observation_date"] for r in before] == ["2024-01-02"]
+
+    # A new trailing observation, strictly past the checkpoint frontier.
+    wh.merge_silver(
+        [
+            _obs_row("DGS10", "2024-01-03", 4.1, "2024-01-03T00:00:00Z"),
+            _obs_row("DGS2", "2024-01-03", 3.9, "2024-01-03T00:00:00Z"),
+        ]
+    )
+    wh.build_gold()
+    after = _spread_rows(wh)
+    assert [r["observation_date"] for r in after] == ["2024-01-02", "2024-01-03"]
+    # The already-written first row is untouched by the append.
+    assert after[0] == before[0]
+    assert _checkpoint(wh)["frontier_date"] == "2024-01-03"
+    wh.close()
+
+
+def test_incremental_curve_spread_daily_backfill_triggers_full_recompute(tmp_path):
+    from fred_pipeline.terminal_views import compute_curve_spread_daily
+
+    wh = LocalWarehouse(_config(), db_path=str(tmp_path / "f.db"))
+    wh.merge_silver(
+        [
+            _obs_row("DGS10", "2024-01-02", 4.0, "2024-01-02T00:00:00Z"),
+            _obs_row("DGS2", "2024-01-02", 3.8, "2024-01-02T00:00:00Z"),
+            _obs_row("DGS10", "2024-01-03", 4.1, "2024-01-03T00:00:00Z"),
+            _obs_row("DGS2", "2024-01-03", 3.9, "2024-01-03T00:00:00Z"),
+        ]
+    )
+    wh.build_gold()
+    assert _checkpoint(wh)["frontier_date"] == "2024-01-03"
+
+    # Revise the OLDER date (2024-01-02), a genuine value change -> row_hash
+    # differs -> ingested_at advances -> min_touched (01-02) <= frontier
+    # (01-03) -> the backfill branch, not the append branch.
+    wh.merge_silver([_obs_row("DGS10", "2024-01-02", 4.5, "2024-06-01T00:00:00Z")])
+    wh.build_gold()
+
+    got = _spread_rows(wh)
+    # Ground truth: a full, from-scratch compute over the final Silver state.
+    latest = wh.query("SELECT * FROM gold_fred_latest_observation")
+    for r in latest:
+        r["is_missing"] = bool(r["is_missing"])
+    from fred_pipeline.spread_config import SpreadDef
+
+    expected = [
+        r
+        for r in compute_curve_spread_daily(
+            latest, [SpreadDef("T10Y2Y", "DGS10", "DGS2")]
+        )
+    ]
+    assert [dict(r) for r in got] == expected
+    wh.close()
+
+
+def test_incremental_curve_spread_daily_new_config_entry_builds_even_if_untouched(
+    tmp_path, monkeypatch
+):
+    """A spread with no checkpoint yet must be built on its first
+    opportunity even if neither leg happens to be in this run's touched
+    set (e.g. a config entry added after the legs were already ingested)."""
+    from fred_pipeline.spread_config import SpreadDef
+
+    wh = LocalWarehouse(_config(), db_path=str(tmp_path / "f.db"))
+    wh.merge_silver(
+        [
+            _obs_row("DGS10", "2024-01-02", 4.0, "2024-01-02T00:00:00Z"),
+            _obs_row("DGS2", "2024-01-02", 3.8, "2024-01-02T00:00:00Z"),
+        ]
+    )
+    wh.build_gold()
+    assert _checkpoint(wh, "T10Y2Y") is not None
+
+    # Advance the watermark past this data (simulating time passing with no
+    # further Silver activity), then "add" a new spread config entry whose
+    # legs were already ingested before this run -- neither leg is in the
+    # touched set this time.
+    import fred_pipeline.spread_config as spread_config_module
+
+    original = spread_config_module.load_spread_defs
+
+    def _with_new_entry(*a, **kw):
+        return [*original(*a, **kw), SpreadDef("T10Y2Y_DUP", "DGS10", "DGS2")]
+
+    monkeypatch.setattr("fred_pipeline.spread_config.load_spread_defs", _with_new_entry)
+    wh.build_gold()
+    assert _checkpoint(wh, "T10Y2Y_DUP") is not None
+    assert len(_spread_rows(wh, "T10Y2Y_DUP")) == 1
+    wh.close()
+
+
+def test_gold_full_bypasses_incrementality_and_resets_checkpoints(tmp_path):
+    wh = LocalWarehouse(_config(), db_path=str(tmp_path / "f.db"))
+    wh.merge_silver(
+        [
+            _obs_row("DGS10", "2024-01-02", 4.0, "2024-01-02T00:00:00Z"),
+            _obs_row("DGS2", "2024-01-02", 3.8, "2024-01-02T00:00:00Z"),
+        ]
+    )
+    wh.build_gold()
+    assert _checkpoint(wh) is not None
+
+    wh.build_gold(full=True)
+    # --full clears this table's checkpoints; the row content is unchanged
+    # since Silver didn't change, but nothing is left resumable from.
+    assert _checkpoint(wh) is None
+    assert len(_spread_rows(wh)) == 1
+
+    # The very next (non-full) build re-seeds the checkpoint from scratch.
+    wh.build_gold()
+    assert _checkpoint(wh) is not None
+    wh.close()
+
+
+# ---- spec003 Phase 3: gold_credit_spread_daily incremental end-to-end -----
+
+
+def test_incremental_credit_spread_daily_second_build_skips_untouched_instrument(
+    tmp_path,
+):
+    wh = LocalWarehouse(_config(), db_path=str(tmp_path / "f.db"))
+    wh.merge_silver(
+        [_obs_row("BAMLH0A0HYM2", "2024-01-02", 3.5, "2024-01-02T00:00:00Z")]
+    )
+    wh.build_gold()
+
+    first_rows = _credit_rows(wh)
+    assert len(first_rows) == 1
+    first_checkpoint = _checkpoint(wh, "HY_OAS", "gold_credit_spread_daily")
+    assert first_checkpoint is not None
+    assert first_checkpoint["frontier_date"] == "2024-01-02"
+
+    wh.build_gold()
+    assert _credit_rows(wh) == first_rows
+    assert (
+        _checkpoint(wh, "HY_OAS", "gold_credit_spread_daily")["updated_at"]
+        == first_checkpoint["updated_at"]
+    )
+    wh.close()
+
+
+def test_incremental_credit_spread_daily_appends_new_observation(tmp_path):
+    wh = LocalWarehouse(_config(), db_path=str(tmp_path / "f.db"))
+    wh.merge_silver(
+        [_obs_row("BAMLH0A0HYM2", "2024-01-02", 3.5, "2024-01-02T00:00:00Z")]
+    )
+    wh.build_gold()
+    before = _credit_rows(wh)
+
+    wh.merge_silver(
+        [_obs_row("BAMLH0A0HYM2", "2024-01-03", 3.6, "2024-01-03T00:00:00Z")]
+    )
+    wh.build_gold()
+    after = _credit_rows(wh)
+    assert [r["observation_date"] for r in after] == ["2024-01-02", "2024-01-03"]
+    assert after[0] == before[0]
+    assert after[1]["change_bps"] == pytest.approx(10.0)
+    assert _checkpoint(wh, "HY_OAS", "gold_credit_spread_daily")["frontier_date"] == (
+        "2024-01-03"
+    )
+    wh.close()
+
+
+def test_incremental_credit_spread_daily_backfill_triggers_full_recompute(tmp_path):
+    from fred_pipeline.rates_complex_config import CreditInstrumentDef
+    from fred_pipeline.terminal_views import compute_credit_spread_daily
+
+    wh = LocalWarehouse(_config(), db_path=str(tmp_path / "f.db"))
+    wh.merge_silver(
+        [
+            _obs_row("BAMLH0A0HYM2", "2024-01-02", 3.5, "2024-01-02T00:00:00Z"),
+            _obs_row("BAMLH0A0HYM2", "2024-01-03", 3.6, "2024-01-03T00:00:00Z"),
+        ]
+    )
+    wh.build_gold()
+    assert (
+        _checkpoint(wh, "HY_OAS", "gold_credit_spread_daily")["frontier_date"]
+        == "2024-01-03"
+    )
+
+    # Revise the older date -> backfill branch, not append.
+    wh.merge_silver(
+        [_obs_row("BAMLH0A0HYM2", "2024-01-02", 4.0, "2024-06-01T00:00:00Z")]
+    )
+    wh.build_gold()
+
+    got = _credit_rows(wh)
+    latest = wh.query("SELECT * FROM gold_fred_latest_observation")
+    for r in latest:
+        r["is_missing"] = bool(r["is_missing"])
+    from fred_pipeline.rates_complex_config import CreditConfig
+
+    expected = compute_credit_spread_daily(
+        latest,
+        CreditConfig(
+            instruments=(CreditInstrumentDef("HY_OAS", "BAMLH0A0HYM2", "headline"),)
+        ),
+    )
+    assert [dict(r) for r in got] == expected
+    wh.close()
+
+
+# ---- spec003 Phase 3: gold_funding_tape/stress_daily incremental end-to-end -
+
+
+def _funding_tape_rows(wh, name):
+    return wh.query(
+        "SELECT * FROM gold_funding_tape_daily WHERE metric_name=? "
+        "ORDER BY observation_date",
+        (name,),
+    )
+
+
+def test_incremental_funding_tape_daily_metric_skip_then_append(tmp_path):
+    wh = LocalWarehouse(_config(), db_path=str(tmp_path / "f.db"))
+    wh.merge_silver([_obs_row("SOFR", "2024-01-02", 5.31, "2024-01-02T00:00:00Z")])
+    wh.build_gold()
+    first = _funding_tape_rows(wh, "SOFR")
+    assert len(first) == 1
+    checkpoint = _checkpoint(wh, "SOFR", "gold_funding_tape_daily")
+    assert checkpoint is not None and checkpoint["frontier_date"] == "2024-01-02"
+
+    # No changes -> skipped, not recomputed.
+    wh.build_gold()
+    assert _funding_tape_rows(wh, "SOFR") == first
+    assert (
+        _checkpoint(wh, "SOFR", "gold_funding_tape_daily")["updated_at"]
+        == checkpoint["updated_at"]
+    )
+
+    # A new observation -> appended, not a full rebuild.
+    wh.merge_silver([_obs_row("SOFR", "2024-01-03", 5.33, "2024-01-03T00:00:00Z")])
+    wh.build_gold()
+    after = _funding_tape_rows(wh, "SOFR")
+    assert [r["observation_date"] for r in after] == ["2024-01-02", "2024-01-03"]
+    assert after[0] == first[0]
+    wh.close()
+
+
+def test_incremental_funding_tape_daily_spread_entity(tmp_path):
+    wh = LocalWarehouse(_config(), db_path=str(tmp_path / "f.db"))
+    wh.merge_silver(
+        [
+            _obs_row("SOFR", "2024-01-02", 5.31, "2024-01-02T00:00:00Z"),
+            _obs_row("EFFR", "2024-01-02", 5.33, "2024-01-02T00:00:00Z"),
+        ]
+    )
+    wh.build_gold()
+    rows = _funding_tape_rows(wh, "SOFR_EFFR")
+    assert len(rows) == 1
+    assert rows[0]["value"] == pytest.approx(5.31 - 5.33)
+    assert rows[0]["metric_type"] == "spread"
+    assert _checkpoint(wh, "SOFR_EFFR", "gold_funding_tape_daily") is not None
+    wh.close()
+
+
+def test_funding_stress_daily_matches_full_recompute_and_updates_with_new_data(
+    tmp_path,
+):
+    from fred_pipeline.terminal_views import compute_funding_features
+
+    wh = LocalWarehouse(_config(), db_path=str(tmp_path / "f.db"))
+    day1 = [
+        _obs_row("SOFR", "2024-01-02", 5.31, "2024-01-02T00:00:00Z"),
+        _obs_row("EFFR", "2024-01-02", 5.33, "2024-01-02T00:00:00Z"),
+        _obs_row("IORB", "2024-01-02", 5.40, "2024-01-02T00:00:00Z"),
+        _obs_row("TGCRRATE", "2024-01-02", 5.30, "2024-01-02T00:00:00Z"),
+    ]
+    wh.merge_silver(day1)
+    wh.build_gold()
+
+    latest = wh.query("SELECT * FROM gold_fred_latest_observation")
+    for r in latest:
+        r["is_missing"] = bool(r["is_missing"])
+    from fred_pipeline.rates_complex_config import load_funding_config
+
+    expected = compute_funding_features(latest, load_funding_config())["stress"]
+    got = wh.query("SELECT * FROM gold_funding_stress_daily ORDER BY observation_date")
+    assert [dict(r) for r in got] == expected
+    assert len(got) == 1  # the one date with all 3 components
+
+    # A second date must be picked up too, even though stress is never
+    # checkpointed -- it's a fresh full recompute every build.
+    day2 = [
+        _obs_row("SOFR", "2024-01-03", 5.32, "2024-01-03T00:00:00Z"),
+        _obs_row("EFFR", "2024-01-03", 5.33, "2024-01-03T00:00:00Z"),
+        _obs_row("IORB", "2024-01-03", 5.40, "2024-01-03T00:00:00Z"),
+        _obs_row("TGCRRATE", "2024-01-03", 5.31, "2024-01-03T00:00:00Z"),
+    ]
+    wh.merge_silver(day2)
+    wh.build_gold()
+
+    latest = wh.query("SELECT * FROM gold_fred_latest_observation")
+    for r in latest:
+        r["is_missing"] = bool(r["is_missing"])
+    expected2 = compute_funding_features(latest, load_funding_config())["stress"]
+    got2 = wh.query("SELECT * FROM gold_funding_stress_daily ORDER BY observation_date")
+    assert [dict(r) for r in got2] == expected2
+    assert len(got2) == 2
+    wh.close()

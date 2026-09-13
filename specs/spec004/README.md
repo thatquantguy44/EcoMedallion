@@ -1,12 +1,10 @@
 # Spec 004: Database Backend Integration — Postgres (Priority) and Beyond
 
-Status: **Phases 1-4 shipped** — `PostgresWarehouse` write path,
+Status: **closed**. Phases 1-5 are shipped: `PostgresWarehouse` write path,
 `PostgresConnection` read path, `postgres_config.py` DSN resolution,
-`docker-compose.yml` local Postgres, and
-`scripts/copy_sqlite_to_postgres.py` (verified against the real local
-warehouse: 68 base tables + 6 Gold views across all 5 schemas). Phase 5
-(deployment/secrets runbook) remains pending until a managed-service target is
-confirmed.
+`docker-compose.yml` local Postgres, `scripts/copy_sqlite_to_postgres.py`
+(verified against the real local warehouse: 68 base tables + 6 Gold views
+across all 5 schemas), and the Postgres deployment/secrets runbook.
 Last verified: 2026-09-13
 Primary owner: TBD
 Target: `PostgresWarehouse` (write path) + `PostgresConnection` (read path),
@@ -25,22 +23,17 @@ Databricks/Delta for deployment**, behind one connection abstraction
 subsequent phases in deployed environments... Postgres | Standard; `pg`
 driver; **pipeline's `--postgres` publish mode**."*
 
-In plain terms: a downstream consumer is waiting on a Postgres write path from
-this pipeline that does not exist yet. That is the concrete "why now," not a
-hypothetical — and it's why local Postgres is priority 1 rather than a
-directly-to-cloud design: it's the cheapest way to validate the write-path
-design before anyone touches cloud secrets, it's what was directly requested,
-and it removes SQLite's single-writer limitation for local multi-process use
-(the `market_terminal` terminal and this pipeline writing/reading
-concurrently, for instance).
+In plain terms: a downstream consumer was waiting on a Postgres write path
+from this pipeline. That local Postgres path now exists, which removes
+SQLite's single-writer limitation for local multi-process use and gives
+`market_terminal` a schema-qualified `gold.<table>` target compatible with a
+future managed Postgres deployment.
 
-This document is a spec and build plan, not code. It scopes what a Postgres
-backend needs to satisfy (this pipeline's own `Warehouse`/`DatabaseConnection`
-contracts, and the real external contract `market_terminal` already committed
-to), makes the design decisions a future implementer would otherwise have to
-re-derive, and phases the work. It also answers "what's next after Postgres"
-for the broader "various databases" framing, with evidence rather than a
-guess.
+This document now serves as both the original build plan and the status
+record for Spec004. It scopes what the Postgres backend needed to satisfy
+(this pipeline's own `Warehouse`/`DatabaseConnection` contracts, and the real
+external contract `market_terminal` already committed to), records the design
+decisions, and points to follow-up work that belongs outside Spec004.
 
 ## 2. Current State
 
@@ -253,7 +246,7 @@ test this layer.
 - **Full cloud/production Postgres hardening** (managed-service choice, TLS,
   IAM, connection pooling at scale, secrets rotation). Deferred to a
   lightweight Phase 5 pointer doc (§6), not designed in depth here — this
-  matches "local Postgres is priority 1."
+  matches the local-first scope that Phases 1-4 shipped.
 - **Redesigning the Gold schema.** `docs/handoffs/completed/
   market_terminal_gold_views.md` shows all 7 of its phases marked
   **IMPLEMENTED** — the schema (dim_series, dim_date, and ~54 fact tables
@@ -482,17 +475,14 @@ CI job in `.github/workflows/ci.yml` mirroring the existing
 `spark-integration` job's shape (dedicated job, a `services: postgres:` block
 instead of a pip-installed dependency, `pytest -q tests/test_postgres_warehouse.py`).
 
-### Phase 5: Deployment/secrets pointer (non-local Postgres) — pending
+### Phase 5: Deployment/secrets pointer (non-local Postgres) — shipped
 
-A new sibling doc, `docs/deployment/postgres_deployment_runbook.md`,
-mirroring `docs/deployment/deployment_runbook.md`'s Part A–E skeleton
+The sibling doc `docs/deployment/postgres_deployment_runbook.md` mirrors
+`docs/deployment/deployment_runbook.md`'s Part A–E skeleton
 (A: provisioning — managed-service choice, schema/role bootstrap; B: config
-values; C: quant/data decisions, mostly N/A here since it inherits pipeline
-defaults; D: go-live sequence; E: acceptance checks + secrets appendix).
-Explicitly a lightweight pointer, not a full design — consistent with
-"local Postgres is priority 1," and gated on Open Decision #1 (§10): don't
-over-build this phase before `market_terminal`'s own deploy-target decision
-is actually confirmed.
+values; C: secrets/keyring guidance and credential ownership; D: go-live
+sequence; E: acceptance checks + service-target appendix). Explicitly a
+lightweight pointer, not a full cloud architecture design.
 
 ## 7. What's Next After Postgres
 
@@ -525,27 +515,30 @@ solved; only its write side needs the same treatment Postgres gets here.
 - **Phase 4:** ✅ `docker compose up -d && pytest tests/test_postgres_warehouse.py`
   succeeds from a clean checkout with no manual Postgres setup beyond
   Docker itself.
-- **Phase 5:** ⏳ the runbook doc exists and cross-references this spec; no
-  code acceptance criteria apply (it's a runbook, not an implementation).
+- **Phase 5:** ✅ `docs/deployment/postgres_deployment_runbook.md` exists,
+  cross-references this spec, and documents local-vs-service Postgres DSN
+  resolution, required credentials, keyring/secret storage expectations, and
+  smoke checks; no code acceptance criteria apply (it's a runbook, not an
+  implementation).
 
-## 9. Suggested First Implementation Slice
+## 9. Closeout State
 
-The next implementation slice is Phase 5 only if a managed/service Postgres
-target is confirmed. Otherwise, follow §7 and implement DuckDB's write side
-using the same backend pattern proven by Postgres.
+Spec004 is closed. Work beyond this point belongs in a new spec or a focused
+follow-up issue, most likely DuckDB write support (§7), schema drift checks,
+or service-provider-specific Postgres hardening once a concrete managed target
+is chosen.
 
-## 10. Open Decisions
+## 10. Deferred Follow-Ups
 
-**🔴 #1 — `market_terminal`'s own deploy-target decision is still
+**#1 — `market_terminal`'s own deploy-target decision is still
 unconfirmed on their side.** Their D3 lists Postgres *or* Databricks/Delta as
 live options, not a locked choice (§4). Phases 1–4 here (local Postgres,
-write + read) are worth building regardless of their eventual answer — they
+write + read) were worth building regardless of their eventual answer — they
 serve this repo's own goals too (concurrent local access beyond SQLite's
-single-writer limit). Phase 5 (cloud deployment hardening) should wait for
-their confirmation rather than being over-built speculatively before there's
-a real consumer for it.
+single-writer limit). Provider-specific hardening should wait until a specific
+managed/service Postgres target is chosen.
 
-**🔴 #2 — Three DDL sources will exist once Postgres ships, and can drift
+**#2 — Three DDL sources now exist and can drift
 independently.** `local_store.py`'s `_SCHEMA`, `sql/50_gold.sql` (already
 carrying real computed-CTAS logic for 6 tables, per §2.1's correction — not
 just a passive mirror), and the new Postgres schema. Worth a lightweight
@@ -554,32 +547,31 @@ third leg drifts from the other two, rather than discovering it the way the
 `gold_dim_date` additive-migration miss was discovered (spec003 §2.1) — after
 it broke something.
 
-**🔴 #3 — CLI surface.** Confirm whether Postgres gets a dedicated
+**#3 — CLI surface.** Confirm whether Postgres gets a dedicated
 `--postgres [dsn]` flag (matching `--local [--db-path]`) alongside `--env` +
 config, or config-only like Databricks today. `market_terminal`'s doc assumes
 the flag exists; this repo's only precedent (Databricks) has none. See §5.
 
-**🔴 #4 — Local Postgres provisioning mechanism.** Confirm Docker Compose as
-the default local dev story — there's no in-repo precedent either way
-(zero Docker files exist in this repo today), so this is a real convention
-decision, not a rubber stamp of something already established.
+**#4 — Local Postgres provisioning mechanism.** Docker Compose is now the
+default local dev story for Postgres and is documented in
+`docker-compose.yml`, `docs/handoffs/warehouse_configuration.md`, and
+`docs/deployment/postgres_deployment_runbook.md`.
 
-**🟡 #5 (lower stakes) — `gold_fred_point_in_time` view vs. table.**
+**#5 — `gold_fred_point_in_time` view vs. table.**
 `specs/spec003/README.md` §7 already left this open for SQLite/performance
 reasons (it's a 1:1 copy of `silver_fred_observation`, arguably better as a
 view than a materialized copy). Worth resolving before or alongside writing
-its Postgres DDL — Postgres supports both real and materialized views well —
-rather than mechanically porting SQLite's current materialized-table choice
-by default just because that's what exists today.
+the next performance pass. Postgres currently preserves SQLite's materialized
+table semantics for parity.
 
 ## 11. Follow-Ups
 
-- DuckDB write-side implementation (§7), once Postgres Phase 1–4 validate the
+- DuckDB write-side implementation (§7), now that Postgres validated the
   general "third backend" pattern.
 - The `sql/50_gold.sql` computed-CTAS-vs-shape-only split (§2.1) as an
   independent small documentation cleanup — it's not a bug, but it's worth
   being explicit in that file's own header about which 6 tables carry real
   query logic vs. which 50 are pure schema mirrors, since a future reader
   will otherwise reasonably assume uniform treatment.
-- Resolve Open Decision #5 (`gold_fred_point_in_time` view-vs-table) before
-  Postgres Phase 1 writes that specific table's DDL, not after.
+- Resolve deferred follow-up #5 (`gold_fred_point_in_time` view-vs-table) in
+  a dedicated performance/schema pass.

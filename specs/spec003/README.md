@@ -168,6 +168,52 @@ series' Gold rows in place, falling back to a full rebuild only on explicit
 request (e.g. after `replay`, or a new `--full` flag on the `gold` command
 mirroring `run --full`).
 
+**Status (2026-09-13): first implementation slice shipped.** The naive
+"skip untouched series" framing above turned out not to work as-is: nothing
+in `Pipeline.run()` gates which series get restated by staleness/due-date
+(`expected_update_frequency` is dead for that purpose), so `restate_last_n`
+touches nearly every series on nearly every routine run -- a whole-entity
+skip would provide close to zero benefit for the exact `run -> gold`
+sequence this phase is motivated by. The design that actually pays off is
+**row-range** incrementality: checkpoint each table's expanding computation
+state per entity (Welford mean/std, an exact resumable expanding-percentile
+via a sorted-value list + `bisect`, and any table-specific sequential state
+like a consecutive-inversion counter), and on a routine build only extend
+forward from the checkpointed frontier, falling back to a full per-entity
+recompute on backfill/config-change/first-seen. Two prerequisites had to
+land first: `merge_silver`'s upsert needed a `row_hash`-gated `WHERE` clause
+so `ingested_at` only advances on genuine content change (otherwise the
+touched-series signal is meaningless), and checkpoint I/O had to move
+off the `_compute_parallel` worker threads entirely (`self.conn` is
+`check_same_thread=True`).
+
+`gold_curve_spread_daily` (9 config-bounded spreads) is the one table wired
+up so far, proving the pattern end-to-end: a resumability property-test
+suite (`tests/test_features_resumable.py`), engine-level parity tests
+(`resume_curve_spread_daily` vs. the original `compute_curve_spread_daily`
+across arbitrary split points), and five integration tests against the real
+`build_gold()` entry point covering skip/append/backfill/new-config-entry/
+`--full`-reset. The full existing test suite passes unmodified throughout --
+a first-ever incremental build (no watermark yet) is empirically
+bit-identical to the old always-full-rebuild output. See commits on
+`spec004-postgres-deployment-runbook` (spec003 Phase 3 checkpoint infra;
+wire gold_curve_spread_daily; `gold --full` + integration tests) for the
+full implementation.
+
+Extending this to the rest of the ~54 remaining tables is deliberately left
+as follow-up work, not part of this slice (per spec003's own "don't build
+later phases speculatively" discipline) -- roughly in this order: the
+other config-group tables sharing the same two primitives (benchmark board,
+funding, credit spreads, regime playbook, correlation/stats), the ECON
+dashboard's mixed per-series + cross-sectional-category-summary case, then
+the tables needing a full per-entity recompute on any touch rather than
+true append (recession probability's warm-started IRLS, equity total return
+index's running product) -- and finally an explicit decision on whether the
+genuinely global tables (macro PCA/factor scores, and everything derived
+from them) are worth incremental treatment at all, versus staying
+full-rebuild permanently as the cheapest-to-reason-about choice for a
+handful of tables that are cross-sectionally coupled by construction.
+
 ### Phase 4: Parallelize independent table builds (if Phase 2 shows it's still needed)
 
 With Phase 1 removing the single largest sequential cost, the remaining ~65
@@ -233,6 +279,76 @@ Phase 2 attempt on 2026-09-12:
   session, not as a clean baseline. The successful completion is useful; the
   timing should be re-run in one uninterrupted shell before using it to decide
   Phase 3/4 scope.
+
+### Phase 2 continued (2026-09-12): per-function timing, root cause confirmed, fix implemented
+
+Before re-running the contaminated baseline, `_build_gold_inner()` was
+instrumented with env-gated (`FRED_GOLD_STAGE_TIMING=1`) per-stage timing
+around every top-level step, and per-function timing around each of the ~18
+`_compute_parallel`-dispatched engines individually, so the retry would give a
+per-function breakdown instead of one aggregate number.
+
+Root cause confirmed by direct code inspection (not just inferred from
+timings): every one of the 18 `_compute_parallel` engines (the ECON dashboard,
+Curve Lab, spreads, benchmark board, funding, credit, inflation explorer, the
+regime/stats-lab quartet, FOMC, global inflation/policy rates) independently
+does a full linear scan of the entire `latest` list — e.g.
+`regime_stats.py`'s `compute_series_correlation` does
+`r for r in latest_rows if r.get("series_id") in wanted` over all 20.5M rows
+just to pull out the handful of series a handful of configured stats pairs
+need. Comparing against `writer/gold.py` (the Spark backend) showed it never
+pays this cost: `_collect_latest(config, spark, series_ids)` pushes the same
+filter down to a `WHERE series_id IN (...)` SQL query *before* calling the
+same pure-Python engine, so Spark only ever hands each engine its own rows.
+`LocalWarehouse` was the only backend passing the full unfiltered `latest`
+list to all 18 engines, making 18 redundant O(n) passes over the largest
+table in the database on every `gold` run — independent of, and structurally
+unrelated to, whether `ThreadPoolExecutor` provides real parallelism for this
+CPU-bound pure-Python work (a separate, still-open question).
+
+Fix implemented in `local_store.py` (`spec003-performanceupgrade` branch),
+mirroring the Spark backend's own pattern instead of introducing a new one:
+
+- A `latest_by_series: dict[str, list[dict]]` index is built once (one O(n)
+  pass) right after `latest` is read.
+- Each engine's own config is loaded up front (the same loaders each engine
+  already falls back to internally via `cfg=None`) to compute its curated
+  series-id set, matching `writer/gold.py`'s existing `*_ids` computations
+  exactly (e.g. `curve_ids = {t.series_id for t in tenors} | {RECESSION_SERIES}`).
+- A new `_select_series(latest_by_series, wanted_ids)` helper turns that
+  wanted-id set into the small subset via O(1) dict lookups, and that subset
+  (not the full `latest`) is what's passed to each engine, alongside its
+  already-loaded config — avoiding both the O(n) rescan and a redundant
+  config reparse per engine.
+- No changes to the pure-Python engines themselves (`terminal_views.py`,
+  `regime_stats.py`, `global_views.py`) — they still do their own internal
+  `wanted` filter, but now over an already-tiny list, so it's free. This kept
+  the change entirely inside `local_store.py`, zero risk to the Spark path or
+  its existing tests.
+- Full test suite (`pytest tests/`, excluding Spark/Postgres integration
+  tests that need external services) passes unchanged, confirming
+  output-identical behavior.
+
+A clean re-baseline with the fix in place was launched to get a real
+before/after number (the prior attempt to even get an unfixed clean baseline
+died silently partway through — see below); this section will be updated with
+final timings once it completes.
+
+### Note: the unfixed clean baseline run itself failed
+
+An attempt to get one clean, uninterrupted timing run *without* the fix above
+(to have a rigorous before/after) was launched in the background and died
+silently after ~19 minutes (through `gold.read_latest`, before the
+`_compute_parallel` block), with no error in its log and no crash report
+under `~/Library/Diagnostics/DiagnosticReports`. Root cause was tooling, not
+the pipeline: it was started via a manually-backgrounded shell (`nohup ... &`)
+rather than the harness's own background-process tracking, and was reaped
+when the wrapping shell session ended between tool calls. Re-run using proper
+background-process tracking for the fixed version instead of re-attempting the
+unfixed baseline — the code-level root cause above is already confirmed by
+direct inspection and by comparison with the Spark backend's existing,
+working `_collect_latest()` pattern, so a byte-for-byte unfixed timing number
+was no longer decision-relevant.
 
 ## 9. Follow-Ups
 

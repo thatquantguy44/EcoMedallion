@@ -66,9 +66,8 @@ sqlite3 fred.db "SELECT * FROM gold_fred_latest_observation LIMIT 10;"
 
 **Status:** Config/DSN resolution, read-only query connection, local Docker
 service, SQLite-to-Postgres sync tooling, and write-side `PostgresWarehouse`
-are wired. Deployment/secrets runbook work is still pending in
-[`specs/spec004`](../../specs/spec004/README.md), gated on a confirmed
-managed-service target.
+are wired. Spec004 is closed; deployment and secrets guidance lives in
+[`docs/deployment/postgres_deployment_runbook.md`](../deployment/postgres_deployment_runbook.md).
 
 **Why you'd want this over SQLite:** concurrent writes (SQLite allows only one
 writer at a time), and a schema-qualified `gold.<table>` naming convention

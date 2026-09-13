@@ -5,7 +5,7 @@
 # Backends:
 #   - local       : SQLite file on disk (development, default)
 #   - databricks  : Delta Lake on Databricks (production)
-#   - postgres    : PostgreSQL (planned write backend; read config available)
+#   - postgres    : PostgreSQL (write/read backend; local or service target)
 #   - duckdb      : DuckDB file (future, experimental)
 #   - none        : In-memory only (dry-run, no writes)
 #
