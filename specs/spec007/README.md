@@ -1,6 +1,6 @@
 # Spec 007: Due-Date Gating on Extraction
 
-Status: design only, not started
+Status: design decided (§5, §10), implementation not started
 Last verified: 2026-09-13
 Primary owner: TBD
 Target: `Pipeline.run()` (`src/fred_pipeline/pipeline.py`) — every `run`
@@ -147,32 +147,31 @@ per-entity skipping there low-value (see `docs/handoffs/pipeline_performance.md`
 
 ## 5. Design Decisions
 
-- 🔴 **DECISION NEEDED — rollout: opt-in flag first, or on by default?**
-  This changes behavior for every existing caller of `run` the moment it
-  ships, and its correctness depends entirely on the cadence-to-interval
-  mapping in §4 being right for every series in every manifest — a mapping
-  bug could under-refresh a series (stale data silently served) or
-  over-refresh one (no harm, just no benefit). Recommend shipping behind an
-  explicit flag first (e.g. `run --skip-not-due`) for at least one
-  observation cycle across real manifests before flipping the default,
-  mirroring how a risky behavior change should be validated against real
-  data before becoming the assumed path — this is a call for whoever
-  implements it to confirm, not something to default silently either way.
-- 🔴 **DECISION NEEDED — does `--full` bypass gating, or does gating get its
-  own flag?** §4 lays out the case for reusing `--full`. The case against:
-  `--full` currently means "ignore the restate *window*," a data-volume
-  decision: while due-date gating is a *should this run at all* decision —
-  conflating them means someone who wants "pull full history for the 40
-  series I know changed, don't bother with the other 2,800 that
-  definitely haven't" has no way to express that. A dedicated
-  `--ignore-due-date` (or similar) flag, usable independently of `--full`,
-  may be worth the extra surface area. Decide based on how these two knobs
-  are actually expected to be used together, not just which is fewer lines
-  of code.
-- **Cadence → minimum re-check interval** (needs validation against real
-  publication patterns before use, not assumed correct from the label
-  alone): a starting point, generous rather than tight, since a false
-  "not due" is worse than a wasted pull —
+- ✅ **DECIDED (2026-09-13) — rollout: opt-in flag first.** Ship behind an
+  explicit flag (`run --skip-not-due`) for at least one observation cycle
+  across real manifests before flipping the default. Rationale: this changes
+  behavior for every existing caller of `run` the moment it ships, and its
+  correctness depends entirely on the cadence-to-interval mapping in §4
+  being right for every series in every manifest — a mapping bug could
+  under-refresh a series (stale data silently served). Validate against real
+  data before it becomes the assumed path, not after.
+- ✅ **DECIDED (2026-09-13) — `--full` bypasses gating; no dedicated flag.**
+  Reuse the existing `--full` flag rather than introducing
+  `--ignore-due-date` or similar. One flag, one well-understood meaning
+  ("stop being clever, just pull everything"), minimal surface area. The
+  case for a dedicated flag (expressing "pull full history for the 40 series
+  I know changed, skip the other 2,800 that haven't") was considered and
+  rejected as not worth the extra surface area for the first slice —
+  revisit only if real usage shows that combination is actually needed.
+- **Cadence → minimum re-check interval** — ✅ **DECIDED (2026-09-13):
+  validate against real publish patterns before writing gating logic**, per
+  §6 step 1 (don't assume the intervals below are correct from the label
+  alone; cross-check a sample of daily/weekly/monthly manifest series
+  against actual FRED/source publish history first — e.g. confirm "daily"
+  series really are business-day-only, and that no "monthly" series
+  publishes on an irregular day-of-month that a 27-day check would miss).
+  The values below are the starting point for that validation, generous
+  rather than tight, since a false "not due" is worse than a wasted pull —
   `daily`/`business_daily` → ~20 hours (catches a series that publishes
   once every business day without re-pulling mid-day); `weekly` → ~6 days;
   `monthly` → ~27 days; `quarterly` → ~85 days; `annual` → ~360 days;
@@ -273,12 +272,12 @@ per-entity skipping there low-value (see `docs/handoffs/pipeline_performance.md`
   (§6 step 5 above already covers this — repeated here as a pointer since
   it's the main reason this spec was written from spec003's research in
   the first place, not a standalone concern).
-- Consider whether `expected_update_frequency` should be back-filled for
-  the ~490 manifest entries that don't have it set, now that it has a real
-  runtime consequence beyond documentation — today an omission is harmless
-  (defaults to "always due"); once this ships it's still harmless
-  correctness-wise, but it does mean those ~490 series get none of the
-  benefit.
+- ✅ **DECIDED (2026-09-13):** backfilling `expected_update_frequency` for
+  the ~490 manifest entries that don't have it set is a **separate,
+  independent follow-up**, not part of this spec's first slice. Today an
+  omission is harmless (defaults to "always due"); once gating ships it's
+  still harmless correctness-wise, it just means those ~490 series get none
+  of the benefit until backfilled later.
 - `manifests/*.yml`'s `expected_update_frequency` values were counted by
   grep against the manifest files' declared, not-yet-generated state at
   the time this spec was written — re-count before relying on exact
@@ -286,11 +285,20 @@ per-entity skipping there low-value (see `docs/handoffs/pipeline_performance.md`
 
 ## 10. Open Decisions
 
-1. Opt-in flag first vs. default-on (§5).
-2. Reuse `--full` for gating bypass vs. a dedicated flag (§5).
-3. Exact cadence → interval mapping, pending validation against real
-   publish patterns (§5, §6 step 1) — the values in §5 are a reasoned
-   starting point, not a conclusion.
-4. Whether to back-fill `expected_update_frequency` for manifest entries
-   missing it (§9) — separate piece of work, not blocking this spec's
-   first slice.
+All four decisions below were resolved 2026-09-13; see §5/§9 for full
+rationale on each. Recorded here so implementation can start without
+re-litigating them:
+
+1. ✅ Opt-in flag first (`run --skip-not-due`), not default-on (§5).
+2. ✅ Reuse `--full` for gating bypass; no dedicated flag (§5).
+3. ✅ Validate the cadence → interval mapping against real publish patterns
+   *before* writing gating logic (§5, §6 step 1) — the values in §5 are a
+   starting point for that validation, not a conclusion to build on
+   directly.
+4. ✅ Back-filling `expected_update_frequency` for manifest entries missing
+   it is separate, follow-up work — not blocking this spec's first slice
+   (§9).
+
+The only decision still genuinely open is the *outcome* of #3 (the actual
+validated intervals) — that requires cross-checking real source publish
+history per §6 step 1, not a judgment call to make from this doc alone.

@@ -15,6 +15,7 @@ import logging
 from collections import defaultdict
 from collections.abc import Iterable
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from fred_pipeline.audit import EtlRun, RunStatus
@@ -319,6 +320,48 @@ def _extract_workers_for_source(config: PipelineConfig, source: str) -> int:
     if source in {"worldbank", "bis"}:
         return min(8, total)
     return total
+
+
+# Minimum time since a series' last successful pull before it counts as "due"
+# again, per publication cadence (spec007 §5). Deliberately looser than the
+# nominal cadence -- a false "not due" wastes a print until next run; a false
+# "due" only costs a wasted pull. Not yet validated against real per-source
+# publish history (spec007 §6 step 1) -- treat these as a starting point.
+_CADENCE_MIN_INTERVAL: dict[str, timedelta] = {
+    "daily": timedelta(hours=20),
+    "business_daily": timedelta(hours=20),
+    "weekly": timedelta(days=6),
+    "monthly": timedelta(days=27),
+    "quarterly": timedelta(days=85),
+    "annual": timedelta(days=360),
+}
+
+
+def _series_is_due(
+    expected_update_frequency: str,
+    last_ingested_at: str | None,
+    now: datetime,
+) -> bool:
+    """Decide whether a series is due for extraction this run (spec007).
+
+    Pure and free of any ``Pipeline``/warehouse dependency so its date-math
+    edge cases are directly unit-testable. A series is always due when it has
+    never been pulled successfully (``last_ingested_at is None``) or when
+    ``expected_update_frequency`` is missing/unrecognized -- both fall back to
+    today's "always attempt" behavior rather than a new way to silently
+    under-serve data. ``last_ingested_at`` is an ISO 8601 timestamp (as written
+    to ``silver_fred_observation.ingested_at``); naive timestamps are assumed
+    UTC.
+    """
+    if last_ingested_at is None:
+        return True
+    interval = _CADENCE_MIN_INTERVAL.get(expected_update_frequency)
+    if interval is None:
+        return True
+    last = datetime.fromisoformat(last_ingested_at)
+    if last.tzinfo is None:
+        last = last.replace(tzinfo=timezone.utc)
+    return now - last >= interval
 
 
 class FredPipeline:
