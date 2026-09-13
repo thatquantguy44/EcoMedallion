@@ -14,6 +14,7 @@ series:
     title: NBER Recession Indicator (monthly, 1 = recession)
     category: growth
     frequency: m
+    expected_update_frequency: monthly
     units: +1 or 0
     active: true
     vintage_enabled: false   # NBER dating changes only at turning points
@@ -28,6 +29,7 @@ series:
     title: NBER Recession Indicator (daily, 1 = recession)
     category: growth
     frequency: d
+    expected_update_frequency: daily
     units: +1 or 0
     active: true
     vintage_enabled: false
@@ -42,6 +44,7 @@ series:
     title: GDPNow (Atlanta Fed real-time GDP growth nowcast)
     category: growth
     frequency: q
+    expected_update_frequency: quarterly
     units: Percent Change at Annual Rate
     active: true
     vintage_enabled: false   # a nowcast, not a revised official statistic

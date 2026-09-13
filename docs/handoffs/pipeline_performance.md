@@ -245,6 +245,18 @@ were confirmed already safe and left unchanged. None of this has been
 re-baselined against real timing yet (see below) — these are correctness
 fixes to the interval math, not a performance measurement.
 
+**✅ Also fixed (2026-09-13): `expected_update_frequency` coverage was far
+worse than documented.** Spec007 originally estimated ~490 of 3,003
+manifest entries were missing this field — a grep-based count that
+conflated the YAML key being *present* (mostly as `''`) with the field
+having a *real* value. A corrected parse found only **164 entries had a
+real value; 2,839 (94.5%) did not**, which would have made gating close
+to a no-op regardless of how correct the intervals above are. Backfilled
+via the new `scripts/backfill_expected_update_frequency.py` (maps each
+entry's existing `frequency` code the same way `bls_discovery.py`/
+`ecb_discovery.py` already do); all 3,003 entries now have a real value,
+verified to change nothing else in the manifests.
+
 By default, `Pipeline.run()` still restates *every* series passed to it on
 *every* invocation — nothing consults each series' `expected_update_frequency`
 (present in the `meta_fred_series` schema, unused for this purpose unless

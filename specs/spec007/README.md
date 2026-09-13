@@ -2,8 +2,11 @@
 
 Status: first implementation slice shipped behind --skip-not-due (§8 steps 1-3
 complete); cadence intervals validated against real publish calendars and
-retuned to match (§5/§10 item 5 -- all five intervals now in code); still not
-the default, still not re-baselined against real timing
+retuned to match (§5/§10 item 5 -- all five intervals now in code);
+expected_update_frequency backfilled across all 3,003 manifest entries
+(§9/§10 item 4 -- previously only 164 had a real value, not ~2,513 as
+first counted); still not the default, still not re-baselined against
+real timing
 Last verified: 2026-09-13
 Primary owner: TBD
 Target: `Pipeline.run()` (`src/fred_pipeline/pipeline.py`) — every `run`
@@ -59,13 +62,18 @@ per-entity skipping there low-value (see `docs/handoffs/pipeline_performance.md`
     ones: `bls_discovery.py:316-324` and `ecb_discovery.py:567+` both map a
     source's native frequency code (`d`/`w`/`m`/`q`/`sa`/`a`) to
     `expected_update_frequency` when generating candidate manifests.
-  - Real coverage, counted directly from `manifests/*.yml` in this repo:
-    3,003 `series_id:` entries total, 2,513 have `expected_update_frequency:`
-    set (including some explicitly set to `''`); the taxonomy actually in
-    use is `{daily, business_daily, weekly, monthly, quarterly, annual}`
-    (`semiannual` is supported by the BLS-discovery mapping but not
-    currently used by any manifest). The remaining ~490 entries with no
-    field at all get the dataclass default `""`.
+  - Real coverage, counted directly from `manifests/*.yml` in this repo
+    (2026-09-13, original count in this bullet's history): 3,003
+    `series_id:` entries total. **The original count here (2,513 "have it
+    set") was wrong** — it conflated the YAML key being *present* (mostly
+    as `''`) with the field having a *real value*. A corrected parse
+    (`e.get("expected_update_frequency") or ""` truthiness, not key
+    presence) found only **164** entries with a real value and **2,839
+    (94.5%) empty or absent** — see §9's backfill entry, now done, which
+    closed this gap entirely. The taxonomy actually in use is `{daily,
+    business_daily, weekly, monthly, quarterly, annual}` (`semiannual` is
+    supported by the BLS-discovery mapping but not currently used by any
+    manifest).
   - It is genuinely dead code for gating today — confirmed by exhaustive
     grep across `src/fred_pipeline/`: the field is written by the three
     call sites above and read nowhere except passthrough into
@@ -122,10 +130,13 @@ per-entity skipping there low-value (see `docs/handoffs/pipeline_performance.md`
   "overdue" incorrectly), and clock/timezone skew between this pipeline's
   run schedule and the source's publish schedule.
 - **A missing or unrecognized `expected_update_frequency` must default to
-  "always due."** ~490 manifest entries have no value set at all today: a
-  bug or gap in this mapping must never silently stop refreshing a series
-  that would have refreshed correctly before this change existed. The
-  existing behavior (always attempt) is the safe fallback, not an error.
+  "always due."** This mattered a great deal in practice: 2,839 of 3,003
+  manifest entries had no real value until the 2026-09-13 backfill (§9) —
+  a bug or gap in this mapping must never silently stop refreshing a
+  series that would have refreshed correctly before this change existed.
+  The existing behavior (always attempt) is the safe fallback, not an
+  error, and stays the fallback for any future entry that ships without
+  the field set.
 - **A failed extraction must not count as a successful pull for gating
   purposes.** Since the due-date check is keyed off `MAX(ingested_at)` in
   Silver (only ever set on a successful merge), this falls out naturally —
@@ -370,16 +381,22 @@ default in step 1 above — the values there are still a starting point.
   (§6 step 5 above already covers this — repeated here as a pointer since
   it's the main reason this spec was written from spec003's research in
   the first place, not a standalone concern).
-- ✅ **DECIDED (2026-09-13):** backfilling `expected_update_frequency` for
-  the ~490 manifest entries that don't have it set is a **separate,
-  independent follow-up**, not part of this spec's first slice. Today an
-  omission is harmless (defaults to "always due"); once gating ships it's
-  still harmless correctness-wise, it just means those ~490 series get none
-  of the benefit until backfilled later.
-- `manifests/*.yml`'s `expected_update_frequency` values were counted by
-  grep against the manifest files' declared, not-yet-generated state at
-  the time this spec was written — re-count before relying on exact
-  figures if manifests have changed meaningfully since 2026-09-13.
+- ✅ **DONE (2026-09-13):** backfilling `expected_update_frequency` was
+  originally deferred here as a "separate, independent follow-up" under
+  the assumption that only ~490 manifest entries were missing it — a
+  grep-based count that conflated the YAML key being present (mostly as
+  `''`) with the field having a real value. A corrected parse found
+  **2,839 of 3,003 entries (94.5%)** were actually missing a usable
+  value, meaning gating would have provided almost no real benefit until
+  this was fixed. Backfilled via `scripts/backfill_expected_update_frequency.py`
+  (maps the existing per-entry `frequency` code the same way
+  `bls_discovery.py`/`ecb_discovery.py` already do: `d→daily`,
+  `w→weekly`, `m→monthly`, `q→quarterly`, `a→annual`), as a text-level
+  edit rather than a YAML round-trip (a full ruamel.yaml load/dump was
+  tried first and silently dropped every blank line and inline comment
+  in the file — unacceptable for hand-maintained manifests). All 3,003
+  entries now have a real value; verified byte-for-byte that no other
+  field changed anywhere.
 
 ## 10. Open Decisions
 
@@ -399,8 +416,10 @@ re-litigating them:
    pending a decision on whether to fix now or roll into the eventual
    default-flip validation cycle from decision #1.
 4. ✅ Back-filling `expected_update_frequency` for manifest entries missing
-   it is separate, follow-up work — not blocking this spec's first slice
-   (§9).
+   it — **done 2026-09-13** (§9). Originally deferred as low-priority
+   under a wrong count (~490 missing); the real number was 2,839 of
+   3,003 (94.5%), which would have made gating nearly a no-op, so this
+   was completed rather than left deferred.
 5. ✅ **RESOLVED (2026-09-13) — what to do about `quarterly`: tighten it
    to the same 25-day value as `monthly`, live in `_CADENCE_MIN_INTERVAL`.**
    The validation above found that `quarterly`-tagged series in this

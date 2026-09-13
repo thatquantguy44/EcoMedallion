@@ -20,7 +20,7 @@ series:
   active: true
   source: fred
   load_type: incremental
-  expected_update_frequency: ''
+  expected_update_frequency: daily
   vintage_enabled: true
   validation_profile: standard
   business_owner: ''
@@ -40,7 +40,7 @@ series:
   active: true
   source: fred
   load_type: incremental
-  expected_update_frequency: ''
+  expected_update_frequency: daily
   vintage_enabled: true
   validation_profile: standard
   business_owner: ''
@@ -61,7 +61,7 @@ series:
   active: true
   source: fred
   load_type: incremental
-  expected_update_frequency: ''
+  expected_update_frequency: daily
   vintage_enabled: true
   validation_profile: standard
   business_owner: ''
@@ -81,7 +81,7 @@ series:
   active: true
   source: fred
   load_type: incremental
-  expected_update_frequency: ''
+  expected_update_frequency: daily
   vintage_enabled: true
   validation_profile: standard
   business_owner: ''
@@ -101,7 +101,7 @@ series:
   active: true
   source: fred
   load_type: incremental
-  expected_update_frequency: ''
+  expected_update_frequency: daily
   vintage_enabled: true
   validation_profile: standard
   business_owner: ''
@@ -121,7 +121,7 @@ series:
   active: true
   source: fred
   load_type: incremental
-  expected_update_frequency: ''
+  expected_update_frequency: daily
   vintage_enabled: true
   validation_profile: standard
   business_owner: ''
@@ -141,7 +141,7 @@ series:
   active: true
   source: fred
   load_type: incremental
-  expected_update_frequency: ''
+  expected_update_frequency: daily
   vintage_enabled: true
   validation_profile: standard
   business_owner: ''
@@ -161,7 +161,7 @@ series:
   active: true
   source: fred
   load_type: incremental
-  expected_update_frequency: ''
+  expected_update_frequency: daily
   vintage_enabled: true
   validation_profile: standard
   business_owner: ''
@@ -181,7 +181,7 @@ series:
   active: true
   source: fred
   load_type: incremental
-  expected_update_frequency: ''
+  expected_update_frequency: daily
   vintage_enabled: true
   validation_profile: standard
   business_owner: ''
@@ -201,7 +201,7 @@ series:
   active: true
   source: fred
   load_type: incremental
-  expected_update_frequency: ''
+  expected_update_frequency: daily
   vintage_enabled: true
   validation_profile: standard
   business_owner: ''
@@ -221,7 +221,7 @@ series:
   active: true
   source: fred
   load_type: incremental
-  expected_update_frequency: ''
+  expected_update_frequency: daily
   vintage_enabled: true
   validation_profile: standard
   business_owner: ''
@@ -241,7 +241,7 @@ series:
   active: true
   source: fred
   load_type: incremental
-  expected_update_frequency: ''
+  expected_update_frequency: daily
   vintage_enabled: true
   validation_profile: standard
   business_owner: ''
@@ -262,7 +262,7 @@ series:
   active: true
   source: fred
   load_type: incremental
-  expected_update_frequency: ''
+  expected_update_frequency: daily
   vintage_enabled: true
   validation_profile: standard
   business_owner: ''
@@ -282,7 +282,7 @@ series:
   active: true
   source: fred
   load_type: incremental
-  expected_update_frequency: ''
+  expected_update_frequency: daily
   vintage_enabled: true
   validation_profile: standard
   business_owner: ''
@@ -303,7 +303,7 @@ series:
   active: true
   source: fred
   load_type: incremental
-  expected_update_frequency: ''
+  expected_update_frequency: daily
   vintage_enabled: true
   validation_profile: standard
   business_owner: ''
@@ -323,7 +323,7 @@ series:
   active: true
   source: fred
   load_type: incremental
-  expected_update_frequency: ''
+  expected_update_frequency: daily
   vintage_enabled: true
   validation_profile: standard
   business_owner: ''
@@ -343,7 +343,7 @@ series:
   active: true
   source: fred
   load_type: incremental
-  expected_update_frequency: ''
+  expected_update_frequency: daily
   vintage_enabled: true
   validation_profile: standard
   business_owner: ''
@@ -363,7 +363,7 @@ series:
   active: true
   source: fred
   load_type: incremental
-  expected_update_frequency: ''
+  expected_update_frequency: daily
   vintage_enabled: true
   validation_profile: standard
   business_owner: ''
@@ -383,7 +383,7 @@ series:
   active: true
   source: fred
   load_type: incremental
-  expected_update_frequency: ''
+  expected_update_frequency: daily
   vintage_enabled: true
   validation_profile: standard
   business_owner: ''
@@ -403,7 +403,7 @@ series:
   active: true
   source: fred
   load_type: incremental
-  expected_update_frequency: ''
+  expected_update_frequency: daily
   vintage_enabled: true
   validation_profile: standard
   business_owner: ''
@@ -423,7 +423,7 @@ series:
   active: true
   source: fred
   load_type: incremental
-  expected_update_frequency: ''
+  expected_update_frequency: daily
   vintage_enabled: true
   validation_profile: standard
   business_owner: ''
@@ -443,7 +443,7 @@ series:
   active: true
   source: fred
   load_type: incremental
-  expected_update_frequency: ''
+  expected_update_frequency: daily
   vintage_enabled: true
   validation_profile: standard
   business_owner: ''
@@ -463,7 +463,7 @@ series:
   active: true
   source: fred
   load_type: incremental
-  expected_update_frequency: ''
+  expected_update_frequency: daily
   vintage_enabled: true
   validation_profile: standard
   business_owner: ''
@@ -483,7 +483,7 @@ series:
   active: true
   source: fred
   load_type: incremental
-  expected_update_frequency: ''
+  expected_update_frequency: daily
   vintage_enabled: true
   validation_profile: standard
   business_owner: ''
@@ -503,7 +503,7 @@ series:
   active: true
   source: fred
   load_type: incremental
-  expected_update_frequency: ''
+  expected_update_frequency: daily
   vintage_enabled: true
   validation_profile: standard
   business_owner: ''
@@ -523,7 +523,7 @@ series:
   active: true
   source: fred
   load_type: incremental
-  expected_update_frequency: ''
+  expected_update_frequency: daily
   vintage_enabled: true
   validation_profile: standard
   business_owner: ''
@@ -544,7 +544,7 @@ series:
   active: true
   source: fred
   load_type: incremental
-  expected_update_frequency: ''
+  expected_update_frequency: daily
   vintage_enabled: true
   validation_profile: standard
   business_owner: ''
@@ -565,7 +565,7 @@ series:
   active: true
   source: fred
   load_type: incremental
-  expected_update_frequency: ''
+  expected_update_frequency: daily
   vintage_enabled: true
   validation_profile: standard
   business_owner: ''
@@ -585,7 +585,7 @@ series:
   active: true
   source: fred
   load_type: incremental
-  expected_update_frequency: ''
+  expected_update_frequency: daily
   vintage_enabled: true
   validation_profile: standard
   business_owner: ''
@@ -605,7 +605,7 @@ series:
   active: true
   source: fred
   load_type: incremental
-  expected_update_frequency: ''
+  expected_update_frequency: daily
   vintage_enabled: true
   validation_profile: standard
   business_owner: ''
@@ -625,7 +625,7 @@ series:
   active: true
   source: fred
   load_type: incremental
-  expected_update_frequency: ''
+  expected_update_frequency: daily
   vintage_enabled: true
   validation_profile: standard
   business_owner: ''
@@ -645,7 +645,7 @@ series:
   active: true
   source: fred
   load_type: incremental
-  expected_update_frequency: ''
+  expected_update_frequency: daily
   vintage_enabled: true
   validation_profile: standard
   business_owner: ''

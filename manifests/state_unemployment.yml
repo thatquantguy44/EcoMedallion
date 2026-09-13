@@ -14,6 +14,7 @@ series:
     title: "Unemployment Rate in Alaska"
     category: state_labor
     frequency: m
+    expected_update_frequency: monthly
     units: "Percent"
     active: true
     vintage_enabled: false
@@ -26,6 +27,7 @@ series:
     title: "Unemployment Rate in Alabama"
     category: state_labor
     frequency: m
+    expected_update_frequency: monthly
     units: "Percent"
     active: true
     vintage_enabled: false
@@ -38,6 +40,7 @@ series:
     title: "Unemployment Rate in Arkansas"
     category: state_labor
     frequency: m
+    expected_update_frequency: monthly
     units: "Percent"
     active: true
     vintage_enabled: false
@@ -50,6 +53,7 @@ series:
     title: "Unemployment Rate in Arizona"
     category: state_labor
     frequency: m
+    expected_update_frequency: monthly
     units: "Percent"
     active: true
     vintage_enabled: false
@@ -62,6 +66,7 @@ series:
     title: "Unemployment Rate in California"
     category: state_labor
     frequency: m
+    expected_update_frequency: monthly
     units: "Percent"
     active: true
     vintage_enabled: false
@@ -74,6 +79,7 @@ series:
     title: "Unemployment Rate in Colorado"
     category: state_labor
     frequency: m
+    expected_update_frequency: monthly
     units: "Percent"
     active: true
     vintage_enabled: false
@@ -86,6 +92,7 @@ series:
     title: "Unemployment Rate in Connecticut"
     category: state_labor
     frequency: m
+    expected_update_frequency: monthly
     units: "Percent"
     active: true
     vintage_enabled: false
@@ -98,6 +105,7 @@ series:
     title: "Unemployment Rate in the District of Columbia"
     category: state_labor
     frequency: m
+    expected_update_frequency: monthly
     units: "Percent"
     active: true
     vintage_enabled: false
@@ -110,6 +118,7 @@ series:
     title: "Unemployment Rate in Delaware"
     category: state_labor
     frequency: m
+    expected_update_frequency: monthly
     units: "Percent"
     active: true
     vintage_enabled: false
@@ -122,6 +131,7 @@ series:
     title: "Unemployment Rate in Florida"
     category: state_labor
     frequency: m
+    expected_update_frequency: monthly
     units: "Percent"
     active: true
     vintage_enabled: false
@@ -134,6 +144,7 @@ series:
     title: "Unemployment Rate in Georgia"
     category: state_labor
     frequency: m
+    expected_update_frequency: monthly
     units: "Percent"
     active: true
     vintage_enabled: false
@@ -146,6 +157,7 @@ series:
     title: "Unemployment Rate in Hawaii"
     category: state_labor
     frequency: m
+    expected_update_frequency: monthly
     units: "Percent"
     active: true
     vintage_enabled: false
@@ -158,6 +170,7 @@ series:
     title: "Unemployment Rate in Iowa"
     category: state_labor
     frequency: m
+    expected_update_frequency: monthly
     units: "Percent"
     active: true
     vintage_enabled: false
@@ -170,6 +183,7 @@ series:
     title: "Unemployment Rate in Idaho"
     category: state_labor
     frequency: m
+    expected_update_frequency: monthly
     units: "Percent"
     active: true
     vintage_enabled: false
@@ -182,6 +196,7 @@ series:
     title: "Unemployment Rate in Illinois"
     category: state_labor
     frequency: m
+    expected_update_frequency: monthly
     units: "Percent"
     active: true
     vintage_enabled: false
@@ -194,6 +209,7 @@ series:
     title: "Unemployment Rate in Indiana"
     category: state_labor
     frequency: m
+    expected_update_frequency: monthly
     units: "Percent"
     active: true
     vintage_enabled: false
@@ -206,6 +222,7 @@ series:
     title: "Unemployment Rate in Kansas"
     category: state_labor
     frequency: m
+    expected_update_frequency: monthly
     units: "Percent"
     active: true
     vintage_enabled: false
@@ -218,6 +235,7 @@ series:
     title: "Unemployment Rate in Kentucky"
     category: state_labor
     frequency: m
+    expected_update_frequency: monthly
     units: "Percent"
     active: true
     vintage_enabled: false
@@ -230,6 +248,7 @@ series:
     title: "Unemployment Rate in Louisiana"
     category: state_labor
     frequency: m
+    expected_update_frequency: monthly
     units: "Percent"
     active: true
     vintage_enabled: false
@@ -242,6 +261,7 @@ series:
     title: "Unemployment Rate in Massachusetts"
     category: state_labor
     frequency: m
+    expected_update_frequency: monthly
     units: "Percent"
     active: true
     vintage_enabled: false
@@ -254,6 +274,7 @@ series:
     title: "Unemployment Rate in Maryland"
     category: state_labor
     frequency: m
+    expected_update_frequency: monthly
     units: "Percent"
     active: true
     vintage_enabled: false
@@ -266,6 +287,7 @@ series:
     title: "Unemployment Rate in Maine"
     category: state_labor
     frequency: m
+    expected_update_frequency: monthly
     units: "Percent"
     active: true
     vintage_enabled: false
@@ -278,6 +300,7 @@ series:
     title: "Unemployment Rate in Michigan"
     category: state_labor
     frequency: m
+    expected_update_frequency: monthly
     units: "Percent"
     active: true
     vintage_enabled: false
@@ -290,6 +313,7 @@ series:
     title: "Unemployment Rate in Minnesota"
     category: state_labor
     frequency: m
+    expected_update_frequency: monthly
     units: "Percent"
     active: true
     vintage_enabled: false
@@ -302,6 +326,7 @@ series:
     title: "Unemployment Rate in Missouri"
     category: state_labor
     frequency: m
+    expected_update_frequency: monthly
     units: "Percent"
     active: true
     vintage_enabled: false
@@ -314,6 +339,7 @@ series:
     title: "Unemployment Rate in Mississippi"
     category: state_labor
     frequency: m
+    expected_update_frequency: monthly
     units: "Percent"
     active: true
     vintage_enabled: false
@@ -326,6 +352,7 @@ series:
     title: "Unemployment Rate in Montana"
     category: state_labor
     frequency: m
+    expected_update_frequency: monthly
     units: "Percent"
     active: true
     vintage_enabled: false
@@ -338,6 +365,7 @@ series:
     title: "Unemployment Rate in North Carolina"
     category: state_labor
     frequency: m
+    expected_update_frequency: monthly
     units: "Percent"
     active: true
     vintage_enabled: false
@@ -350,6 +378,7 @@ series:
     title: "Unemployment Rate in North Dakota"
     category: state_labor
     frequency: m
+    expected_update_frequency: monthly
     units: "Percent"
     active: true
     vintage_enabled: false
@@ -362,6 +391,7 @@ series:
     title: "Unemployment Rate in Nebraska"
     category: state_labor
     frequency: m
+    expected_update_frequency: monthly
     units: "Percent"
     active: true
     vintage_enabled: false
@@ -374,6 +404,7 @@ series:
     title: "Unemployment Rate in New Hampshire"
     category: state_labor
     frequency: m
+    expected_update_frequency: monthly
     units: "Percent"
     active: true
     vintage_enabled: false
@@ -386,6 +417,7 @@ series:
     title: "Unemployment Rate in New Jersey"
     category: state_labor
     frequency: m
+    expected_update_frequency: monthly
     units: "Percent"
     active: true
     vintage_enabled: false
@@ -398,6 +430,7 @@ series:
     title: "Unemployment Rate in New Mexico"
     category: state_labor
     frequency: m
+    expected_update_frequency: monthly
     units: "Percent"
     active: true
     vintage_enabled: false
@@ -410,6 +443,7 @@ series:
     title: "Unemployment Rate in Nevada"
     category: state_labor
     frequency: m
+    expected_update_frequency: monthly
     units: "Percent"
     active: true
     vintage_enabled: false
@@ -422,6 +456,7 @@ series:
     title: "Unemployment Rate in New York"
     category: state_labor
     frequency: m
+    expected_update_frequency: monthly
     units: "Percent"
     active: true
     vintage_enabled: false
@@ -434,6 +469,7 @@ series:
     title: "Unemployment Rate in Ohio"
     category: state_labor
     frequency: m
+    expected_update_frequency: monthly
     units: "Percent"
     active: true
     vintage_enabled: false
@@ -446,6 +482,7 @@ series:
     title: "Unemployment Rate in Oklahoma"
     category: state_labor
     frequency: m
+    expected_update_frequency: monthly
     units: "Percent"
     active: true
     vintage_enabled: false
@@ -458,6 +495,7 @@ series:
     title: "Unemployment Rate in Oregon"
     category: state_labor
     frequency: m
+    expected_update_frequency: monthly
     units: "Percent"
     active: true
     vintage_enabled: false
@@ -470,6 +508,7 @@ series:
     title: "Unemployment Rate in Pennsylvania"
     category: state_labor
     frequency: m
+    expected_update_frequency: monthly
     units: "Percent"
     active: true
     vintage_enabled: false
@@ -482,6 +521,7 @@ series:
     title: "Unemployment Rate in Puerto Rico"
     category: state_labor
     frequency: m
+    expected_update_frequency: monthly
     units: "Percent"
     active: true
     vintage_enabled: false
@@ -494,6 +534,7 @@ series:
     title: "Unemployment Rate in Rhode Island"
     category: state_labor
     frequency: m
+    expected_update_frequency: monthly
     units: "Percent"
     active: true
     vintage_enabled: false
@@ -506,6 +547,7 @@ series:
     title: "Unemployment Rate in South Carolina"
     category: state_labor
     frequency: m
+    expected_update_frequency: monthly
     units: "Percent"
     active: true
     vintage_enabled: false
@@ -518,6 +560,7 @@ series:
     title: "Unemployment Rate in South Dakota"
     category: state_labor
     frequency: m
+    expected_update_frequency: monthly
     units: "Percent"
     active: true
     vintage_enabled: false
@@ -530,6 +573,7 @@ series:
     title: "Unemployment Rate in Tennessee"
     category: state_labor
     frequency: m
+    expected_update_frequency: monthly
     units: "Percent"
     active: true
     vintage_enabled: false
@@ -542,6 +586,7 @@ series:
     title: "Unemployment Rate in Texas"
     category: state_labor
     frequency: m
+    expected_update_frequency: monthly
     units: "Percent"
     active: true
     vintage_enabled: false
@@ -554,6 +599,7 @@ series:
     title: "Unemployment Rate in Utah"
     category: state_labor
     frequency: m
+    expected_update_frequency: monthly
     units: "Percent"
     active: true
     vintage_enabled: false
@@ -566,6 +612,7 @@ series:
     title: "Unemployment Rate in Virginia"
     category: state_labor
     frequency: m
+    expected_update_frequency: monthly
     units: "Percent"
     active: true
     vintage_enabled: false
@@ -578,6 +625,7 @@ series:
     title: "Unemployment Rate in Vermont"
     category: state_labor
     frequency: m
+    expected_update_frequency: monthly
     units: "Percent"
     active: true
     vintage_enabled: false
@@ -590,6 +638,7 @@ series:
     title: "Unemployment Rate in Washington"
     category: state_labor
     frequency: m
+    expected_update_frequency: monthly
     units: "Percent"
     active: true
     vintage_enabled: false
@@ -602,6 +651,7 @@ series:
     title: "Unemployment Rate in Wisconsin"
     category: state_labor
     frequency: m
+    expected_update_frequency: monthly
     units: "Percent"
     active: true
     vintage_enabled: false
@@ -614,6 +664,7 @@ series:
     title: "Unemployment Rate in West Virginia"
     category: state_labor
     frequency: m
+    expected_update_frequency: monthly
     units: "Percent"
     active: true
     vintage_enabled: false
@@ -626,6 +677,7 @@ series:
     title: "Unemployment Rate in Wyoming"
     category: state_labor
     frequency: m
+    expected_update_frequency: monthly
     units: "Percent"
     active: true
     vintage_enabled: false

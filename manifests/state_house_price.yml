@@ -13,6 +13,7 @@ series:
     title: "All-Transactions House Price Index for Alaska"
     category: state_housing
     frequency: q
+    expected_update_frequency: quarterly
     units: "Index 1980:Q1=100"
     active: true
     vintage_enabled: false
@@ -25,6 +26,7 @@ series:
     title: "All-Transactions House Price Index for Arkansas"
     category: state_housing
     frequency: q
+    expected_update_frequency: quarterly
     units: "Index 1980:Q1=100"
     active: true
     vintage_enabled: false
@@ -37,6 +39,7 @@ series:
     title: "All-Transactions House Price Index for Delaware"
     category: state_housing
     frequency: q
+    expected_update_frequency: quarterly
     units: "Index 1980:Q1=100"
     active: true
     vintage_enabled: false
@@ -49,6 +52,7 @@ series:
     title: "All-Transactions House Price Index for Kansas"
     category: state_housing
     frequency: q
+    expected_update_frequency: quarterly
     units: "Index 1980:Q1=100"
     active: true
     vintage_enabled: false
@@ -61,6 +65,7 @@ series:
     title: "All-Transactions House Price Index for Louisiana"
     category: state_housing
     frequency: q
+    expected_update_frequency: quarterly
     units: "Index 1980:Q1=100"
     active: true
     vintage_enabled: false
@@ -73,6 +78,7 @@ series:
     title: "All-Transactions House Price Index for Mississippi"
     category: state_housing
     frequency: q
+    expected_update_frequency: quarterly
     units: "Index 1980:Q1=100"
     active: true
     vintage_enabled: false
@@ -85,6 +91,7 @@ series:
     title: "All-Transactions House Price Index for North Dakota"
     category: state_housing
     frequency: q
+    expected_update_frequency: quarterly
     units: "Index 1980:Q1=100"
     active: true
     vintage_enabled: false
@@ -97,6 +104,7 @@ series:
     title: "All-Transactions House Price Index for Nebraska"
     category: state_housing
     frequency: q
+    expected_update_frequency: quarterly
     units: "Index 1980:Q1=100"
     active: true
     vintage_enabled: false
@@ -109,6 +117,7 @@ series:
     title: "All-Transactions House Price Index for New Mexico"
     category: state_housing
     frequency: q
+    expected_update_frequency: quarterly
     units: "Index 1980:Q1=100"
     active: true
     vintage_enabled: false
@@ -121,6 +130,7 @@ series:
     title: "All-Transactions House Price Index for Nevada"
     category: state_housing
     frequency: q
+    expected_update_frequency: quarterly
     units: "Index 1980:Q1=100"
     active: true
     vintage_enabled: false
@@ -133,6 +143,7 @@ series:
     title: "All-Transactions House Price Index for Oklahoma"
     category: state_housing
     frequency: q
+    expected_update_frequency: quarterly
     units: "Index 1980:Q1=100"
     active: true
     vintage_enabled: false
@@ -145,6 +156,7 @@ series:
     title: "All-Transactions House Price Index for South Dakota"
     category: state_housing
     frequency: q
+    expected_update_frequency: quarterly
     units: "Index 1980:Q1=100"
     active: true
     vintage_enabled: false
@@ -157,6 +169,7 @@ series:
     title: "All-Transactions House Price Index for West Virginia"
     category: state_housing
     frequency: q
+    expected_update_frequency: quarterly
     units: "Index 1980:Q1=100"
     active: true
     vintage_enabled: false
@@ -169,6 +182,7 @@ series:
     title: "All-Transactions House Price Index for Wyoming"
     category: state_housing
     frequency: q
+    expected_update_frequency: quarterly
     units: "Index 1980:Q1=100"
     active: true
     vintage_enabled: false
