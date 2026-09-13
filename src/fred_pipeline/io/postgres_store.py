@@ -168,6 +168,7 @@ class PostgresWarehouse:
         ("gold_dim_date", "is_imm_date", "INTEGER"),
         ("gold_dim_date", "is_monthly_option_expiry", "INTEGER"),
         ("gold_dim_date", "is_triple_witching", "INTEGER"),
+        ("audit_etl_run", "series_skipped_not_due", "INTEGER"),
     )
 
     # ---- low-level helpers --------------------------------------------

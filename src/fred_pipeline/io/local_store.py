@@ -507,7 +507,7 @@ CREATE TABLE IF NOT EXISTS audit_etl_run (
     run_id TEXT PRIMARY KEY, environment TEXT, manifest_path TEXT,
     triggered_by TEXT, status TEXT, started_at TEXT, ended_at TEXT,
     duration_seconds REAL, series_total INTEGER, series_succeeded INTEGER,
-    series_failed INTEGER, error_message TEXT
+    series_failed INTEGER, series_skipped_not_due INTEGER, error_message TEXT
 );
 CREATE TABLE IF NOT EXISTS audit_etl_series_run (
     run_id TEXT, series_id TEXT, status TEXT, load_type TEXT, started_at TEXT,
@@ -742,6 +742,9 @@ class LocalWarehouse:
         ("gold_dim_date", "is_imm_date", "INTEGER"),
         ("gold_dim_date", "is_monthly_option_expiry", "INTEGER"),
         ("gold_dim_date", "is_triple_witching", "INTEGER"),
+        # spec007: due-date gating's skip count, added to EtlRun after
+        # audit_etl_run first shipped.
+        ("audit_etl_run", "series_skipped_not_due", "INTEGER"),
     )
 
     def _migrate_point_in_time_table_to_view(self) -> None:

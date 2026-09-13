@@ -29,6 +29,12 @@ class RunStatus(str, Enum):
     SUCCEEDED = "succeeded"
     FAILED = "failed"
     PARTIAL = "partial"  # some series succeeded, some failed
+    # spec007: series-level only, never a top-level EtlRun.status -- a series
+    # judged not due for extraction never ran, so it's neither a success nor
+    # a failure. Distinct from both so a run's own output can show why a
+    # series doesn't appear in the extraction summary instead of looking
+    # silently dropped.
+    SKIPPED_NOT_DUE = "skipped_not_due"
 
 
 @dataclass
@@ -89,6 +95,7 @@ class EtlRun:
     series_total: int = 0
     series_succeeded: int = 0
     series_failed: int = 0
+    series_skipped_not_due: int = 0
     error_message: str = ""
     series_runs: list[EtlSeriesRun] = field(default_factory=list)
 
@@ -133,5 +140,6 @@ class EtlRun:
             "series_total": self.series_total,
             "series_succeeded": self.series_succeeded,
             "series_failed": self.series_failed,
+            "series_skipped_not_due": self.series_skipped_not_due,
             "error_message": self.error_message,
         }
