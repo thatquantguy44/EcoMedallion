@@ -999,3 +999,34 @@ def test_incremental_series_correlation_backfill_matches_full_recompute(tmp_path
     ]
     assert [dict(r) for r in got] == expected
     wh.close()
+
+
+# -- last_ingested_at_by_series (spec007 due-date gating) --------------------
+
+
+def test_last_ingested_at_by_series_empty_when_no_data(tmp_path):
+    wh = LocalWarehouse(_config(), db_path=str(tmp_path / "fred.db"))
+    assert wh.last_ingested_at_by_series() == {}
+    wh.close()
+
+
+def test_last_ingested_at_by_series_returns_max_per_series(tmp_path):
+    wh = LocalWarehouse(_config(), db_path=str(tmp_path / "fred.db"))
+    wh.merge_silver(
+        [
+            _silver_row(
+                "DGS10", "2024-01-01", "", 4.1, 1, ingested_at="2024-01-02T00:00:00+00:00"
+            ),
+            _silver_row(
+                "DGS10", "2024-01-02", "", 4.2, 1, ingested_at="2024-01-03T00:00:00+00:00"
+            ),
+            _silver_row(
+                "DGS2", "2024-01-01", "", 4.5, 1, ingested_at="2024-01-01T00:00:00+00:00"
+            ),
+        ]
+    )
+    assert wh.last_ingested_at_by_series() == {
+        "DGS10": "2024-01-03T00:00:00+00:00",
+        "DGS2": "2024-01-01T00:00:00+00:00",
+    }
+    wh.close()

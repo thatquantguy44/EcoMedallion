@@ -676,6 +676,14 @@ CREATE TABLE IF NOT EXISTS gold_build_watermark (
 -- against a pre-existing large db file is a one-time cost on next open.
 CREATE INDEX IF NOT EXISTS ix_silver_obs_ingested_at
     ON silver_fred_observation(ingested_at);
+
+-- spec007 (due-date gating on extraction): "last successful pull per
+-- series" needs (series_id, ingested_at) -- ix_silver_obs_ingested_at above
+-- is shaped for "all series touched after one global watermark," not a
+-- per-series MAX(...) GROUP BY, and neither ix_silver_obs_sid_rt nor
+-- ix_silver_obs_sid_date carries ingested_at at all.
+CREATE INDEX IF NOT EXISTS ix_silver_obs_sid_ingested
+    ON silver_fred_observation(series_id, ingested_at);
 """
 
 
@@ -925,6 +933,23 @@ class LocalWarehouse:
             default=watermark,
         )
         return touched, new_watermark
+
+    def last_ingested_at_by_series(self) -> dict[str, str]:
+        """``{series_id: MAX(ingested_at)}`` across all of Silver, one pass
+        (spec007: due-date gating on extraction). Distinct from
+        ``_touched_series_since_watermark`` above, which is scoped to rows
+        newer than one global watermark for Gold's own incremental rebuild;
+        this has no watermark and no per-run scope -- it's "when was this
+        series last successfully pulled at all," which due-date gating
+        needs to know for every series, not just recently touched ones.
+        Uses ``ix_silver_obs_sid_ingested`` rather than the watermark
+        index above, which isn't shaped for a per-series GROUP BY.
+        """
+        rows = self.conn.execute(
+            "SELECT series_id, MAX(ingested_at) AS max_ingested "
+            "FROM silver_fred_observation GROUP BY series_id"
+        ).fetchall()
+        return {r["series_id"]: r["max_ingested"] for r in rows}
 
     def _load_checkpoints(self, table_name: str) -> dict[str, dict[str, Any]]:
         """All checkpoint rows for one Gold table, batch-read (not one query

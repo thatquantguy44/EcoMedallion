@@ -169,6 +169,33 @@ def test_postgres_warehouse_is_idempotent(postgres_dsn):
         wh.close()
 
 
+def test_postgres_last_ingested_at_by_series_matches_local(postgres_dsn, tmp_path):
+    rows = [
+        _silver_row(
+            "DGS10", "2024-01-01", "", 4.1, 1, ingested_at="2024-01-02T00:00:00+00:00"
+        ),
+        _silver_row(
+            "DGS10", "2024-01-02", "", 4.2, 1, ingested_at="2024-01-03T00:00:00+00:00"
+        ),
+        _silver_row(
+            "DGS2", "2024-01-01", "", 4.5, 1, ingested_at="2024-01-01T00:00:00+00:00"
+        ),
+    ]
+    local = LocalWarehouse(_config(), db_path=str(tmp_path / "local.db"))
+    pg = PostgresWarehouse(_config(), dsn=postgres_dsn)
+    try:
+        local.merge_silver(rows)
+        pg.merge_silver(rows)
+        assert pg.last_ingested_at_by_series() == local.last_ingested_at_by_series()
+        assert pg.last_ingested_at_by_series() == {
+            "DGS10": "2024-01-03T00:00:00+00:00",
+            "DGS2": "2024-01-01T00:00:00+00:00",
+        }
+    finally:
+        pg.close()
+        local.close()
+
+
 def test_warehouse_factory_builds_postgres(postgres_dsn):
     factory = WarehouseFactory(
         _config(),

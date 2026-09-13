@@ -86,12 +86,13 @@ class _PostgresConnAdapter:
 
 
 def _borrowed_from_local_warehouse(cls: type) -> type:
-    """Bind LocalWarehouse's spec003 Phase 3 (incremental Gold) methods onto
-    this class, the same way ``_build_gold_inner`` below reuses LocalWarehouse's
-    orchestration wholesale: these are pure Python over ``self.conn``/
-    ``self._insert``/``self._load_checkpoints`` with no SQLite-specific API
-    surface once ``_PostgresConnAdapter`` translates placeholders and flat
-    table names. Without this, PostgresWarehouse.build_gold() raises
+    """Bind LocalWarehouse's spec003 Phase 3 (incremental Gold) and spec007
+    (due-date gating) methods onto this class, the same way
+    ``_build_gold_inner`` below reuses LocalWarehouse's orchestration
+    wholesale: these are pure Python over ``self.conn``/``self._insert``/
+    ``self._load_checkpoints`` with no SQLite-specific API surface once
+    ``_PostgresConnAdapter`` translates placeholders and flat table names.
+    Without the spec003 methods, PostgresWarehouse.build_gold() raises
     AttributeError the moment ``_build_gold_inner`` reaches the checkpoint
     watermark/per-table incremental logic -- these were added to
     LocalWarehouse on a branch that merged in after PostgresWarehouse first
@@ -101,6 +102,7 @@ def _borrowed_from_local_warehouse(cls: type) -> type:
         "_get_build_watermark",
         "_set_build_watermark",
         "_touched_series_since_watermark",
+        "last_ingested_at_by_series",
         "_load_checkpoints",
         "_write_checkpoints_batch",
         "_clear_checkpoints",
@@ -620,6 +622,18 @@ _POSTGRES_INDEX_SQL = (
     """
     CREATE INDEX IF NOT EXISTS ix_equity_attr_ticker_window
         ON gold.equity_factor_attribution(ticker, "window")
+    """,
+    # spec003 Phase 3's touched-series watermark index and spec007's
+    # per-series last-pull index -- both defined in LocalWarehouse's
+    # _SCHEMA but never mirrored here, so lookups that need them fall back
+    # to a full table scan on Postgres.
+    """
+    CREATE INDEX IF NOT EXISTS ix_silver_obs_ingested_at
+        ON silver.fred_observation(ingested_at)
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS ix_silver_obs_sid_ingested
+        ON silver.fred_observation(series_id, ingested_at)
     """,
 )
 
