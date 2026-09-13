@@ -203,13 +203,25 @@ below first; it's not a TODO list, it's a set of conclusions.
   at a larger, harder-to-bound scale. Revisit only if profiling after
   spec007 shows them as a real bottleneck.
 
-## New scope: due-date gating on extraction (spec007, not started)
+## New scope: due-date gating on extraction (spec007, first slice shipped)
 
-**The bigger lever, found while researching Phase 3, not yet acted on.**
-`Pipeline.run()` restates *every* series passed to it on *every*
-invocation — nothing consults each series' `expected_update_frequency`
-(present in the `meta_fred_series` schema, dead code for this purpose).
-This is *why* whole-series skipping didn't work for Gold (see above), but
+**The bigger lever, found while researching Phase 3. Status (2026-09-13):
+a first implementation slice is done, behind an opt-in flag, not yet
+re-baselined against real timing** (see `specs/spec007/README.md` §8) — a
+pure `_series_is_due` date-math function, a `last_ingested_at_by_series`
+warehouse query (which also surfaced and closed a SQLite/Postgres
+index-parity gap), and both wired into `Pipeline.run()`/`run --skip-not-due`
+with a new `RunStatus.SKIPPED_NOT_DUE` audit trail. Default behavior
+(flag omitted) is unchanged. Still owed before this goes further: real
+extraction timing with gating on vs. off, and validating the cadence→interval
+mapping against real per-source publish history (spec007 §5/§10) — neither
+is done yet.
+
+By default, `Pipeline.run()` still restates *every* series passed to it on
+*every* invocation — nothing consults each series' `expected_update_frequency`
+(present in the `meta_fred_series` schema, unused for this purpose unless
+`--skip-not-due` is passed). This is *why* whole-series skipping didn't work
+for Gold (see above), but
 the same fact applies just as much upstream, at the 42.6-minute extraction
 stage spec003 originally wrote off as "external, rate-limit-bound, largely
 un-fixable in code" — that framing assumed extraction has to touch every
@@ -224,5 +236,6 @@ touched."
 Full design questions (windowed vs. exact due-date tracking, where the
 watermark lives, interaction with `restate_last_n`, `--full` semantics,
 manifest-level overrides) are scoped in
-[`specs/spec007/README.md`](../../specs/spec007/README.md). Not started —
-read it, don't assume the design is settled, it isn't.
+[`specs/spec007/README.md`](../../specs/spec007/README.md). Rollout and
+`--full` semantics are decided (§5/§10); the cadence→interval mapping is
+still an unvalidated starting point — read the spec before touching it.

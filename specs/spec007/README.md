@@ -1,6 +1,7 @@
 # Spec 007: Due-Date Gating on Extraction
 
-Status: design decided (§5, §10), implementation not started
+Status: first implementation slice shipped behind --skip-not-due (§8 steps 1-3
+complete); not yet the default, not yet re-baselined against real timing
 Last verified: 2026-09-13
 Primary owner: TBD
 Target: `Pipeline.run()` (`src/fred_pipeline/pipeline.py`) — every `run`
@@ -255,16 +256,32 @@ per-entity skipping there low-value (see `docs/handoffs/pipeline_performance.md`
 
 ## 8. Suggested First Implementation Slice
 
-1. `_series_is_due` as a standalone, fully-tested pure function (step 2
+**All three steps below are done (2026-09-13).**
+
+1. ✅ `_series_is_due` as a standalone, fully-tested pure function (step 2
    above) — land this alone first, proves the date-math is right before
-   anything depends on it.
-2. The new `(series_id, ingested_at)` index + the `MAX(...) GROUP BY`
+   anything depends on it. (`pipeline.py`, `tests/test_pipeline.py`.)
+2. ✅ The new `(series_id, ingested_at)` index + the `MAX(...) GROUP BY`
    query as a standalone `LocalWarehouse` method, tested against a small
    fixture db, independent of wiring it into `run`.
-3. Wire into `Pipeline.run()` behind the rollout flag from §5, with the
-   audit-trail/summary changes from step 3 above. Stop here for a first
-   PR — don't flip the default or touch spec003's deferred tables (step 5
-   above) until real timing data exists.
+   (`LocalWarehouse.last_ingested_at_by_series`, mirrored onto
+   `PostgresWarehouse`; found and closed an existing index-parity gap
+   between the two backends along the way.)
+3. ✅ Wired into `Pipeline.run()` behind the rollout flag from §5
+   (`skip_not_due`, exposed as CLI `--skip-not-due`), with the
+   audit-trail/summary changes from step 3 above
+   (`EtlRun.series_skipped_not_due`, `RunStatus.SKIPPED_NOT_DUE`). Stopped
+   here as planned — the default is still "attempt everything"
+   (`skip_not_due=False`), spec003's deferred tables are untouched, and
+   real before/after extraction timing with gating on is still owed
+   (§4's acceptance criteria item, not yet run — needs real API access
+   and a full-size manifest, not available in the environment this slice
+   shipped from).
+
+**Not yet done, deliberately** (per §10 item 3 and this slice's own
+scope): the cadence→interval mapping in §5 has not been validated against
+real per-source publish history. Confirm that before ever flipping the
+default in step 1 above — the values there are still a starting point.
 
 ## 9. Follow-Ups
 
