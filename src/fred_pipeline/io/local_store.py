@@ -1421,6 +1421,124 @@ class LocalWarehouse:
         self._insert("gold_funding_stress_daily", stress)
         return stress
 
+    def _build_series_correlation(
+        self,
+        latest_by_series: dict[str, list[dict[str, Any]]],
+        stats_cfg: Any,
+        touched: dict[str, str],
+        full: bool,
+    ) -> None:
+        """spec003 Phase 3, fifth table: gold_series_correlation restated
+        per-pair. See resume_series_correlation's docstring for why rolling
+        windows are reconstructed via a prefix-sum-snapshot ring buffer
+        rather than a raw-value one -- bit-for-bit parity with a full
+        recompute, not just the same correlation value.
+
+        `load_stats_config`'s own loader already rejects a duplicate
+        (series_a, series_b) pair (in either order), so that tuple is a safe
+        unique entity key -- no separate `name` field exists on
+        StatsPairDef the way spreads/instruments have one."""
+        from fred_pipeline.features import _group_sorted
+        from fred_pipeline.regime_stats import (
+            _aligned,
+            compute_series_correlation,
+            resume_series_correlation,
+        )
+
+        stats_ids = {s for p in stats_cfg.pairs for s in (p.series_a, p.series_b)}
+        all_rows = _select_series(latest_by_series, stats_ids)
+
+        if full:
+            self._clear_checkpoints("gold_series_correlation")
+            self.conn.execute("DELETE FROM gold_series_correlation")
+            self._insert(
+                "gold_series_correlation",
+                compute_series_correlation(all_rows, stats_cfg),
+            )
+            return
+
+        checkpoints = self._load_checkpoints("gold_series_correlation")
+        by_series = _group_sorted(all_rows)
+
+        to_delete: list[tuple[str, str]] = []
+        new_rows: list[dict[str, Any]] = []
+        checkpoint_entries: list[tuple[str, str, dict[str, Any], str]] = []
+
+        for pair in stats_cfg.pairs:
+            entity_key = f"{pair.series_a}|{pair.series_b}"
+            checkpoint = checkpoints.get(entity_key)
+            watched = {pair.series_a, pair.series_b}
+            config_hash = hashlib.sha256(
+                f"{pair.series_a}|{pair.series_b}|{pair.transform_a}|"
+                f"{pair.transform_b}|{stats_cfg.windows}".encode()
+            ).hexdigest()
+            config_changed = (
+                checkpoint is not None and checkpoint["config_hash"] != config_hash
+            )
+            if (
+                checkpoint is not None
+                and not config_changed
+                and not (watched & touched.keys())
+            ):
+                continue
+
+            dates, xs, ys = _aligned(by_series, pair)
+            if not dates:
+                continue
+            triples = list(zip(dates, xs, ys))
+
+            min_touched = min(
+                (touched[sid] for sid in watched if sid in touched), default=None
+            )
+            frontier_date = checkpoint["frontier_date"] if checkpoint else None
+            needs_full = (
+                checkpoint is None
+                or config_changed
+                or min_touched is None
+                or min_touched <= frontier_date
+            )
+            if needs_full:
+                to_delete.append((pair.series_a, pair.series_b))
+                state, out_rows = resume_series_correlation(
+                    pair.series_a,
+                    pair.series_b,
+                    pair.transform_a,
+                    pair.transform_b,
+                    triples,
+                    None,
+                    stats_cfg.windows,
+                )
+            else:
+                new_triples = [
+                    (d, x, y) for d, x, y in triples if d.isoformat() > frontier_date
+                ]
+                if not new_triples:
+                    continue
+                state, out_rows = resume_series_correlation(
+                    pair.series_a,
+                    pair.series_b,
+                    pair.transform_a,
+                    pair.transform_b,
+                    new_triples,
+                    checkpoint["state"],
+                    stats_cfg.windows,
+                )
+
+            new_rows.extend(out_rows)
+            checkpoint_entries.append(
+                (entity_key, triples[-1][0].isoformat(), state, config_hash)
+            )
+
+        for series_a, series_b in to_delete:
+            self.conn.execute(
+                "DELETE FROM gold_series_correlation "
+                "WHERE series_a = ? AND series_b = ?",
+                (series_a, series_b),
+            )
+        if new_rows:
+            self._insert("gold_series_correlation", new_rows)
+        self._write_checkpoints_batch("gold_series_correlation", checkpoint_entries)
+
     # ---- Warehouse surface ---------------------------------------------
 
     def sync_meta(self, manifests: Iterable[Manifest]) -> dict[str, int]:
@@ -1735,7 +1853,6 @@ class LocalWarehouse:
         )
         from fred_pipeline.regime_stats import (
             compute_macro_regime,
-            compute_series_correlation,
             compute_series_lead_lag,
             compute_series_structural_breaks,
         )
@@ -1833,11 +1950,6 @@ class LocalWarehouse:
                 "macro_regime_daily": _stage_timed("pf.macro_regime_daily")(
                     lambda: compute_macro_regime(
                         _select_series(latest_by_series, regime_ids), regime_cfg
-                    )
-                ),
-                "series_correlation": _stage_timed("pf.series_correlation")(
-                    lambda: compute_series_correlation(
-                        _select_series(latest_by_series, stats_ids), stats_cfg
                     )
                 ),
                 "series_lead_lag": _stage_timed("pf.series_lead_lag")(
@@ -1948,8 +2060,22 @@ class LocalWarehouse:
         regime_rows = computed["macro_regime_daily"]
         self.conn.execute("DELETE FROM gold_macro_regime_daily")
         self._insert("gold_macro_regime_daily", regime_rows)
-        self.conn.execute("DELETE FROM gold_series_correlation")
-        self._insert("gold_series_correlation", computed["series_correlation"])
+
+        # spec003 Phase 3: fifth incremental table. gold_macro_regime_daily
+        # stays a full rebuild deliberately (see docs/handoffs/
+        # pipeline_performance.md) -- it's a cross-sectional, one-row-per-
+        # date composite requiring every pillar live, with as-of/staleness
+        # carry-forward semantics where a single backfilled input can shift
+        # which value gets carried into OTHER dates, not just extend the
+        # series forward. gold_series_lead_lag/gold_series_structural_breaks
+        # are deferred too (harder still -- no incremental algorithm at all,
+        # full-sample Chow/Granger rescans -- and the whole-entity-touch
+        # problem likely limits their payoff the same way it did for Gold
+        # generally; see the handoff before assuming otherwise).
+        _stage_timed("series_correlation_incremental")(self._build_series_correlation)(
+            latest_by_series, stats_cfg, touched, full
+        )
+
         self.conn.execute("DELETE FROM gold_series_lead_lag")
         self._insert("gold_series_lead_lag", computed["series_lead_lag"])
         self.conn.execute("DELETE FROM gold_series_structural_breaks")

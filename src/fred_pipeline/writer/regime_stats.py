@@ -25,8 +25,9 @@ from __future__ import annotations
 
 import math
 from bisect import bisect_right
+from collections.abc import Iterable
 from datetime import date
-from typing import Any, Iterable, Optional
+from typing import Any
 
 from fred_pipeline.features import (
     _expanding_mean_std,
@@ -42,6 +43,7 @@ from fred_pipeline.regime_stats_config import (
 )
 
 # ---- shared: series transforms -------------------------------------------------
+
 
 def _transformed(
     series: list[tuple[date, float]], transform: str
@@ -78,9 +80,10 @@ def _transformed(
 
 # ---- macro regime playbook -----------------------------------------------------
 
+
 def compute_macro_regime(
     latest_rows: Iterable[dict[str, Any]],
-    cfg: Optional[RegimeConfig] = None,
+    cfg: RegimeConfig | None = None,
 ) -> list[dict[str, Any]]:
     """``gold.macro_regime_daily``: one row per emission date (the union of
     the inputs' post-transform observation dates), from the first date every
@@ -100,9 +103,7 @@ def compute_macro_regime(
     if not cfg.pillars:
         return []
     wanted = {i.series_id for p in cfg.pillars for i in p.inputs}
-    by_series = _group_sorted(
-        r for r in latest_rows if r.get("series_id") in wanted
-    )
+    by_series = _group_sorted(r for r in latest_rows if r.get("series_id") in wanted)
 
     # (pillar, input) -> date-sorted [(date, direction-adjusted z)]
     z_series: dict[tuple[str, str], list[tuple[date, float]]] = {}
@@ -119,13 +120,14 @@ def compute_macro_regime(
             means, stds = _expanding_mean_std(values)
             zs = [
                 (t[i][0], inp.direction * (values[i] - means[i]) / stds[i])
-                for i in range(len(t)) if stds[i]
+                for i in range(len(t))
+                if stds[i]
             ]
             if zs:
                 z_series[(p.name, inp.series_id)] = zs
                 all_dates.update(d for d, _z in zs)
 
-    def _asof(key: tuple[str, str], d: date) -> Optional[float]:
+    def _asof(key: tuple[str, str], d: date) -> float | None:
         s = z_series.get(key)
         if not s:
             return None
@@ -151,7 +153,7 @@ def compute_macro_regime(
             continue  # not every pillar live yet
 
         regime_name = cfg.default_regime
-        confidence: Optional[float] = None
+        confidence: float | None = None
         for rule in cfg.rules:
             if all(c.matches(scores[c.pillar]) for c in rule.conditions):
                 regime_name = rule.name
@@ -159,24 +161,27 @@ def compute_macro_regime(
                     abs(scores[c.pillar] - c.threshold) for c in rule.conditions
                 )
                 break
-        composite = sum(
-            p.composite_weight * scores[p.name] for p in cfg.pillars
-        ) / total_cw
-        out.append({
-            "observation_date": d.isoformat(),
-            "growth_score": scores["growth"],
-            "inflation_score": scores["inflation"],
-            "liquidity_score": scores["liquidity"],
-            "credit_score": scores["credit"],
-            "policy_score": scores["policy"],
-            "composite_score": composite,
-            "regime_name": regime_name,
-            "regime_confidence": confidence,
-        })
+        composite = (
+            sum(p.composite_weight * scores[p.name] for p in cfg.pillars) / total_cw
+        )
+        out.append(
+            {
+                "observation_date": d.isoformat(),
+                "growth_score": scores["growth"],
+                "inflation_score": scores["inflation"],
+                "liquidity_score": scores["liquidity"],
+                "credit_score": scores["credit"],
+                "policy_score": scores["policy"],
+                "composite_score": composite,
+                "regime_name": regime_name,
+                "regime_confidence": confidence,
+            }
+        )
     return out
 
 
 # ---- correlation lab -------------------------------------------------------------
+
 
 def _aligned(
     by_series: dict[str, list[tuple[date, float]]], pair: Any
@@ -188,7 +193,7 @@ def _aligned(
     return common, [a[d] for d in common], [b[d] for d in common]
 
 
-def _corr_from_sums(n, sx, sy, sxx, syy, sxy) -> Optional[float]:
+def _corr_from_sums(n, sx, sy, sxx, syy, sxy) -> float | None:
     cov = sxy - sx * sy / n
     vx = sxx - sx * sx / n
     vy = syy - sy * sy / n
@@ -199,7 +204,7 @@ def _corr_from_sums(n, sx, sy, sxx, syy, sxy) -> Optional[float]:
 
 def compute_series_correlation(
     latest_rows: Iterable[dict[str, Any]],
-    cfg: Optional[StatsConfig] = None,
+    cfg: StatsConfig | None = None,
 ) -> list[dict[str, Any]]:
     """``gold.series_correlation``: per pair × window × date, the Pearson
     correlation of the transformed, date-aligned series over the trailing
@@ -211,9 +216,7 @@ def compute_series_correlation(
     if not cfg.pairs:
         return []
     wanted = {s for p in cfg.pairs for s in (p.series_a, p.series_b)}
-    by_series = _group_sorted(
-        r for r in latest_rows if r.get("series_id") in wanted
-    )
+    by_series = _group_sorted(r for r in latest_rows if r.get("series_id") in wanted)
 
     out: list[dict[str, Any]] = []
     for pair in cfg.pairs:
@@ -221,8 +224,11 @@ def compute_series_correlation(
         n = len(dates)
         if n < 3:
             continue
-        px = [0.0] * (n + 1); py = [0.0] * (n + 1)
-        pxx = [0.0] * (n + 1); pyy = [0.0] * (n + 1); pxy = [0.0] * (n + 1)
+        px = [0.0] * (n + 1)
+        py = [0.0] * (n + 1)
+        pxx = [0.0] * (n + 1)
+        pyy = [0.0] * (n + 1)
+        pxy = [0.0] * (n + 1)
         for i in range(n):
             px[i + 1] = px[i] + xs[i]
             py[i + 1] = py[i] + ys[i]
@@ -236,27 +242,148 @@ def compute_series_correlation(
                     if i < 2:
                         continue  # expanding: need >= 3 obs
                 elif lo < 0:
-                    continue      # rolling: window not yet full
+                    continue  # rolling: window not yet full
                 m = i + 1 - lo
                 corr = _corr_from_sums(
-                    m, px[i + 1] - px[lo], py[i + 1] - py[lo],
-                    pxx[i + 1] - pxx[lo], pyy[i + 1] - pyy[lo],
+                    m,
+                    px[i + 1] - px[lo],
+                    py[i + 1] - py[lo],
+                    pxx[i + 1] - pxx[lo],
+                    pyy[i + 1] - pyy[lo],
                     pxy[i + 1] - pxy[lo],
                 )
-                out.append({
-                    "series_a": pair.series_a,
-                    "series_b": pair.series_b,
-                    "transform_a": pair.transform_a,
-                    "transform_b": pair.transform_b,
-                    "window": w,
-                    "observation_date": dates[i].isoformat(),
-                    "correlation": corr,
-                    "n_obs": m,
-                })
+                out.append(
+                    {
+                        "series_a": pair.series_a,
+                        "series_b": pair.series_b,
+                        "transform_a": pair.transform_a,
+                        "transform_b": pair.transform_b,
+                        "window": w,
+                        "observation_date": dates[i].isoformat(),
+                        "correlation": corr,
+                        "n_obs": m,
+                    }
+                )
     return out
 
 
+def init_series_correlation_state() -> dict[str, Any]:
+    return {
+        "n": 0,
+        "sx": 0.0,
+        "sy": 0.0,
+        "sxx": 0.0,
+        "syy": 0.0,
+        "sxy": 0.0,
+        "history": [],
+    }
+
+
+def resume_series_correlation(
+    series_a: str,
+    series_b: str,
+    transform_a: str,
+    transform_b: str,
+    new_points: list[tuple[date, float, float]],
+    state: dict[str, Any] | None,
+    windows: tuple[int, ...],
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """spec003 Phase 3: checkpointed/resumable body of
+    :func:`compute_series_correlation`, for one pair at a time.
+
+    ``new_points`` must already be exactly the aligned ``(date, x, y)``
+    triples past this pair's checkpoint frontier, sorted by date -- callers
+    get these from :func:`_aligned` (same transform+inner-join the original
+    function uses) restricted to dates after the frontier.
+
+    The correctness-critical design point: the original computes rolling
+    windows via prefix-sum subtraction (``px[i+1] - px[lo]``), not by
+    directly summing the window's raw values. Those two are mathematically
+    equal but not bit-identical (different floating-point cancellation), so
+    a resume built on a ring buffer of *raw values* would satisfy the same
+    correlation formula while silently failing the bit-for-bit parity
+    contract every other resumable engine in this codebase holds to. This
+    keeps a bounded ring buffer of *cumulative-sum snapshots* instead
+    (``history``, capped at ``max(windows)``) and reconstructs a window's
+    sums via subtraction from exactly ``w`` steps back -- the identical
+    arithmetic the original prefix-sum array performs, just windowed rather
+    than materializing the whole array.
+    """
+    max_window = max((w for w in windows if w > 0), default=0)
+    if state is None:
+        n = 0
+        sx = sy = sxx = syy = sxy = 0.0
+        history: list[tuple[int, float, float, float, float, float]] = []
+    else:
+        n = state["n"]
+        sx, sy, sxx, syy, sxy = (
+            state["sx"],
+            state["sy"],
+            state["sxx"],
+            state["syy"],
+            state["sxy"],
+        )
+        history = [tuple(s) for s in state["history"]]
+
+    out: list[dict[str, Any]] = []
+    for d, x, y in new_points:
+        history.append((n, sx, sy, sxx, syy, sxy))
+        if max_window and len(history) > max_window:
+            history.pop(0)
+
+        n += 1
+        sx += x
+        sy += y
+        sxx += x * x
+        syy += y * y
+        sxy += x * y
+
+        for w in windows:
+            if w == 0:
+                if n < 3:
+                    continue
+                corr = _corr_from_sums(n, sx, sy, sxx, syy, sxy)
+                m = n
+            else:
+                if n < w:
+                    continue
+                lo = history[-w]
+                m = w
+                corr = _corr_from_sums(
+                    m,
+                    sx - lo[1],
+                    sy - lo[2],
+                    sxx - lo[3],
+                    syy - lo[4],
+                    sxy - lo[5],
+                )
+            out.append(
+                {
+                    "series_a": series_a,
+                    "series_b": series_b,
+                    "transform_a": transform_a,
+                    "transform_b": transform_b,
+                    "window": w,
+                    "observation_date": d.isoformat(),
+                    "correlation": corr,
+                    "n_obs": m,
+                }
+            )
+
+    new_state = {
+        "n": n,
+        "sx": sx,
+        "sy": sy,
+        "sxx": sxx,
+        "syy": syy,
+        "sxy": sxy,
+        "history": history,
+    }
+    return new_state, out
+
+
 # ---- lead-lag + Granger -----------------------------------------------------------
+
 
 def _betacf(a: float, b: float, x: float) -> float:
     """Continued fraction for the incomplete beta (Lentz's algorithm)."""
@@ -300,8 +427,11 @@ def _betainc(a: float, b: float, x: float) -> float:
     if x >= 1.0:
         return 1.0
     front = math.exp(
-        math.lgamma(a + b) - math.lgamma(a) - math.lgamma(b)
-        + a * math.log(x) + b * math.log(1.0 - x)
+        math.lgamma(a + b)
+        - math.lgamma(a)
+        - math.lgamma(b)
+        + a * math.log(x)
+        + b * math.log(1.0 - x)
     )
     if x < (a + 1.0) / (a + b + 2.0):
         return front * _betacf(a, b, x) / a
@@ -315,7 +445,7 @@ def _f_sf(f: float, d1: int, d2: int) -> float:
     return _betainc(d2 / 2.0, d1 / 2.0, d2 / (d2 + d1 * f))
 
 
-def _solve(a: list[list[float]], b: list[float]) -> Optional[list[float]]:
+def _solve(a: list[list[float]], b: list[float]) -> list[float] | None:
     """Gaussian elimination with partial pivoting; None if singular."""
     n = len(b)
     m = [row[:] + [b[i]] for i, row in enumerate(a)]
@@ -334,7 +464,7 @@ def _solve(a: list[list[float]], b: list[float]) -> Optional[list[float]]:
     return x
 
 
-def _ols_rss(rows_x: list[list[float]], y: list[float]) -> Optional[float]:
+def _ols_rss(rows_x: list[list[float]], y: list[float]) -> float | None:
     """Residual sum of squares of OLS y ~ X (normal equations).
 
     A singular X'X (exactly collinear regressors — e.g. one series is a
@@ -349,21 +479,19 @@ def _ols_rss(rows_x: list[list[float]], y: list[float]) -> Optional[float]:
     if theta is None:
         lam = 1e-8 * (sum(xtx[i][i] for i in range(k)) / k or 1.0)
         ridged = [
-            [xtx[i][j] + (lam if i == j else 0.0) for j in range(k)]
-            for i in range(k)
+            [xtx[i][j] + (lam if i == j else 0.0) for j in range(k)] for i in range(k)
         ]
         theta = _solve(ridged, xty)
         if theta is None:
             return None
     return sum(
-        (yv - sum(t * xv for t, xv in zip(theta, r))) ** 2
-        for r, yv in zip(rows_x, y)
+        (yv - sum(t * xv for t, xv in zip(theta, r))) ** 2 for r, yv in zip(rows_x, y)
     )
 
 
 def _granger(
     cause: list[float], effect: list[float], p: int
-) -> tuple[Optional[float], Optional[float]]:
+) -> tuple[float | None, float | None]:
     """Granger F-test: do lags of ``cause`` improve the AR(p) of ``effect``?
 
     Restricted: effect_t ~ 1 + effect_{t−1..t−p}; unrestricted adds
@@ -378,8 +506,7 @@ def _granger(
     y = effect[p:]
     xr = [[1.0] + [effect[t - j] for j in range(1, p + 1)] for t in range(p, n)]
     xu = [
-        row + [cause[t - j] for j in range(1, p + 1)]
-        for row, t in zip(xr, range(p, n))
+        row + [cause[t - j] for j in range(1, p + 1)] for row, t in zip(xr, range(p, n))
     ]
     rss_r, rss_u = _ols_rss(xr, y), _ols_rss(xu, y)
     if rss_r is None or rss_u is None:
@@ -398,7 +525,7 @@ def _granger(
 
 def _ols_fit(
     xs: list[float], ys: list[float]
-) -> Optional[tuple[list[float], list[float], float]]:
+) -> tuple[list[float], list[float], float] | None:
     """OLS y ~ 1 + x.  Returns (coeffs, residuals, rss) or None if singular."""
     n = len(ys)
     if n < 2:
@@ -410,7 +537,9 @@ def _ols_fit(
     theta = _solve(xtx, xty)
     if theta is None:
         lam = 1e-8 * (sum(xtx[i][i] for i in range(k)) / k or 1.0)
-        ridged = [[xtx[i][j] + (lam if i == j else 0) for j in range(k)] for i in range(k)]
+        ridged = [
+            [xtx[i][j] + (lam if i == j else 0) for j in range(k)] for i in range(k)
+        ]
         theta = _solve(ridged, xty)
     if theta is None:
         return None
@@ -419,9 +548,7 @@ def _ols_fit(
     return theta, resid, rss
 
 
-def _chow_f_at(
-    xs: list[float], ys: list[float], tau: int
-) -> Optional[float]:
+def _chow_f_at(xs: list[float], ys: list[float], tau: int) -> float | None:
     """Chow F-statistic for breakpoint at index tau (y ~ 1 + x both sides)."""
     n = len(xs)
     k = 2
@@ -448,7 +575,7 @@ def _chow_scan(
     xs: list[float],
     ys: list[float],
     min_segment: int = 20,
-) -> tuple[Optional[date], Optional[float], Optional[float], int, int]:
+) -> tuple[date | None, float | None, float | None, int, int]:
     """Scan all candidate break dates and return the one with the highest F.
 
     Returns (break_date, f_stat, p_value, pre_n, post_n).
@@ -482,7 +609,7 @@ def _chow_scan(
         pxy[i + 1] = pxy[i] + xi * yi
         pyy[i + 1] = pyy[i] + yi * yi
 
-    def _seg_rss(a: int, b: int) -> Optional[float]:
+    def _seg_rss(a: int, b: int) -> float | None:
         m = b - a
         if m < k:
             return None
@@ -498,10 +625,10 @@ def _chow_scan(
         b1 = (m * sxy - sx * sy) / det
         b0 = (sy - b1 * sx) / m
         rss = syy - b0 * sy - b1 * sxy
-        return rss if rss > 0.0 else 0.0
+        return max(0.0, rss)
 
-    best_tau: Optional[int] = None
-    best_f: Optional[float] = None
+    best_tau: int | None = None
+    best_f: float | None = None
     for tau in range(trim, n - trim + 1):
         if tau < k or (n - tau) < k or (n - 2 * k) <= 0:
             continue
@@ -529,7 +656,7 @@ def _cusum_scan(
     dates: list[date],
     xs: list[float],
     ys: list[float],
-) -> tuple[Optional[date], float, float]:
+) -> tuple[date | None, float, float]:
     """CUSUM of full-sample OLS residuals (Brown-Durbin-Evans proxy).
 
     Normalises residuals by the residual standard deviation, accumulates
@@ -553,7 +680,7 @@ def _cusum_scan(
     boundary = 1.358 * math.sqrt(n)
     cusum = 0.0
     cusum_max = 0.0
-    first_cross: Optional[int] = None
+    first_cross: int | None = None
     peak_idx = 0
     for i, w in enumerate(norm):
         cusum += w
@@ -571,7 +698,7 @@ def _cusum_scan(
 
 def compute_series_structural_breaks(
     latest_rows: Iterable[dict[str, Any]],
-    cfg: Optional[StatsConfig] = None,
+    cfg: StatsConfig | None = None,
 ) -> list[dict[str, Any]]:
     """``gold.series_structural_breaks``: Chow and CUSUM structural-break
     tests on the aligned, transformed series for every configured pair.
@@ -596,9 +723,7 @@ def compute_series_structural_breaks(
     if not cfg.pairs:
         return []
     wanted = {s for p in cfg.pairs for s in (p.series_a, p.series_b)}
-    by_series = _group_sorted(
-        r for r in latest_rows if r.get("series_id") in wanted
-    )
+    by_series = _group_sorted(r for r in latest_rows if r.get("series_id") in wanted)
 
     out: list[dict[str, Any]] = []
     for pair in cfg.pairs:
@@ -621,25 +746,27 @@ def compute_series_structural_breaks(
         else:
             pre_a = post_a = mean_a_full
             pre_b = post_b = mean_b_full
-        out.append({
-            "series_a": pair.series_a,
-            "series_b": pair.series_b,
-            "transform_a": pair.transform_a,
-            "transform_b": pair.transform_b,
-            "test_type": "chow",
-            "break_date": bd.isoformat() if bd else None,
-            "f_stat": f,
-            "p_value": p,
-            "pre_n": pre_n,
-            "post_n": post_n,
-            "pre_mean_a": pre_a,
-            "post_mean_a": post_a,
-            "pre_mean_b": pre_b,
-            "post_mean_b": post_b,
-            "cusum_max": None,
-            "is_significant": int(p < 0.05) if p is not None else 0,
-            "as_of_date": as_of,
-        })
+        out.append(
+            {
+                "series_a": pair.series_a,
+                "series_b": pair.series_b,
+                "transform_a": pair.transform_a,
+                "transform_b": pair.transform_b,
+                "test_type": "chow",
+                "break_date": bd.isoformat() if bd else None,
+                "f_stat": f,
+                "p_value": p,
+                "pre_n": pre_n,
+                "post_n": post_n,
+                "pre_mean_a": pre_a,
+                "post_mean_a": post_a,
+                "pre_mean_b": pre_b,
+                "post_mean_b": post_b,
+                "cusum_max": None,
+                "is_significant": int(p < 0.05) if p is not None else 0,
+                "as_of_date": as_of,
+            }
+        )
 
         # ---- CUSUM test ------------------------------------------------------
         cd, cusum_max, cp = _cusum_scan(dates, xs, ys)
@@ -655,31 +782,33 @@ def compute_series_structural_breaks(
             c_pre_n = c_post_n = 0
             c_pre_a = c_post_a = mean_a_full
             c_pre_b = c_post_b = mean_b_full
-        out.append({
-            "series_a": pair.series_a,
-            "series_b": pair.series_b,
-            "transform_a": pair.transform_a,
-            "transform_b": pair.transform_b,
-            "test_type": "cusum",
-            "break_date": cd.isoformat() if cd else None,
-            "f_stat": None,
-            "p_value": cp,
-            "pre_n": c_pre_n,
-            "post_n": c_post_n,
-            "pre_mean_a": c_pre_a,
-            "post_mean_a": c_post_a,
-            "pre_mean_b": c_pre_b,
-            "post_mean_b": c_post_b,
-            "cusum_max": cusum_max,
-            "is_significant": int(cp < 0.05) if cp is not None else 0,
-            "as_of_date": as_of,
-        })
+        out.append(
+            {
+                "series_a": pair.series_a,
+                "series_b": pair.series_b,
+                "transform_a": pair.transform_a,
+                "transform_b": pair.transform_b,
+                "test_type": "cusum",
+                "break_date": cd.isoformat() if cd else None,
+                "f_stat": None,
+                "p_value": cp,
+                "pre_n": c_pre_n,
+                "post_n": c_post_n,
+                "pre_mean_a": c_pre_a,
+                "post_mean_a": c_post_a,
+                "pre_mean_b": c_pre_b,
+                "post_mean_b": c_post_b,
+                "cusum_max": cusum_max,
+                "is_significant": int(cp < 0.05) if cp is not None else 0,
+                "as_of_date": as_of,
+            }
+        )
     return out
 
 
 def compute_series_lead_lag(
     latest_rows: Iterable[dict[str, Any]],
-    cfg: Optional[StatsConfig] = None,
+    cfg: StatsConfig | None = None,
 ) -> list[dict[str, Any]]:
     """``gold.series_lead_lag``: per pair, the full-sample cross-correlation
     at lags −max_lag..+max_lag (positive lag = ``series_a`` leads ``series_b``
@@ -691,9 +820,7 @@ def compute_series_lead_lag(
     if not cfg.pairs:
         return []
     wanted = {s for p in cfg.pairs for s in (p.series_a, p.series_b)}
-    by_series = _group_sorted(
-        r for r in latest_rows if r.get("series_id") in wanted
-    )
+    by_series = _group_sorted(r for r in latest_rows if r.get("series_id") in wanted)
 
     out: list[dict[str, Any]] = []
     for pair in cfg.pairs:
@@ -701,7 +828,7 @@ def compute_series_lead_lag(
         n = len(dates)
         if n < max(cfg.max_lag + 3, 2 * cfg.granger_lags + 2):
             continue
-        ccf: dict[int, tuple[Optional[float], int]] = {}
+        ccf: dict[int, tuple[float | None, int]] = {}
         for lag in range(-cfg.max_lag, cfg.max_lag + 1):
             # positive lag: a_t vs b_{t+lag}  (a leads b)
             if lag >= 0:
@@ -709,11 +836,18 @@ def compute_series_lead_lag(
             else:
                 a_seg, b_seg = xs[-lag:], ys[: n + lag]
             m = len(a_seg)
-            corr = _corr_from_sums(
-                m, sum(a_seg), sum(b_seg),
-                sum(v * v for v in a_seg), sum(v * v for v in b_seg),
-                sum(a * b for a, b in zip(a_seg, b_seg)),
-            ) if m >= 3 else None
+            corr = (
+                _corr_from_sums(
+                    m,
+                    sum(a_seg),
+                    sum(b_seg),
+                    sum(v * v for v in a_seg),
+                    sum(v * v for v in b_seg),
+                    sum(a * b for a, b in zip(a_seg, b_seg)),
+                )
+                if m >= 3
+                else None
+            )
             ccf[lag] = (corr, m)
         defined = {k: v for k, (v, _m) in ccf.items() if v is not None}
         best_lag = max(defined, key=lambda k: abs(defined[k])) if defined else None
@@ -721,19 +855,21 @@ def compute_series_lead_lag(
         f_ba, p_ba = _granger(ys, xs, cfg.granger_lags)
         for lag in sorted(ccf):
             corr, m = ccf[lag]
-            out.append({
-                "series_a": pair.series_a,
-                "series_b": pair.series_b,
-                "transform_a": pair.transform_a,
-                "transform_b": pair.transform_b,
-                "lag": lag,
-                "cross_correlation": corr,
-                "n_obs": m,
-                "best_lag": best_lag,
-                "granger_f_ab": f_ab,
-                "granger_p_ab": p_ab,
-                "granger_f_ba": f_ba,
-                "granger_p_ba": p_ba,
-                "as_of_date": dates[-1].isoformat(),
-            })
+            out.append(
+                {
+                    "series_a": pair.series_a,
+                    "series_b": pair.series_b,
+                    "transform_a": pair.transform_a,
+                    "transform_b": pair.transform_b,
+                    "lag": lag,
+                    "cross_correlation": corr,
+                    "n_obs": m,
+                    "best_lag": best_lag,
+                    "granger_f_ab": f_ab,
+                    "granger_p_ab": p_ab,
+                    "granger_f_ba": f_ba,
+                    "granger_p_ba": p_ba,
+                    "as_of_date": dates[-1].isoformat(),
+                }
+            )
     return out
