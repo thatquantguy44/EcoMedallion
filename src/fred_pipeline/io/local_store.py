@@ -54,6 +54,18 @@ log = logging.getLogger(__name__)
 # stage/per-parallel-function.
 _STAGE_TIMING_ENABLED = os.environ.get("FRED_GOLD_STAGE_TIMING") == "1"
 
+# spec003: _compute_parallel's default max_workers (min(len(tasks),
+# cpu_count)) picks concurrency for wall-clock speed, not peak memory -- on
+# a memory-constrained machine, N engines each holding their own
+# intermediate working set (grouped series dicts, transformed arrays) alive
+# at once can be the difference between fitting and an OOM kill, especially
+# since these are CPU-bound pure-Python tasks where the GIL means the
+# concurrency was buying uncertain wall-clock benefit in the first place
+# (see spec003's Phase 4 discussion). Set FRED_GOLD_MAX_WORKERS to an
+# explicit cap (1 = fully serial) to trade wall-clock time for lower peak
+# memory; unset uses today's default sizing.
+_MAX_WORKERS_OVERRIDE = os.environ.get("FRED_GOLD_MAX_WORKERS")
+
 
 def _stage_timed(label: str):
     """`timed(label)` when stage timing is on, else a plain pass-through
@@ -139,7 +151,10 @@ def _compute_parallel(tasks: dict[str, Callable[[], Any]]) -> dict[str, Any]:
     if len(tasks) == 1:
         name, fn = next(iter(tasks.items()))
         return {name: fn()}
-    max_workers = min(len(tasks), os.cpu_count() or 1)
+    if _MAX_WORKERS_OVERRIDE:
+        max_workers = max(1, int(_MAX_WORKERS_OVERRIDE))
+    else:
+        max_workers = min(len(tasks), os.cpu_count() or 1)
     out: dict[str, Any] = {}
     with ThreadPoolExecutor(max_workers=max_workers) as pool:
         futures = {pool.submit(fn): name for name, fn in tasks.items()}
