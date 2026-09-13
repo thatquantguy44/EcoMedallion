@@ -4,6 +4,7 @@ from datetime import datetime, timedelta, timezone
 from fred_pipeline.audit import RunStatus
 from fred_pipeline.config import Environment, PipelineConfig
 from fred_pipeline.fred_client import FredAPIError
+from fred_pipeline.local_store import LocalWarehouse
 from fred_pipeline.manifest import SeriesSpec, ValidationProfile
 from fred_pipeline.pipeline import (
     FredPipeline,
@@ -539,3 +540,112 @@ def test_series_is_due_weekend_adjacent_daily_case():
     # But a same-day re-run within the interval is correctly not due yet.
     same_day_rerun = friday_pull + timedelta(hours=2)
     assert _series_is_due("daily", friday_pull.isoformat(), same_day_rerun) is False
+
+
+# -- Pipeline.run(skip_not_due=...) wiring (spec007) -------------------------
+
+
+def test_skip_not_due_skips_a_recently_pulled_series(tmp_path, observations_payload, fake_client_cls):
+    db = str(tmp_path / "fred.db")
+    wh = LocalWarehouse(_config(), db_path=db)
+    client = fake_client_cls({"CPIAUCSL": observations_payload})
+    pipe = FredPipeline(_config(), client=client, warehouse=wh, persist_audit=False)
+    spec = _spec("CPIAUCSL", expected_update_frequency="monthly")
+
+    first = pipe.run([spec])
+    assert first.series_succeeded == 1
+    assert first.series_skipped_not_due == 0
+    assert client.requested == ["CPIAUCSL"]
+
+    second = pipe.run([spec], skip_not_due=True)
+    assert second.series_total == 1
+    assert second.series_skipped_not_due == 1
+    assert second.series_runs[0].status == RunStatus.SKIPPED_NOT_DUE
+    # Never re-requested: gating kept it out of extraction entirely.
+    assert client.requested == ["CPIAUCSL"]
+    wh.close()
+
+
+def test_skip_not_due_never_holds_back_a_series_that_has_never_been_pulled(
+    tmp_path, observations_payload, fake_client_cls
+):
+    db = str(tmp_path / "fred.db")
+    wh = LocalWarehouse(_config(), db_path=db)
+    client = fake_client_cls({"CPIAUCSL": observations_payload})
+    pipe = FredPipeline(_config(), client=client, warehouse=wh, persist_audit=False)
+    spec = _spec("CPIAUCSL", expected_update_frequency="monthly")
+
+    run = pipe.run([spec], skip_not_due=True)
+    assert run.series_skipped_not_due == 0
+    assert run.series_succeeded == 1
+    assert client.requested == ["CPIAUCSL"]
+    wh.close()
+
+
+def test_skip_not_due_leaves_a_failed_extraction_due_next_run(tmp_path, fake_client_cls):
+    db = str(tmp_path / "fred.db")
+    wh = LocalWarehouse(_config(), db_path=db)
+    client = fake_client_cls({}, errors={"CPIAUCSL": FredAPIError("boom")})
+    pipe = FredPipeline(_config(), client=client, warehouse=wh, persist_audit=False)
+    spec = _spec("CPIAUCSL", expected_update_frequency="monthly")
+
+    first = pipe.run([spec])
+    assert first.series_failed == 1
+
+    second = pipe.run([spec], skip_not_due=True)
+    assert second.series_skipped_not_due == 0
+    assert second.series_failed == 1
+    assert client.requested == ["CPIAUCSL", "CPIAUCSL"]
+    wh.close()
+
+
+def test_force_full_bypasses_skip_not_due(tmp_path, observations_payload, fake_client_cls):
+    db = str(tmp_path / "fred.db")
+    wh = LocalWarehouse(_config(), db_path=db)
+    client = fake_client_cls({"CPIAUCSL": observations_payload})
+    pipe = FredPipeline(_config(), client=client, warehouse=wh, persist_audit=False)
+    spec = _spec("CPIAUCSL", expected_update_frequency="monthly")
+
+    pipe.run([spec])
+    assert client.requested == ["CPIAUCSL"]
+
+    run = pipe.run([spec], skip_not_due=True, force_full=True)
+    assert run.series_skipped_not_due == 0
+    assert client.requested == ["CPIAUCSL", "CPIAUCSL"]
+    wh.close()
+
+
+def test_skip_not_due_summary_counts_add_up(tmp_path, observations_payload, fake_client_cls):
+    db = str(tmp_path / "fred.db")
+    wh = LocalWarehouse(_config(), db_path=db)
+    client = fake_client_cls(
+        {"CPIAUCSL": observations_payload, "DGS10": observations_payload}
+    )
+    pipe = FredPipeline(_config(), client=client, warehouse=wh, persist_audit=False)
+    due_now = _spec("CPIAUCSL", expected_update_frequency="monthly")
+
+    pipe.run([due_now])
+    client.requested.clear()
+
+    not_yet_due = due_now
+    never_pulled = _spec("DGS10", expected_update_frequency="daily")
+    run = pipe.run([not_yet_due, never_pulled], skip_not_due=True)
+
+    assert run.series_total == 2
+    assert run.series_skipped_not_due == 1
+    attempted = run.series_succeeded + run.series_failed
+    assert attempted + run.series_skipped_not_due == run.series_total
+    assert client.requested == ["DGS10"]
+    wh.close()
+
+
+def test_skip_not_due_does_nothing_when_warehouse_lacks_the_method(
+    observations_payload, fake_client_cls
+):
+    client = fake_client_cls({"CPIAUCSL": observations_payload})
+    pipe = FredPipeline(_config(), client=client, warehouse=None, persist_audit=False)
+    spec = _spec("CPIAUCSL", expected_update_frequency="monthly")
+
+    run = pipe.run([spec], skip_not_due=True)
+    assert run.series_skipped_not_due == 0
+    assert client.requested == ["CPIAUCSL"]

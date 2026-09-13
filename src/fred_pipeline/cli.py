@@ -782,6 +782,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
             sources=_parse_series(args.source),
             exclude_sources=_parse_series(args.exclude_source),
             force_full=args.full,
+            skip_not_due=args.skip_not_due,
         )
     finally:
         if warehouse is not None:
@@ -1020,6 +1021,15 @@ def build_parser() -> argparse.ArgumentParser:
         "--full",
         action="store_true",
         help="force a full re-pull, ignoring the restate watermark",
+    )
+    r.add_argument(
+        "--skip-not-due",
+        action="store_true",
+        help=(
+            "skip extracting a series if it isn't due yet per its "
+            "expected_update_frequency (spec007, opt-in for now); "
+            "--full always bypasses this"
+        ),
     )
     r.add_argument(
         "--no-gold",

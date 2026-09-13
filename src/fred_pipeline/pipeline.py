@@ -18,7 +18,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from fred_pipeline.audit import EtlRun, RunStatus
+from fred_pipeline.audit import EtlRun, EtlSeriesRun, RunStatus
 from fred_pipeline.bronze import build_bronze_row
 from fred_pipeline.config import Environment, PipelineConfig
 from fred_pipeline.manifest import LoadType, SeriesSpec, all_series, load_manifests
@@ -433,6 +433,7 @@ class FredPipeline:
         sources: list[str] | None = None,
         exclude_sources: list[str] | None = None,
         force_full: bool = False,
+        skip_not_due: bool = False,
     ) -> EtlRun:
         manifests = load_manifests(manifest_path)
         specs = all_series(manifests, active_only=True)
@@ -470,6 +471,7 @@ class FredPipeline:
             triggered_by=triggered_by,
             build_gold_layer=build_gold_layer,
             force_full=force_full,
+            skip_not_due=skip_not_due,
         )
 
     @timed("FredPipeline.run")
@@ -481,6 +483,7 @@ class FredPipeline:
         triggered_by: str = "",
         build_gold_layer: bool = True,
         force_full: bool = False,
+        skip_not_due: bool = False,
     ) -> EtlRun:
         specs = list(specs)
         run = EtlRun(
@@ -505,14 +508,15 @@ class FredPipeline:
         # opened in manifest order so the final run object stays deterministic
         # even though extraction finishes out of order.
         with tracker.stage("plan") as stage:
-            series_runs = [
-                run.start_series(spec.series_id, load_type=spec.load_type.value)
-                for spec in specs
-            ]
-            run.series_total = len(series_runs)
+            specs, series_runs, skipped_count = self._partition_by_due_date(
+                specs, run, force_full=force_full, skip_not_due=skip_not_due
+            )
+            run.series_total = len(run.series_runs)
+            run.series_skipped_not_due = skipped_count
             plans = [self._plan_extract(spec, force_full=force_full) for spec in specs]
             work_items = list(zip(specs, plans, series_runs))
             stage.detail["series_planned"] = len(work_items)
+            stage.detail["series_skipped_not_due"] = skipped_count
 
         # Phase 2/3 (source-aware extraction, streaming finish): network-bound
         # fetches run in per-source pools, while Bronze/Silver/DQ/audit writes
@@ -867,6 +871,58 @@ class FredPipeline:
                 run.run_id,
                 series_run.series_id,
             )
+
+    def _partition_by_due_date(
+        self,
+        specs: list[SeriesSpec],
+        run: EtlRun,
+        *,
+        force_full: bool,
+        skip_not_due: bool,
+    ) -> tuple[list[SeriesSpec], list[EtlSeriesRun], int]:
+        """Open one audit row per spec, in manifest order, then split into
+        (specs actually due this run, their matching series_runs, skipped
+        count) -- spec007's due-date gating. A skipped series still gets an
+        audit row (status SKIPPED_NOT_DUE), never a silent drop from
+        ``run.series_runs``; the caller reassigns its own ``specs`` to the
+        first return value so every later stage (extraction, progress
+        counts) only ever sees series that are actually running this pass.
+
+        Gating is opt-in (``skip_not_due``, per spec007's rollout decision)
+        and ``force_full`` always bypasses it entirely -- ``--full`` already
+        means "stop being clever, just pull everything."
+        """
+        gate_active = skip_not_due and not force_full
+        last_ingested = self._last_ingested_at_by_series() if gate_active else {}
+        now = datetime.now(timezone.utc)
+
+        due_specs: list[SeriesSpec] = []
+        series_runs: list[EtlSeriesRun] = []
+        skipped = 0
+        for spec in specs:
+            sr = run.start_series(spec.series_id, load_type=spec.load_type.value)
+            if gate_active and not _series_is_due(
+                spec.expected_update_frequency, last_ingested.get(spec.series_id), now
+            ):
+                sr.complete(RunStatus.SKIPPED_NOT_DUE)
+                skipped += 1
+                continue
+            due_specs.append(spec)
+            series_runs.append(sr)
+        return due_specs, series_runs, skipped
+
+    def _last_ingested_at_by_series(self) -> dict[str, str]:
+        if self.warehouse is None:
+            return {}
+        getter = getattr(self.warehouse, "last_ingested_at_by_series", None)
+        if not callable(getter):
+            log.warning(
+                "skip_not_due requested but %s has no last_ingested_at_by_series; "
+                "due-date gating disabled for this run (every series stays due)",
+                type(self.warehouse).__name__,
+            )
+            return {}
+        return getter()
 
     def _plan_extract(
         self, spec: SeriesSpec, *, force_full: bool = False
