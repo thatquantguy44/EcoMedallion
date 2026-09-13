@@ -234,6 +234,76 @@ Phase 2 attempt on 2026-09-12:
   timing should be re-run in one uninterrupted shell before using it to decide
   Phase 3/4 scope.
 
+### Phase 2 continued (2026-09-12): per-function timing, root cause confirmed, fix implemented
+
+Before re-running the contaminated baseline, `_build_gold_inner()` was
+instrumented with env-gated (`FRED_GOLD_STAGE_TIMING=1`) per-stage timing
+around every top-level step, and per-function timing around each of the ~18
+`_compute_parallel`-dispatched engines individually, so the retry would give a
+per-function breakdown instead of one aggregate number.
+
+Root cause confirmed by direct code inspection (not just inferred from
+timings): every one of the 18 `_compute_parallel` engines (the ECON dashboard,
+Curve Lab, spreads, benchmark board, funding, credit, inflation explorer, the
+regime/stats-lab quartet, FOMC, global inflation/policy rates) independently
+does a full linear scan of the entire `latest` list — e.g.
+`regime_stats.py`'s `compute_series_correlation` does
+`r for r in latest_rows if r.get("series_id") in wanted` over all 20.5M rows
+just to pull out the handful of series a handful of configured stats pairs
+need. Comparing against `writer/gold.py` (the Spark backend) showed it never
+pays this cost: `_collect_latest(config, spark, series_ids)` pushes the same
+filter down to a `WHERE series_id IN (...)` SQL query *before* calling the
+same pure-Python engine, so Spark only ever hands each engine its own rows.
+`LocalWarehouse` was the only backend passing the full unfiltered `latest`
+list to all 18 engines, making 18 redundant O(n) passes over the largest
+table in the database on every `gold` run — independent of, and structurally
+unrelated to, whether `ThreadPoolExecutor` provides real parallelism for this
+CPU-bound pure-Python work (a separate, still-open question).
+
+Fix implemented in `local_store.py` (`spec003-performanceupgrade` branch),
+mirroring the Spark backend's own pattern instead of introducing a new one:
+
+- A `latest_by_series: dict[str, list[dict]]` index is built once (one O(n)
+  pass) right after `latest` is read.
+- Each engine's own config is loaded up front (the same loaders each engine
+  already falls back to internally via `cfg=None`) to compute its curated
+  series-id set, matching `writer/gold.py`'s existing `*_ids` computations
+  exactly (e.g. `curve_ids = {t.series_id for t in tenors} | {RECESSION_SERIES}`).
+- A new `_select_series(latest_by_series, wanted_ids)` helper turns that
+  wanted-id set into the small subset via O(1) dict lookups, and that subset
+  (not the full `latest`) is what's passed to each engine, alongside its
+  already-loaded config — avoiding both the O(n) rescan and a redundant
+  config reparse per engine.
+- No changes to the pure-Python engines themselves (`terminal_views.py`,
+  `regime_stats.py`, `global_views.py`) — they still do their own internal
+  `wanted` filter, but now over an already-tiny list, so it's free. This kept
+  the change entirely inside `local_store.py`, zero risk to the Spark path or
+  its existing tests.
+- Full test suite (`pytest tests/`, excluding Spark/Postgres integration
+  tests that need external services) passes unchanged, confirming
+  output-identical behavior.
+
+A clean re-baseline with the fix in place was launched to get a real
+before/after number (the prior attempt to even get an unfixed clean baseline
+died silently partway through — see below); this section will be updated with
+final timings once it completes.
+
+### Note: the unfixed clean baseline run itself failed
+
+An attempt to get one clean, uninterrupted timing run *without* the fix above
+(to have a rigorous before/after) was launched in the background and died
+silently after ~19 minutes (through `gold.read_latest`, before the
+`_compute_parallel` block), with no error in its log and no crash report
+under `~/Library/Diagnostics/DiagnosticReports`. Root cause was tooling, not
+the pipeline: it was started via a manually-backgrounded shell (`nohup ... &`)
+rather than the harness's own background-process tracking, and was reaped
+when the wrapping shell session ended between tool calls. Re-run using proper
+background-process tracking for the fixed version instead of re-attempting the
+unfixed baseline — the code-level root cause above is already confirmed by
+direct inspection and by comparison with the Spark backend's existing,
+working `_collect_latest()` pattern, so a byte-for-byte unfixed timing number
+was no longer decision-relevant.
+
 ## 9. Follow-Ups
 
 - Confirm whether the 42.6-minute extraction stage (§2) is genuinely rate-

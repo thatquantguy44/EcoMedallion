@@ -5,7 +5,11 @@ from fred_pipeline.config import Environment, PipelineConfig
 from fred_pipeline.local_store import LocalWarehouse
 from fred_pipeline.manifest import SeriesSpec
 from fred_pipeline.pipeline import FredPipeline
-from fred_pipeline.transform import daily_feature_matrix, latest_by_observation
+from fred_pipeline.transform import (
+    _row_hash,
+    daily_feature_matrix,
+    latest_by_observation,
+)
 
 
 def _config():
@@ -131,6 +135,9 @@ def test_local_backend_gold_views_exist_and_match_tables(
         "gold_v_series_revision_summary",
         "gold_v_source_coverage",
         "gold_v_company_ratio_ranks",
+        # gold_fred_point_in_time is itself a view now (spec003 section 7) --
+        # a pure 1:1 mirror of Silver, identical to gold_v_point_in_time.
+        "gold_fred_point_in_time",
     }
 
     latest_table = wh.query("SELECT * FROM gold_fred_latest_observation")
@@ -175,7 +182,8 @@ def test_local_sql_core_gold_rebuild_matches_python_output(tmp_path):
     ]
     wh.merge_silver(rows)
 
-    wh._rebuild_gold_point_in_time_sql()
+    # gold_fred_point_in_time is a live VIEW over Silver (spec003 section 7)
+    # -- no rebuild call needed, it already reflects the merge above.
     wh._rebuild_gold_latest_observation_sql()
 
     pit_cols = [
@@ -237,11 +245,11 @@ def test_local_gold_rebuild_rolls_back_on_failure(tmp_path, monkeypatch):
     wh = LocalWarehouse(_config(), db_path=str(tmp_path / "f.db"))
     wh.conn.execute(
         """
-        INSERT INTO gold_fred_point_in_time (
-            series_id, observation_date, realtime_start, realtime_end, value,
-            revision_number, is_missing, ingested_at
+        INSERT INTO gold_fred_latest_observation (
+            series_id, observation_date, value, realtime_start, realtime_end,
+            is_missing, revision_number, ingested_at
         )
-        VALUES ('OLD', '2024-01-01', '', '', 1.0, 1, 0, 'old')
+        VALUES ('OLD', '2024-01-01', 1.0, '', '', 0, 1, 'old')
         """
     )
     wh.conn.commit()
@@ -263,16 +271,18 @@ def test_local_gold_rebuild_rolls_back_on_failure(tmp_path, monkeypatch):
         ]
     )
 
-    def fail_point_in_time_sql():
-        wh.conn.execute("DELETE FROM gold_fred_point_in_time")
+    def fail_latest_observation_sql():
+        wh.conn.execute("DELETE FROM gold_fred_latest_observation")
         raise RuntimeError("boom")
 
-    monkeypatch.setattr(wh, "_rebuild_gold_point_in_time_sql", fail_point_in_time_sql)
+    monkeypatch.setattr(
+        wh, "_rebuild_gold_latest_observation_sql", fail_latest_observation_sql
+    )
 
     with pytest.raises(RuntimeError, match="boom"):
         wh.build_gold()
 
-    rows = wh.query("SELECT series_id FROM gold_fred_point_in_time")
+    rows = wh.query("SELECT series_id FROM gold_fred_latest_observation")
     assert rows == [{"series_id": "OLD"}]
     wh.close()
 
@@ -328,7 +338,7 @@ def test_source_is_part_of_natural_key(tmp_path):
         "value": 1.0,
         "raw_value": "1.0",
         "is_missing": False,
-        "row_hash": "h",
+        "row_hash": _row_hash("X", "2024-01-01", "", "1.0"),
         "revision_number": 1,
         "ingested_at": "t",
         "run_id": "r",
@@ -338,11 +348,87 @@ def test_source_is_part_of_natural_key(tmp_path):
     # same (series_id, date, realtime) but different source -> two distinct rows
     assert wh.query("SELECT count(*) c FROM silver_fred_observation")[0]["c"] == 2
 
-    # re-merging the fred row updates in place (idempotent per source)
-    wh.merge_silver([{**base, "source": "fred", "value": 2.0}])
+    # re-merging the fred row with a genuinely changed value (and thus a
+    # changed row_hash, exactly as real normalize() output would produce)
+    # updates in place (idempotent per source)
+    wh.merge_silver(
+        [
+            {
+                **base,
+                "source": "fred",
+                "value": 2.0,
+                "raw_value": "2.0",
+                "row_hash": _row_hash("X", "2024-01-01", "", "2.0"),
+            }
+        ]
+    )
     assert wh.query("SELECT count(*) c FROM silver_fred_observation")[0]["c"] == 2
     got = wh.query("SELECT value FROM silver_fred_observation WHERE source='fred'")
     assert got[0]["value"] == 2.0
+    wh.close()
+
+
+def test_merge_silver_leaves_ingested_at_unchanged_on_byte_identical_reupsert(
+    tmp_path,
+):
+    """spec003 Phase 3 prerequisite: restate_last_n re-pulls the trailing ~90
+    observations of nearly every series on every routine run regardless of
+    whether any value actually changed. If a byte-identical re-upsert bumped
+    ingested_at anyway, "series touched since the last Gold build" would mean
+    "every series, every run" -- there would be no incremental signal to act
+    on. row_hash (unchanged here) must gate the update, not just the upsert
+    key matching."""
+    wh = LocalWarehouse(_config(), db_path=str(tmp_path / "f.db"))
+    row = {
+        "source": "fred",
+        "series_id": "X",
+        "observation_date": "2024-01-01",
+        "realtime_start": "",
+        "realtime_end": "",
+        "value": 1.0,
+        "raw_value": "1.0",
+        "is_missing": False,
+        "row_hash": _row_hash("X", "2024-01-01", "", "1.0"),
+        "revision_number": 1,
+        "ingested_at": "2024-01-01T00:00:00+00:00",
+        "run_id": "r1",
+    }
+    wh.merge_silver([row])
+
+    # Re-upsert the identical content under a later run_id/ingested_at, the
+    # exact shape a routine run's restate window produces for an unchanged
+    # observation.
+    wh.merge_silver(
+        [{**row, "ingested_at": "2024-06-01T00:00:00+00:00", "run_id": "r2"}]
+    )
+
+    got = wh.query(
+        "SELECT ingested_at, run_id FROM silver_fred_observation WHERE series_id='X'"
+    )
+    assert len(got) == 1
+    assert got[0]["ingested_at"] == "2024-01-01T00:00:00+00:00"
+    assert got[0]["run_id"] == "r1"
+
+    # A genuine value change (different row_hash) still updates in place.
+    wh.merge_silver(
+        [
+            {
+                **row,
+                "value": 2.0,
+                "raw_value": "2.0",
+                "row_hash": _row_hash("X", "2024-01-01", "", "2.0"),
+                "ingested_at": "2024-06-01T00:00:00+00:00",
+                "run_id": "r2",
+            }
+        ]
+    )
+    got = wh.query(
+        "SELECT value, ingested_at, run_id FROM silver_fred_observation WHERE series_id='X'"
+    )
+    assert len(got) == 1
+    assert got[0]["value"] == 2.0
+    assert got[0]["ingested_at"] == "2024-06-01T00:00:00+00:00"
+    assert got[0]["run_id"] == "r2"
     wh.close()
 
 

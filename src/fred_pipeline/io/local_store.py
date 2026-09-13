@@ -38,9 +38,50 @@ from fred_pipeline.config import PipelineConfig
 from fred_pipeline.manifest import Manifest
 from fred_pipeline.meta import build_meta_rows
 from fred_pipeline.quality import QualityReport
+from fred_pipeline.timing import timed
+from fred_pipeline.warehouse import dq_rows
 
 log = logging.getLogger(__name__)
-from fred_pipeline.warehouse import dq_rows
+
+# spec003 Phase 2 re-baseline: per-stage timing for _build_gold_inner(),
+# gated by an env var so routine runs pay zero overhead. The prior
+# re-baseline attempt (see specs/spec003 "Phase 2 attempt on 2026-09-12")
+# only had one wall-clock number for the whole rebuild, which isn't enough
+# to tell whether Phase 1 (already shipped) closed the gap or whether the
+# ~18 compute_parallel functions -- several of which linear-scan the full
+# `latest` list just to filter a handful of series out of it -- are now the
+# dominant cost. Set FRED_GOLD_STAGE_TIMING=1 to log a `timed()` line per
+# stage/per-parallel-function.
+_STAGE_TIMING_ENABLED = os.environ.get("FRED_GOLD_STAGE_TIMING") == "1"
+
+
+def _stage_timed(label: str):
+    """`timed(label)` when stage timing is on, else a plain pass-through
+    decorator -- so instrumentation costs nothing when the env var is unset."""
+    if _STAGE_TIMING_ENABLED:
+        return timed(f"gold.{label}", logger=log)
+    return lambda fn: fn
+
+
+def _index_by_series(rows: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
+    """One O(n) pass building ``series_id -> [rows]`` so downstream Gold
+    engines can look up their curated series in O(1) instead of each
+    independently scanning all of ``rows`` (see spec003)."""
+    index: dict[str, list[dict[str, Any]]] = {}
+    for r in rows:
+        index.setdefault(r.get("series_id"), []).append(r)
+    return index
+
+
+def _select_series(
+    latest_by_series: dict[str, list[dict[str, Any]]], wanted: Iterable[str]
+) -> list[dict[str, Any]]:
+    """The rows for `wanted` series ids, via the prebuilt index -- the Local
+    equivalent of the Spark backend's `_collect_latest()` SQL push-down."""
+    out: list[dict[str, Any]] = []
+    for sid in wanted:
+        out.extend(latest_by_series.get(sid, ()))
+    return out
 
 
 def _gold_feature_impls():
@@ -142,10 +183,18 @@ CREATE TABLE IF NOT EXISTS gold_fred_latest_observation (
     series_id TEXT, observation_date TEXT, value REAL, realtime_start TEXT,
     realtime_end TEXT, is_missing INTEGER, revision_number INTEGER, ingested_at TEXT
 );
-CREATE TABLE IF NOT EXISTS gold_fred_point_in_time (
-    series_id TEXT, observation_date TEXT, realtime_start TEXT, realtime_end TEXT,
-    value REAL, revision_number INTEGER, is_missing INTEGER, ingested_at TEXT
-);
+-- spec003 section 7: this is a pure 1:1 mirror of silver_fred_observation
+-- with no independent data of its own and no internal Python reader (only
+-- gold_fred_latest_observation is read back for the compute engines) -- a
+-- VIEW keeps it always current for external consumers (Power BI, market_
+-- terminal) at zero rebuild cost and zero duplicate storage, instead of the
+-- INSERT ... SELECT full-table copy this used to require on every gold run.
+-- LocalWarehouse.__init__ drops any pre-existing materialized table of this
+-- name before this runs, so upgrading an existing db file is automatic.
+CREATE VIEW IF NOT EXISTS gold_fred_point_in_time AS
+SELECT series_id, observation_date, realtime_start, realtime_end, value,
+       revision_number, is_missing, ingested_at
+FROM silver_fred_observation;
 CREATE TABLE IF NOT EXISTS gold_fred_macro_feature_daily (
     as_of_date TEXT, series_id TEXT, raw_value REAL, value REAL
 );
@@ -597,6 +646,36 @@ CREATE INDEX IF NOT EXISTS ix_factor_scores_date
     ON gold_macro_factor_scores(observation_date);
 CREATE INDEX IF NOT EXISTS ix_equity_attr_ticker_window
     ON gold_equity_factor_attribution(ticker, window);
+
+-- spec003 Phase 3 (Incremental Gold): per-(table, entity) checkpoint state
+-- for tables that opt into row-range incremental restatement instead of a
+-- full rebuild every gold run. entity_key is series_id for single-series
+-- tables, or a composite key (e.g. a spread name) for config-group tables.
+-- frontier_date is the last observation_date already incorporated;
+-- state_json holds whatever resumable state that table's engine needs
+-- (Welford n/mean/m2, a sorted value list for percentile rank, ...).
+-- config_hash invalidates the checkpoint automatically when the relevant
+-- config file changes, rather than silently serving stale incremental
+-- output.
+CREATE TABLE IF NOT EXISTS gold_incremental_checkpoint (
+    table_name TEXT, entity_key TEXT, frontier_date TEXT,
+    state_json TEXT, config_hash TEXT, updated_at TEXT,
+    PRIMARY KEY (table_name, entity_key)
+);
+
+-- Single-row watermark: the max silver_fred_observation.ingested_at
+-- incorporated as of the last successful gold build. Bounds the
+-- touched-series query below so a routine run doesn't rescan all of Silver
+-- to find out what changed.
+CREATE TABLE IF NOT EXISTS gold_build_watermark (
+    id INTEGER PRIMARY KEY CHECK (id = 1), max_ingested_at TEXT
+);
+
+-- Required for "what changed since the last gold build" to be an index
+-- lookup instead of a full scan of silver_fred_observation. Building this
+-- against a pre-existing large db file is a one-time cost on next open.
+CREATE INDEX IF NOT EXISTS ix_silver_obs_ingested_at
+    ON silver_fred_observation(ingested_at);
 """
 
 
@@ -628,6 +707,7 @@ class LocalWarehouse:
         self.conn.execute("PRAGMA synchronous=NORMAL")
         self.conn.execute("PRAGMA cache_size=-65536")  # 64 MB
         self.conn.execute("PRAGMA mmap_size=268435456")  # 256 MB
+        self._migrate_point_in_time_table_to_view()
         self.conn.executescript(_SCHEMA)
         self._apply_additive_migrations()
         self._defer_commits = False
@@ -656,6 +736,20 @@ class LocalWarehouse:
         ("gold_dim_date", "is_triple_witching", "INTEGER"),
     )
 
+    def _migrate_point_in_time_table_to_view(self) -> None:
+        """A database file created before gold_fred_point_in_time became a
+        VIEW (see _SCHEMA) still has it as a real TABLE; `CREATE VIEW IF NOT
+        EXISTS` would collide with that name, so drop the table first. Its
+        rows are always exactly reconstructable from Silver, so this loses
+        nothing -- the view that replaces it in `executescript(_SCHEMA)`
+        (run immediately after this) computes the identical projection."""
+        row = self.conn.execute(
+            "SELECT type FROM sqlite_master WHERE name = 'gold_fred_point_in_time'"
+        ).fetchone()
+        if row is not None and row[0] == "table":
+            self.conn.execute("DROP TABLE gold_fred_point_in_time")
+            self.conn.commit()
+
     def _apply_additive_migrations(self) -> None:
         for table, column, coltype in self._ADDED_COLUMNS:
             existing = {
@@ -673,6 +767,7 @@ class LocalWarehouse:
         table: str,
         rows: Sequence[dict[str, Any]],
         upsert_keys: Sequence[str] | None = None,
+        conflict_where: str | None = None,
     ) -> int:
         if not rows:
             return 0
@@ -686,6 +781,16 @@ class LocalWarehouse:
             )
             conflict = ", ".join(upsert_keys)
             sql += f" ON CONFLICT({conflict}) DO UPDATE SET {updates}"
+            # spec003 Phase 3: gate the update on genuine content change (only
+            # merge_silver passes this). Without it, ON CONFLICT unconditionally
+            # rewrites ingested_at/run_id on a byte-identical re-upsert, which
+            # would make "series touched since the last Gold build" mean
+            # "every series, every run" -- restate_last_n re-pulls the trailing
+            # ~90 observations of nearly every series every run regardless of
+            # whether any value changed. `IS NOT` (not `!=`) is required for
+            # correct NULL handling.
+            if conflict_where:
+                sql += f" WHERE {conflict_where}"
         data = [tuple(_encode(r.get(c)) for c in cols) for r in rows]
         self.conn.executemany(sql, data)
         if not self._defer_commits:
@@ -729,23 +834,6 @@ class LocalWarehouse:
         cur = self.conn.execute(f"SELECT * FROM {table}")
         return [dict(row) for row in cur.fetchall()]
 
-    def _rebuild_gold_point_in_time_sql(self) -> int:
-        """Rebuild the 1:1 point-in-time table inside SQLite."""
-        self.conn.execute("DELETE FROM gold_fred_point_in_time")
-        cur = self.conn.execute(
-            """
-            INSERT INTO gold_fred_point_in_time (
-                series_id, observation_date, realtime_start, realtime_end, value,
-                revision_number, is_missing, ingested_at
-            )
-            SELECT
-                series_id, observation_date, realtime_start, realtime_end, value,
-                revision_number, is_missing, ingested_at
-            FROM silver_fred_observation
-            """
-        )
-        return max(cur.rowcount, 0)
-
     def _rebuild_gold_latest_observation_sql(self) -> int:
         """Rebuild latest-revision observations with a set-based window query."""
         self.conn.execute("DELETE FROM gold_fred_latest_observation")
@@ -786,6 +874,107 @@ class LocalWarehouse:
             """
         )
         return max(cur.rowcount, 0)
+
+    # ---- spec003 Phase 3: incremental Gold checkpoint/watermark helpers --
+    #
+    # These are the plumbing for restating a Gold table per-entity instead
+    # of fully rebuilding it every run. Kept main-thread-only deliberately:
+    # _compute_parallel's ThreadPoolExecutor workers never touch self.conn
+    # (self.conn.connect() uses the sqlite3 default check_same_thread=True),
+    # so any checkpoint I/O must happen before tasks are dispatched or after
+    # they return, never inside a dispatched engine.
+
+    def _get_build_watermark(self) -> str:
+        """The max silver_fred_observation.ingested_at incorporated as of
+        the last successful Gold build. "" (sorts before every real
+        timestamp) means no watermark yet -- everything is "touched"."""
+        row = self.conn.execute(
+            "SELECT max_ingested_at FROM gold_build_watermark WHERE id = 1"
+        ).fetchone()
+        return (row[0] or "") if row else ""
+
+    def _set_build_watermark(self, value: str) -> None:
+        self.conn.execute(
+            "INSERT INTO gold_build_watermark (id, max_ingested_at) VALUES (1, ?) "
+            "ON CONFLICT(id) DO UPDATE SET max_ingested_at = excluded.max_ingested_at",
+            (value,),
+        )
+
+    def _touched_series_since_watermark(
+        self, watermark: str
+    ) -> tuple[dict[str, str], str]:
+        """(``{series_id: earliest touched observation_date}``, new watermark)
+        for every series with a row written since ``watermark`` -- one pass
+        over silver_fred_observation via ix_silver_obs_ingested_at, not one
+        query per series. ``merge_silver``'s conflict_where guard is what
+        makes ingested_at only advance on genuine content change (see
+        test_merge_silver_leaves_ingested_at_unchanged_on_byte_identical_reupsert),
+        without which this would return nearly every series on nearly every
+        routine run."""
+        rows = self.conn.execute(
+            "SELECT series_id, MIN(observation_date) AS min_touched, "
+            "MAX(ingested_at) AS max_ingested FROM silver_fred_observation "
+            "WHERE ingested_at > ? GROUP BY series_id",
+            (watermark,),
+        ).fetchall()
+        touched = {r["series_id"]: r["min_touched"] for r in rows}
+        new_watermark = max(
+            (r["max_ingested"] for r in rows if r["max_ingested"]),
+            default=watermark,
+        )
+        return touched, new_watermark
+
+    def _load_checkpoints(self, table_name: str) -> dict[str, dict[str, Any]]:
+        """All checkpoint rows for one Gold table, batch-read (not one query
+        per entity). ``{entity_key: {"frontier_date", "state", "config_hash"}}``."""
+        rows = self.conn.execute(
+            "SELECT entity_key, frontier_date, state_json, config_hash "
+            "FROM gold_incremental_checkpoint WHERE table_name = ?",
+            (table_name,),
+        ).fetchall()
+        return {
+            r["entity_key"]: {
+                "frontier_date": r["frontier_date"],
+                "state": json.loads(r["state_json"]),
+                "config_hash": r["config_hash"],
+            }
+            for r in rows
+        }
+
+    def _write_checkpoints_batch(
+        self,
+        table_name: str,
+        entries: list[tuple[str, str, dict[str, Any], str]],
+    ) -> None:
+        """Batch-upsert checkpoints: ``entries`` is a list of
+        ``(entity_key, frontier_date, state, config_hash)``. One executemany,
+        not one _insert() call per entity."""
+        if not entries:
+            return
+        now = _dt.datetime.now(_dt.timezone.utc).isoformat()
+        data = [
+            (table_name, entity_key, frontier_date, json.dumps(state), config_hash, now)
+            for entity_key, frontier_date, state, config_hash in entries
+        ]
+        self.conn.executemany(
+            "INSERT INTO gold_incremental_checkpoint "
+            "(table_name, entity_key, frontier_date, state_json, config_hash, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(table_name, entity_key) DO UPDATE SET "
+            "frontier_date=excluded.frontier_date, state_json=excluded.state_json, "
+            "config_hash=excluded.config_hash, updated_at=excluded.updated_at",
+            data,
+        )
+
+    def _clear_checkpoints(self, table_name: str) -> None:
+        """Used by `gold --full`: force every entity in this table back
+        through a full per-entity recompute on the next incremental build,
+        since a stale checkpoint's frontier/state would otherwise silently
+        miss whatever the full rebuild just wrote."""
+        self.conn.execute(
+            "DELETE FROM gold_incremental_checkpoint WHERE table_name = ?",
+            (table_name,),
+        )
 
     # ---- Warehouse surface ---------------------------------------------
 
@@ -845,6 +1034,9 @@ class LocalWarehouse:
             "silver_fred_observation",
             rows,
             upsert_keys=["source", "series_id", "observation_date", "realtime_start"],
+            conflict_where=(
+                "excluded.row_hash IS NOT silver_fred_observation.row_hash"
+            ),
         )
 
     def build_gold(self) -> dict[str, str]:
@@ -862,19 +1054,50 @@ class LocalWarehouse:
             self._defer_commits = False
 
     def _build_gold_inner(self) -> dict[str, str]:
-        # The two largest Gold tables are simple relational transforms. Keep
-        # them inside SQLite instead of materializing tens of millions of
-        # Python dicts before the downstream Python engines need their inputs.
-        self._rebuild_gold_point_in_time_sql()
-        self._rebuild_gold_latest_observation_sql()
+        # gold_fred_point_in_time is a VIEW (see _SCHEMA / spec003 section 7)
+        # -- it always reflects current Silver with no rebuild step. Only
+        # gold_fred_latest_observation still needs materializing: it's read
+        # back into Python below for the compute engines, and a live view
+        # recomputing its window function on every read would be far more
+        # expensive than paying for it once per rebuild.
+        _stage_timed("latest_observation_sql")(
+            self._rebuild_gold_latest_observation_sql
+        )()
 
-        silver = self._read("silver_fred_observation")
-        for r in silver:
-            r["is_missing"] = bool(r.get("is_missing"))
+        def _read_silver():
+            rows = self._read("silver_fred_observation")
+            for r in rows:
+                r["is_missing"] = bool(r.get("is_missing"))
+            return rows
 
-        latest = self._read("gold_fred_latest_observation")
-        for r in latest:
-            r["is_missing"] = bool(r.get("is_missing"))
+        def _read_latest():
+            rows = self._read("gold_fred_latest_observation")
+            for r in rows:
+                r["is_missing"] = bool(r.get("is_missing"))
+            return rows
+
+        silver = _stage_timed("read_silver")(_read_silver)()
+        latest = _stage_timed("read_latest")(_read_latest)()
+        if _STAGE_TIMING_ENABLED:
+            log.info("gold.row_counts silver=%d latest=%d", len(silver), len(latest))
+
+        # spec003 Phase 3 fix: the ~18 _compute_parallel engines below each
+        # want only a handful of curated series (a dashboard catalog, a few
+        # curve tenors, a couple of stats pairs) out of `latest`'s tens of
+        # millions of rows. Left alone, every one of them re-filters via its
+        # own `r for r in latest_rows if r.get("series_id") in wanted` scan --
+        # an O(n) pass over the full table per function. The Spark backend
+        # never pays this cost: writer/gold.py's `_collect_latest()` pushes
+        # the same filter down to a `WHERE series_id IN (...)` SQL query
+        # before collecting, so each engine only ever sees its own rows. This
+        # index (one O(n) pass, built once) plus `_select_series()` below lets
+        # Local mirror that: build the wanted-id set the same way gold.py
+        # does, then hand each engine only its own rows via O(1) dict
+        # lookups. The per-function filter inside each engine still runs, but
+        # now over an already-tiny list, so it's free.
+        latest_by_series = _stage_timed("index_latest_by_series")(_index_by_series)(
+            latest
+        )
 
         # daily forward-filled feature matrix; quant transforms (mom/yoy/diff/
         # zscore); curve spreads; revision-magnitude stats. Prefers the
@@ -891,10 +1114,13 @@ class LocalWarehouse:
         insert = self._insert_frame if mode == "polars" else self._insert
 
         self.conn.execute("DELETE FROM gold_fred_macro_feature_daily")
-        insert("gold_fred_macro_feature_daily", build_daily_matrix(latest))
+        insert(
+            "gold_fred_macro_feature_daily",
+            _stage_timed("daily_feature_matrix")(build_daily_matrix)(latest),
+        )
 
         self.conn.execute("DELETE FROM gold_fred_feature_transforms")
-        _ft_result = build_transforms(latest)
+        _ft_result = _stage_timed("feature_transforms")(build_transforms)(latest)
         insert("gold_fred_feature_transforms", _ft_result)
         # Capture as list[dict] for the ML feature-matrix engine (ML-0).
         feature_transform_rows: list[dict] = (
@@ -910,15 +1136,23 @@ class LocalWarehouse:
         self.conn.execute("DELETE FROM gold_fred_series_zscore_rolling")
         self._insert(
             "gold_fred_series_zscore_rolling",
-            compute_fred_series_zscore_rolling(feature_transform_rows),
+            _stage_timed("zscore_rolling")(compute_fred_series_zscore_rolling)(
+                feature_transform_rows
+            ),
         )
         self.conn.execute("DELETE FROM gold_zscore_heatmap")
         self._insert(
-            "gold_zscore_heatmap", compute_zscore_heatmap(feature_transform_rows)
+            "gold_zscore_heatmap",
+            _stage_timed("zscore_heatmap")(compute_zscore_heatmap)(
+                feature_transform_rows
+            ),
         )
 
         self.conn.execute("DELETE FROM gold_fred_curve_spread")
-        insert("gold_fred_curve_spread", build_spreads(latest))
+        insert(
+            "gold_fred_curve_spread",
+            _stage_timed("curve_spread")(build_spreads)(latest),
+        )
 
         # cross-series features (frequency-aware, N-leg): a small output, so use
         # the pure-Python reference directly (same function the Spark path reuses).
@@ -930,18 +1164,24 @@ class LocalWarehouse:
 
         self.conn.execute("DELETE FROM gold_fred_cross_series_feature")
         self._insert(
-            "gold_fred_cross_series_feature", compute_cross_series_features(latest)
+            "gold_fred_cross_series_feature",
+            _stage_timed("cross_series_feature")(compute_cross_series_features)(latest),
         )
         # Point-in-time (as-first-reported) variant: leak-free, reads raw Silver
         # (all vintages), not latest-revision rows.
         self.conn.execute("DELETE FROM gold_fred_cross_series_feature_pit")
         self._insert(
             "gold_fred_cross_series_feature_pit",
-            compute_cross_series_features_pit(silver),
+            _stage_timed("cross_series_feature_pit")(compute_cross_series_features_pit)(
+                silver
+            ),
         )
         self.conn.execute("DELETE FROM gold_fred_source_reconciliation")
         self._insert(
-            "gold_fred_source_reconciliation", compute_source_reconciliation(latest)
+            "gold_fred_source_reconciliation",
+            _stage_timed("source_reconciliation")(compute_source_reconciliation)(
+                latest
+            ),
         )
 
         # SEC company financials: standardize raw XBRL tags into canonical line
@@ -951,21 +1191,30 @@ class LocalWarehouse:
             standardize_sec_statements,
         )
 
-        fundamentals = standardize_sec_statements(silver)
+        fundamentals = _stage_timed("sec_standardize")(standardize_sec_statements)(
+            silver
+        )
         self.conn.execute("DELETE FROM gold_fred_company_fundamentals")
         self._insert("gold_fred_company_fundamentals", fundamentals)
         self.conn.execute("DELETE FROM gold_fred_company_ratios")
-        self._insert("gold_fred_company_ratios", compute_sec_ratios(fundamentals))
+        self._insert(
+            "gold_fred_company_ratios",
+            _stage_timed("sec_ratios")(compute_sec_ratios)(fundamentals),
+        )
 
         # revision stats read raw Silver (every vintage), not latest-revision
         # rows — they exist to measure how much observations get revised.
         self.conn.execute("DELETE FROM gold_fred_revision_stats")
-        insert("gold_fred_revision_stats", build_revision_stats(silver))
+        insert(
+            "gold_fred_revision_stats",
+            _stage_timed("revision_stats")(build_revision_stats)(silver),
+        )
 
         # Market-terminal analytical views (docs/market_terminal_gold_views.md):
         # dimensions, the ECON macro dashboard, and the Treasury Curve Lab.
         # All pure-Python engines shared verbatim with the Spark backend.
         from fred_pipeline.terminal_views import (
+            RECESSION_SERIES,
             build_dim_date,
             build_dim_series,
             compute_benchmark_rate_board,
@@ -994,7 +1243,7 @@ class LocalWarehouse:
             for r in latest
             if not r["is_missing"] and r.get("observation_date")
         ]
-        usrec = [r for r in latest if r["series_id"] == "USREC"]
+        usrec = latest_by_series.get(RECESSION_SERIES, [])
         self.conn.execute("DELETE FROM gold_dim_date")
         self.conn.execute("DELETE FROM gold_market_calendar")
         if obs_dates:
@@ -1009,10 +1258,27 @@ class LocalWarehouse:
 
         # Independent pure-Python Gold engines can compute in parallel; writes
         # remain serial below because SQLite has a single writer.
+        # spec003 Phase 3: load each engine's own config up front (the same
+        # loaders each engine falls back to via cfg=None) so we can compute
+        # its curated series-id set and hand it an already-filtered subset
+        # via `_select_series()` instead of the full `latest` list -- see the
+        # comment above `latest_by_series` for why. Passing the loaded cfg
+        # through also means each engine no longer reloads/reparses its own
+        # config from disk 18 times.
+        from fred_pipeline.catalog_config import load_series_catalog
+        from fred_pipeline.curve_config import load_curve_defs
+        from fred_pipeline.global_config import load_global_config
         from fred_pipeline.global_views import (
             compute_global_inflation,
             compute_global_policy_rates,
             powerbi_catalog_rows,
+        )
+        from fred_pipeline.gold_config.fomc_config import load_fomc_config
+        from fred_pipeline.inflation_config import load_inflation_items
+        from fred_pipeline.rates_complex_config import (
+            load_benchmark_board,
+            load_credit_config,
+            load_funding_config,
         )
         from fred_pipeline.regime_stats import (
             compute_macro_regime,
@@ -1020,33 +1286,150 @@ class LocalWarehouse:
             compute_series_lead_lag,
             compute_series_structural_breaks,
         )
+        from fred_pipeline.regime_stats_config import (
+            load_regime_config,
+            load_stats_config,
+        )
+        from fred_pipeline.spread_config import load_spread_defs
 
-        computed = _compute_parallel(
+        catalog = load_series_catalog()
+        tenors = load_curve_defs()
+        spreads = load_spread_defs()
+        board = load_benchmark_board()
+        funding_cfg = load_funding_config()
+        credit_cfg = load_credit_config()
+        infl_items = list(load_inflation_items())
+        fomc_cfg = load_fomc_config()
+        regime_cfg = load_regime_config()
+        stats_cfg = load_stats_config()
+        global_cfg = load_global_config()
+
+        dashboard_ids = {e.series_id for e in catalog}
+        curve_ids = {t.series_id for t in tenors} | {RECESSION_SERIES}
+        spread_leg_ids = {s for sd in spreads for s in (sd.long_leg, sd.short_leg)} | {
+            RECESSION_SERIES
+        }
+        board_ids = {rd.series_id for rd in board.rates} | {
+            rd.benchmark for rd in board.rates if rd.benchmark
+        }
+        funding_ids = {m.series_id for m in funding_cfg.metrics} | {
+            s for sp in funding_cfg.spreads for s in (sp.long_leg, sp.short_leg)
+        }
+        credit_ids = {cd.series_id for cd in credit_cfg.instruments} | {
+            RECESSION_SERIES
+        }
+        inflation_ids = {i.series_id for i in infl_items}
+        regime_ids = {i.series_id for p in regime_cfg.pillars for i in p.inputs}
+        stats_ids = {s for p in stats_cfg.pairs for s in (p.series_a, p.series_b)}
+        fomc_ids: set[str] = set()
+        if fomc_cfg is not None:
+            fomc_ids = {t.series_id for t in fomc_cfg.tenors} | {
+                fomc_cfg.target_low_series,
+                fomc_cfg.target_high_series,
+                fomc_cfg.effective_rate_series,
+            }
+        global_ids = {d.series_id for d in global_cfg.inflation} | {
+            d.series_id for d in global_cfg.policy_rates
+        }
+
+        # spec003 Phase 2: each entry individually _stage_timed so a
+        # per-function breakdown is available (see the module-level comment
+        # near _STAGE_TIMING_ENABLED) -- comparing the sum of these against
+        # the "compute_parallel_total" wrap below tells us whether the
+        # ThreadPoolExecutor is buying real overlap on this CPU-bound pure
+        # Python work or whether the GIL is serializing it anyway.
+        computed = _stage_timed("compute_parallel_total")(_compute_parallel)(
             {
-                "dashboard": lambda: compute_macro_dashboard(latest),
-                "curve": lambda: compute_treasury_curve(latest),
-                "curve_spread_daily": lambda: compute_curve_spread_daily(latest),
-                "spread_inversion_episode": lambda: compute_spread_inversion_episodes(
-                    latest
+                "dashboard": _stage_timed("pf.dashboard")(
+                    lambda: compute_macro_dashboard(
+                        _select_series(latest_by_series, dashboard_ids), catalog
+                    )
                 ),
-                "benchmark_rate_board": lambda: compute_benchmark_rate_board(latest),
-                "funding": lambda: compute_funding_features(latest),
-                "credit_spread_daily": lambda: compute_credit_spread_daily(latest),
-                "inflation": lambda: compute_inflation_explorer(latest),
-                "curve_spread_rolling": lambda: compute_curve_spread_rolling(latest),
-                "credit_spread_rolling": lambda: compute_credit_spread_rolling(latest),
-                "treasury_curve_rolling": lambda: compute_treasury_curve_rolling(
-                    latest
+                "curve": _stage_timed("pf.curve")(
+                    lambda: compute_treasury_curve(
+                        _select_series(latest_by_series, curve_ids), tenors
+                    )
                 ),
-                "macro_regime_daily": lambda: compute_macro_regime(latest),
-                "series_correlation": lambda: compute_series_correlation(latest),
-                "series_lead_lag": lambda: compute_series_lead_lag(latest),
-                "series_structural_breaks": lambda: compute_series_structural_breaks(
-                    latest
+                "curve_spread_daily": _stage_timed("pf.curve_spread_daily")(
+                    lambda: compute_curve_spread_daily(
+                        _select_series(latest_by_series, spread_leg_ids), spreads
+                    )
                 ),
-                "fomc": lambda: compute_fomc_probability(latest),
-                "global_inflation": lambda: compute_global_inflation(latest),
-                "global_policy_rates": lambda: compute_global_policy_rates(latest),
+                "spread_inversion_episode": _stage_timed("pf.spread_inversion_episode")(
+                    lambda: compute_spread_inversion_episodes(
+                        _select_series(latest_by_series, spread_leg_ids), spreads
+                    )
+                ),
+                "benchmark_rate_board": _stage_timed("pf.benchmark_rate_board")(
+                    lambda: compute_benchmark_rate_board(
+                        _select_series(latest_by_series, board_ids), board
+                    )
+                ),
+                "funding": _stage_timed("pf.funding")(
+                    lambda: compute_funding_features(
+                        _select_series(latest_by_series, funding_ids), funding_cfg
+                    )
+                ),
+                "credit_spread_daily": _stage_timed("pf.credit_spread_daily")(
+                    lambda: compute_credit_spread_daily(
+                        _select_series(latest_by_series, credit_ids), credit_cfg
+                    )
+                ),
+                "inflation": _stage_timed("pf.inflation")(
+                    lambda: compute_inflation_explorer(
+                        _select_series(latest_by_series, inflation_ids), infl_items
+                    )
+                ),
+                "curve_spread_rolling": _stage_timed("pf.curve_spread_rolling")(
+                    lambda: compute_curve_spread_rolling(
+                        _select_series(latest_by_series, spread_leg_ids), spreads
+                    )
+                ),
+                "credit_spread_rolling": _stage_timed("pf.credit_spread_rolling")(
+                    lambda: compute_credit_spread_rolling(
+                        _select_series(latest_by_series, credit_ids), credit_cfg
+                    )
+                ),
+                "treasury_curve_rolling": _stage_timed("pf.treasury_curve_rolling")(
+                    lambda: compute_treasury_curve_rolling(
+                        _select_series(latest_by_series, curve_ids), tenors
+                    )
+                ),
+                "macro_regime_daily": _stage_timed("pf.macro_regime_daily")(
+                    lambda: compute_macro_regime(
+                        _select_series(latest_by_series, regime_ids), regime_cfg
+                    )
+                ),
+                "series_correlation": _stage_timed("pf.series_correlation")(
+                    lambda: compute_series_correlation(
+                        _select_series(latest_by_series, stats_ids), stats_cfg
+                    )
+                ),
+                "series_lead_lag": _stage_timed("pf.series_lead_lag")(
+                    lambda: compute_series_lead_lag(
+                        _select_series(latest_by_series, stats_ids), stats_cfg
+                    )
+                ),
+                "series_structural_breaks": _stage_timed("pf.series_structural_breaks")(
+                    lambda: compute_series_structural_breaks(
+                        _select_series(latest_by_series, stats_ids), stats_cfg
+                    )
+                ),
+                "fomc": _stage_timed("pf.fomc")(
+                    lambda: compute_fomc_probability(
+                        _select_series(latest_by_series, fomc_ids), fomc_cfg
+                    )
+                ),
+                "global_inflation": _stage_timed("pf.global_inflation")(
+                    lambda: compute_global_inflation(
+                        _select_series(latest_by_series, global_ids), global_cfg
+                    )
+                ),
+                "global_policy_rates": _stage_timed("pf.global_policy_rates")(
+                    lambda: compute_global_policy_rates(
+                        _select_series(latest_by_series, global_ids), global_cfg
+                    )
+                ),
             }
         )
 
@@ -1152,30 +1535,41 @@ class LocalWarehouse:
         stooq_rows = [r for r in silver if r.get("source") == "stooq"]
         ishares_rows = [r for r in silver if r.get("source") == "ishares"]
         tiingo_rows = [r for r in silver if r.get("source") == "tiingo"]
-        canonical_price_rows = select_canonical_equity_price_rows(
-            stooq_rows, tiingo_rows
-        )
-        eq_return_rows = compute_equity_return_daily(canonical_price_rows)
+        canonical_price_rows = _stage_timed("equity_canonical_prices")(
+            select_canonical_equity_price_rows
+        )(stooq_rows, tiingo_rows)
+        eq_return_rows = _stage_timed("equity_return_daily")(
+            compute_equity_return_daily
+        )(canonical_price_rows)
         self.conn.execute("DELETE FROM gold_equity_return_daily")
         self._insert("gold_equity_return_daily", eq_return_rows)
         self.conn.execute("DELETE FROM gold_index_constituents")
         self._insert(
-            "gold_index_constituents", compute_index_constituents(ishares_rows)
+            "gold_index_constituents",
+            _stage_timed("index_constituents")(compute_index_constituents)(
+                ishares_rows
+            ),
         )
         self.conn.execute("DELETE FROM gold_equity_total_return_index")
         self._insert(
             "gold_equity_total_return_index",
-            compute_equity_total_return_index(tiingo_rows),
+            _stage_timed("equity_total_return_index")(
+                compute_equity_total_return_index
+            )(tiingo_rows),
         )
         self.conn.execute("DELETE FROM gold_equity_price_reconciliation")
         self._insert(
             "gold_equity_price_reconciliation",
-            compute_equity_price_reconciliation(stooq_rows, tiingo_rows),
+            _stage_timed("equity_price_reconciliation")(
+                compute_equity_price_reconciliation
+            )(stooq_rows, tiingo_rows),
         )
         self.conn.execute("DELETE FROM gold_realized_volatility")
         self._insert(
             "gold_realized_volatility",
-            compute_realized_volatility(canonical_price_rows),
+            _stage_timed("realized_volatility")(compute_realized_volatility)(
+                canonical_price_rows
+            ),
         )
 
         # ML pipeline: ML-0 feature matrix → ML-2 PCA scores/loadings → ML-4 anomaly.
@@ -1190,12 +1584,16 @@ class LocalWarehouse:
             ml_cfg = load_ml_feature_config()
         except (OSError, ValueError) as exc:
             log.warning("Using default ML feature config: %s", exc)
-        ml_matrix = compute_ml_feature_matrix(feature_transform_rows, ml_cfg)
+        ml_matrix = _stage_timed("ml_feature_matrix")(compute_ml_feature_matrix)(
+            feature_transform_rows, ml_cfg
+        )
         self.conn.execute("DELETE FROM gold_ml_feature_matrix")
         self._insert("gold_ml_feature_matrix", ml_matrix)
 
         n_comp = ml_cfg.n_components if ml_cfg else 5
-        pca = compute_macro_factor_scores(ml_matrix, n_components=n_comp)
+        pca = _stage_timed("macro_factor_scores")(compute_macro_factor_scores)(
+            ml_matrix, n_components=n_comp
+        )
         self.conn.execute("DELETE FROM gold_macro_factor_scores")
         self._insert("gold_macro_factor_scores", pca["scores"])
         self.conn.execute("DELETE FROM gold_macro_factor_loadings")
@@ -1205,7 +1603,9 @@ class LocalWarehouse:
         self.conn.execute("DELETE FROM gold_macro_anomaly_scores")
         self._insert(
             "gold_macro_anomaly_scores",
-            compute_macro_anomaly_scores(pca["scores"], anomaly_threshold=anom_thresh),
+            _stage_timed("macro_anomaly_scores")(compute_macro_anomaly_scores)(
+                pca["scores"], anomaly_threshold=anom_thresh
+            ),
         )
 
         # ML-5: Equity factor attribution (rolling OLS vs PCA macro factors).
@@ -1220,9 +1620,9 @@ class LocalWarehouse:
             ef_cfg = load_equity_factor_config()
         except (OSError, ValueError) as exc:
             log.warning("Using default equity factor config: %s", exc)
-        attribution_rows = compute_equity_factor_attribution(
-            eq_return_rows, pca["scores"], cfg=ef_cfg
-        )
+        attribution_rows = _stage_timed("equity_factor_attribution")(
+            compute_equity_factor_attribution
+        )(eq_return_rows, pca["scores"], cfg=ef_cfg)
         self.conn.execute("DELETE FROM gold_equity_factor_attribution")
         self._insert("gold_equity_factor_attribution", attribution_rows)
 
@@ -1230,9 +1630,9 @@ class LocalWarehouse:
         self.conn.execute("DELETE FROM gold_equity_factor_implied_return")
         self._insert(
             "gold_equity_factor_implied_return",
-            compute_equity_factor_implied_return(
-                attribution_rows, pca["scores"], eq_return_rows, cfg=ef_cfg
-            ),
+            _stage_timed("equity_factor_implied_return")(
+                compute_equity_factor_implied_return
+            )(attribution_rows, pca["scores"], eq_return_rows, cfg=ef_cfg),
         )
 
         # ML-3: Expanding IRLS logistic recession probability model.
@@ -1249,7 +1649,7 @@ class LocalWarehouse:
         self.conn.execute("DELETE FROM gold_recession_probability_daily")
         self._insert(
             "gold_recession_probability_daily",
-            compute_recession_probability(
+            _stage_timed("recession_probability")(compute_recession_probability)(
                 latest,
                 ns_factor_rows=ns_factor_rows,
                 feature_transform_rows=feature_transform_rows,
@@ -1274,7 +1674,9 @@ class LocalWarehouse:
         self.conn.execute("DELETE FROM gold_inflation_forecast")
         self._insert(
             "gold_inflation_forecast",
-            compute_inflation_forecast(latest, cfg=inf_cfg),
+            _stage_timed("inflation_forecast")(compute_inflation_forecast)(
+                latest, cfg=inf_cfg
+            ),
         )
 
         return {

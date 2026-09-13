@@ -17,9 +17,10 @@ logic; the Spark equivalents live in :mod:`fred_pipeline.gold`.
 
 from __future__ import annotations
 
-from bisect import bisect_right
-from datetime import date, datetime, timedelta
-from typing import Any, Iterable, Optional
+from bisect import bisect_left, bisect_right, insort
+from collections.abc import Iterable
+from datetime import date, timedelta
+from typing import Any
 
 from fred_pipeline.cross_series_config import CrossSeriesDef, load_cross_series_defs
 from fred_pipeline.reconciliation_config import (
@@ -33,20 +34,22 @@ from fred_pipeline.spread_config import SpreadDef, load_spread_defs
 YOY_TOLERANCE_DAYS = 40
 
 
-def _parse(d: Any) -> Optional[date]:
+def _parse(d: Any) -> date | None:
     try:
-        return datetime.strptime(str(d)[:10], "%Y-%m-%d").date()
+        return date.fromisoformat(str(d)[:10])
     except (ValueError, TypeError):
         return None
 
 
-def _pct_change(cur: Optional[float], base: Optional[float]) -> Optional[float]:
+def _pct_change(cur: float | None, base: float | None) -> float | None:
     if cur is None or base is None or base == 0:
         return None
     return (cur - base) / base
 
 
-def _group_sorted(rows: Iterable[dict[str, Any]]) -> dict[str, list[tuple[date, float]]]:
+def _group_sorted(
+    rows: Iterable[dict[str, Any]],
+) -> dict[str, list[tuple[date, float]]]:
     by_series: dict[str, list[tuple[date, float]]] = {}
     for r in rows:
         if r.get("is_missing"):
@@ -61,9 +64,7 @@ def _group_sorted(rows: Iterable[dict[str, Any]]) -> dict[str, list[tuple[date, 
     return by_series
 
 
-def _year_ago_value(
-    dates: list[date], values: list[float], i: int
-) -> Optional[float]:
+def _year_ago_value(dates: list[date], values: list[float], i: int) -> float | None:
     """Value at the observation nearest on-or-before ~1 year before dates[i]."""
     target = dates[i] - timedelta(days=365)
     pos = bisect_right(dates, target) - 1  # latest date <= target
@@ -95,8 +96,70 @@ def _expanding_mean_std(values: list[float]) -> tuple[list[float], list[float]]:
     return means, stds
 
 
+# ---- spec003 Phase 3: checkpointed/resumable expanding accumulators --------
+#
+# Same PIT-safe expanding math as `_expanding_mean_std`/`_expanding_percentile`
+# above, but split into (state, new_values) -> (new_state, new_outputs) so an
+# incremental Gold rebuild can extend a per-entity checkpoint forward with
+# only the rows past its frontier, instead of rescanning that entity's full
+# history on every run. The correctness contract is exact, not approximate:
+# for any split point k, `resume(resume(init(), xs[:k]), xs[k:])` must
+# reproduce the non-resumable function's output for `xs` bit-for-bit (see
+# tests/test_features_resumable.py). Both state dicts are plain JSON-
+# serializable (for gold_incremental_checkpoint.state_json).
+
+
+def init_expanding_mean_std_state() -> dict[str, float]:
+    return {"n": 0, "mean": 0.0, "m2": 0.0}
+
+
+def resume_expanding_mean_std(
+    state: dict[str, float], new_values: list[float]
+) -> tuple[dict[str, float], list[float], list[float]]:
+    """Welford's algorithm is inherently streaming, so this is an exact
+    resume: the loop body is identical to `_expanding_mean_std`, just seeded
+    from a prior (n, mean, m2) instead of always starting at (0, 0.0, 0.0).
+    Returns the updated state and the *new* points' means/stds only."""
+    n = state["n"]
+    mean = state["mean"]
+    m2 = state["m2"]
+    means: list[float] = []
+    stds: list[float] = []
+    for v in new_values:
+        n += 1
+        delta = v - mean
+        mean += delta / n
+        m2 += delta * (v - mean)
+        means.append(mean)
+        stds.append((m2 / n) ** 0.5 if n > 1 else 0.0)
+    return {"n": n, "mean": mean, "m2": m2}, means, stds
+
+
+def init_expanding_percentile_state() -> dict[str, list[float]]:
+    return {"sorted_values": []}
+
+
+def resume_expanding_percentile(
+    state: dict[str, list[float]], new_values: list[float]
+) -> tuple[dict[str, list[float]], list[float | None]]:
+    """Exact (not approximate) resume of `_expanding_percentile`: the state
+    is the sorted list of every prior value, so a new point's rank is a
+    `bisect_left` against exactly the history the non-resumable version
+    would have linearly rescanned. `_expanding_percentile`'s `below = sum(1
+    for x in values[:i+1] if x < v)` never counts `v` against itself (`x < v`
+    excludes equal elements), so it equals `bisect_left(sorted(values[:i]),
+    v)` -- computed here against `sorted_values` *before* inserting `v`."""
+    sorted_values = state["sorted_values"]
+    out: list[float | None] = []
+    for v in new_values:
+        n = len(sorted_values)
+        out.append(bisect_left(sorted_values, v) / n if n else None)
+        insort(sorted_values, v)
+    return {"sorted_values": sorted_values}, out
+
+
 def compute_feature_transforms(
-    latest_rows: Iterable[dict[str, Any]]
+    latest_rows: Iterable[dict[str, Any]],
 ) -> list[dict[str, Any]]:
     """Per-series transforms from latest-revision rows (one per obs date)."""
     grouped = _group_sorted(latest_rows)
@@ -109,21 +172,23 @@ def compute_feature_transforms(
             prev = values[i - 1] if i > 0 else None
             year_ago = _year_ago_value(dates, values, i)
             std = exp_stds[i]
-            out.append({
-                "series_id": series_id,
-                "observation_date": d.isoformat(),
-                "value": v,
-                "mom": _pct_change(v, prev),
-                "diff": (v - prev) if prev is not None else None,
-                "yoy": _pct_change(v, year_ago),
-                "zscore": ((v - exp_means[i]) / std) if std else None,
-            })
+            out.append(
+                {
+                    "series_id": series_id,
+                    "observation_date": d.isoformat(),
+                    "value": v,
+                    "mom": _pct_change(v, prev),
+                    "diff": (v - prev) if prev is not None else None,
+                    "yoy": _pct_change(v, year_ago),
+                    "zscore": ((v - exp_means[i]) / std) if std else None,
+                }
+            )
     return out
 
 
 def compute_curve_spreads(
     latest_rows: Iterable[dict[str, Any]],
-    spreads: Optional[Iterable[SpreadDef]] = None,
+    spreads: Iterable[SpreadDef] | None = None,
 ) -> list[dict[str, Any]]:
     """Compute spread (long−short) or ratio (long/short) series per ``spreads``.
 
@@ -143,12 +208,14 @@ def compute_curve_spreads(
         values[(r["series_id"], str(r["observation_date"])[:10])] = float(r["value"])
 
     dates_by_series: dict[str, set[str]] = {}
-    for (sid, d) in values:
+    for sid, d in values:
         dates_by_series.setdefault(sid, set()).add(d)
 
     out: list[dict[str, Any]] = []
     for sd in spreads:
-        common = dates_by_series.get(sd.long_leg, set()) & dates_by_series.get(sd.short_leg, set())
+        common = dates_by_series.get(sd.long_leg, set()) & dates_by_series.get(
+            sd.short_leg, set()
+        )
         for d in sorted(common):
             long_v = values[(sd.long_leg, d)]
             short_v = values[(sd.short_leg, d)]
@@ -158,17 +225,20 @@ def compute_curve_spreads(
                 value = long_v / short_v
             else:
                 value = long_v - short_v
-            out.append({
-                "spread_name": sd.name,
-                "observation_date": d,
-                "long_leg": sd.long_leg,
-                "short_leg": sd.short_leg,
-                "value": value,
-            })
+            out.append(
+                {
+                    "spread_name": sd.name,
+                    "observation_date": d,
+                    "long_leg": sd.long_leg,
+                    "short_leg": sd.short_leg,
+                    "value": value,
+                }
+            )
     return out
 
 
 # ---- cross-series features (frequency-aware, N-leg) ------------------------
+
 
 def _period_start(d: date, freq: str) -> str:
     """Canonical ISO period-start date for ``d`` at target ``freq``."""
@@ -197,7 +267,7 @@ def _combine_cross_series(
     by_series: dict[str, list[tuple[date, float]]],
     defs: Iterable[CrossSeriesDef],
     *,
-    basis: Optional[str] = None,
+    basis: str | None = None,
 ) -> list[dict[str, Any]]:
     """Align each leg to its target frequency and combine per ``op``.
 
@@ -207,7 +277,7 @@ def _combine_cross_series(
     """
     out: list[dict[str, Any]] = []
     for cd in defs:
-        aligned: Optional[list[tuple[float, dict[str, float]]]] = []
+        aligned: list[tuple[float, dict[str, float]]] | None = []
         for sid, weight in cd.legs:
             s = by_series.get(sid)
             if not s:
@@ -245,7 +315,7 @@ def _combine_cross_series(
 
 def compute_cross_series_features(
     latest_rows: Iterable[dict[str, Any]],
-    defs: Optional[Iterable[CrossSeriesDef]] = None,
+    defs: Iterable[CrossSeriesDef] | None = None,
 ) -> list[dict[str, Any]]:
     """Compute frequency-aware, N-leg cross-series features per ``defs``.
 
@@ -263,8 +333,8 @@ def compute_cross_series_features(
 
 
 def _select_vintage(
-    vintages: list[tuple[str, float]], as_of: Optional[str]
-) -> Optional[float]:
+    vintages: list[tuple[str, float]], as_of: str | None
+) -> float | None:
     """Pick one value from an observation's vintages (``(realtime_start, value)``).
 
     ``as_of=None`` → **first report** (earliest ``realtime_start``). ``as_of=D`` →
@@ -281,7 +351,7 @@ def _select_vintage(
 
 
 def _pit_by_series(
-    silver_rows: Iterable[dict[str, Any]], as_of: Optional[str]
+    silver_rows: Iterable[dict[str, Any]], as_of: str | None
 ) -> dict[str, list[tuple[date, float]]]:
     """Reduce raw Silver (all vintages) to one point-in-time value per
     (series, observation_date), selected by :func:`_select_vintage`."""
@@ -294,7 +364,9 @@ def _pit_by_series(
         if v is None or not od:
             continue
         rt = r.get("realtime_start") or ""
-        groups.setdefault((r["series_id"], str(od)[:10]), []).append((str(rt), float(v)))
+        groups.setdefault((r["series_id"], str(od)[:10]), []).append(
+            (str(rt), float(v))
+        )
 
     by_series: dict[str, list[tuple[date, float]]] = {}
     for (sid, od), vintages in groups.items():
@@ -310,9 +382,9 @@ def _pit_by_series(
 
 def compute_cross_series_features_pit(
     silver_rows: Iterable[dict[str, Any]],
-    defs: Optional[Iterable[CrossSeriesDef]] = None,
+    defs: Iterable[CrossSeriesDef] | None = None,
     *,
-    as_of: Optional[str] = None,
+    as_of: str | None = None,
 ) -> list[dict[str, Any]]:
     """Point-in-time (``realtime_start``-aligned) cross-series features.
 
@@ -335,7 +407,7 @@ def compute_cross_series_features_pit(
 
 def compute_source_reconciliation(
     latest_rows: Iterable[dict[str, Any]],
-    defs: Optional[Iterable[ReconciliationDef]] = None,
+    defs: Iterable[ReconciliationDef] | None = None,
 ) -> list[dict[str, Any]]:
     """Compare same-concept series from different sources per ``defs``.
 
@@ -362,21 +434,25 @@ def compute_source_reconciliation(
             abs_diff = va - vb
             pct_diff = (abs_diff / vb) if vb != 0 else None
             diverged = pct_diff is not None and abs(pct_diff) * 100.0 > rc.tolerance_pct
-            out.append({
-                "name": rc.name,
-                "observation_date": period,
-                "series_a": rc.series_a,
-                "value_a": va,
-                "series_b": rc.series_b,
-                "value_b": vb,
-                "abs_diff": abs_diff,
-                "pct_diff": pct_diff,
-                "diverged": diverged,
-            })
+            out.append(
+                {
+                    "name": rc.name,
+                    "observation_date": period,
+                    "series_a": rc.series_a,
+                    "value_a": va,
+                    "series_b": rc.series_b,
+                    "value_b": vb,
+                    "abs_diff": abs_diff,
+                    "pct_diff": pct_diff,
+                    "diverged": diverged,
+                }
+            )
     return sorted(out, key=lambda r: (r["name"], r["observation_date"]))
 
 
-def compute_revision_stats(silver_rows: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
+def compute_revision_stats(
+    silver_rows: Iterable[dict[str, Any]],
+) -> list[dict[str, Any]]:
     """How much each observation moved between its first print and today.
 
     Unlike the other transforms (which read *latest-revision* rows),
@@ -405,17 +481,19 @@ def compute_revision_stats(silver_rows: Iterable[dict[str, Any]]) -> list[dict[s
         first_value = float(first["value"])
         latest_value = float(latest["value"])
         delta = latest_value - first_value
-        out.append({
-            "series_id": series_id,
-            "observation_date": obs_date,
-            "revision_count": len(rows),
-            "first_value": first_value,
-            "first_realtime_start": first.get("realtime_start") or "",
-            "latest_value": latest_value,
-            "latest_realtime_start": latest.get("realtime_start") or "",
-            "revision_delta": delta,
-            "revision_pct": (delta / first_value) if first_value else None,
-        })
+        out.append(
+            {
+                "series_id": series_id,
+                "observation_date": obs_date,
+                "revision_count": len(rows),
+                "first_value": first_value,
+                "first_realtime_start": first.get("realtime_start") or "",
+                "latest_value": latest_value,
+                "latest_realtime_start": latest.get("realtime_start") or "",
+                "revision_delta": delta,
+                "revision_pct": (delta / first_value) if first_value else None,
+            }
+        )
     return sorted(out, key=lambda r: (r["series_id"], r["observation_date"]))
 
 
