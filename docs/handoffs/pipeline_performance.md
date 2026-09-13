@@ -1,13 +1,19 @@
-# Pipeline performance handoff: Gold rebuild — root cause fixed, incremental rebuild in progress
+# Pipeline performance handoff: Gold rebuild fixed + incremental; extraction is the next lever
 
-**Status: Phases 1–2 done. Phase 3 (Incremental Gold) in progress — 4 of
-~58 tables wired, pattern proven, next tier identified as harder.**
+**Status: Phases 1–2 done. Phase 3 (Incremental Gold) has 5 tables/groups
+wired and the pattern is proven; the remaining candidate tables are
+deliberately deferred (see "Phase 3: what's left, and why it's parked"
+below) pending real profiling data. A new, likely-bigger lever — due-date
+gating on extraction — is scoped in [`specs/spec007`](../../specs/spec007/README.md)
+and not yet started.**
 
-**Audience:** an agent working in **this** repo (`fred-bronze-to-gold-pipeline`),
-picking up spec003 Phase 3. Read this first, then
+**Audience:** an agent working in **this** repo (`fred-bronze-to-gold-pipeline`).
+Read this first. For Phase 3 continuation, read
 [`specs/spec003/README.md`](../../specs/spec003/README.md) (the authoritative
 design doc — Phase 3's "Status (2026-09-13)" note there has the full
-rationale for every decision summarized here) before writing any code.
+rationale for every decision summarized here) before writing any code. For
+the extraction-gating work, read `specs/spec007/README.md` first — it's a
+design doc, not started, and needs a real decision on scope before code.
 
 ## What was found and fixed (Phases 1–2, both done)
 
@@ -56,30 +62,42 @@ and on a routine build only extend forward from the checkpointed frontier,
 falling back to a full per-entity recompute on backfill, config change, or
 first-seen.
 
-### The established pattern (4 tables done, all following this shape)
+### The established pattern (5 tables/groups done, all following this shape)
 
 Done so far, in order, each on its own commit on `spec004-postgres-deployment-runbook`:
 `afa0667` (checkpoint infrastructure + prerequisites) → `0c65080`
 (`gold_curve_spread_daily`) → `3dad9b4` (`gold --full` CLI flag +
 integration tests) → `b43f81d` (`gold_credit_spread_daily`) → `1d87eb5`
-(`gold_funding_tape_daily` + `gold_funding_stress_daily`).
+(`gold_funding_tape_daily` + `gold_funding_stress_daily`) → `8be0de5`
+(`gold_series_correlation`).
 
 For a table that's per-entity and causal/expanding (the common case):
 
 1. **A resumable engine function** in `src/fred_pipeline/writer/terminal_views.py`
-   (or `regime_stats.py`/`global_views.py` for the next tier), named
-   `resume_<table>` — takes `(entity identity fields, new_points_past_frontier,
-   prior_state_or_None, ...)`, returns `(new_state, new_rows_only)`. Built from
-   the two shared exact resumable primitives in `writer/features.py`:
-   `resume_expanding_mean_std` (Welford, O(1) state) and
-   `resume_expanding_percentile` (exact via a checkpointed sorted-value list +
-   `bisect`, not approximate). Check whether the table's original
-   `compute_<table>` function carries any *additional* sequential state
-   beyond those two — `gold_curve_spread_daily`'s `inversion_run` (a
+   or `regime_stats.py`, named `resume_<table>` — takes `(entity identity
+   fields, new_points_past_frontier, prior_state_or_None, ...)`, returns
+   `(new_state, new_rows_only)`. Built from the shared exact resumable
+   primitives in `writer/features.py`: `resume_expanding_mean_std` (Welford,
+   O(1) state) and `resume_expanding_percentile` (exact via a checkpointed
+   sorted-value list + `bisect`, not approximate). Check whether the table's
+   original `compute_<table>` function carries any *additional* sequential
+   state beyond those two — `gold_curve_spread_daily`'s `inversion_run` (a
    consecutive-count) and `gold_credit_spread_daily`'s `change_bps` (needs
    the single prior value) both did; write a dedicated test proving a naive
    resume without that extra state would silently produce wrong output for
-   the first point of a resumed chunk.
+   the first point of a resumed chunk. If a table needs a genuinely new
+   primitive (not built from the two shared ones) — `gold_series_correlation`
+   did, for bivariate rolling correlation — check whether the original
+   algorithm uses prefix-sum subtraction rather than direct windowed
+   summation. Those are mathematically equal but **not bit-for-bit
+   identical** (different floating-point cancellation); a resume built on a
+   raw-value ring buffer will get the right correlation value while
+   silently breaking the exact-parity contract. `resume_series_correlation`
+   (`regime_stats.py`) keeps a ring buffer of *cumulative-sum snapshots*
+   instead and reconstructs windows via subtraction, matching the original's
+   arithmetic exactly — proven with a 30-trial random-data property test
+   asserting exact equality, not `pytest.approx`. Read that function's
+   docstring before building another prefix-sum-based resumable engine.
 2. **A `_build_<table>` orchestration method** on `LocalWarehouse` in
    `src/fred_pipeline/io/local_store.py`, pulled out of the
    `_compute_parallel` dict entirely (checkpoint reads/writes must stay
@@ -100,15 +118,17 @@ For a table that's per-entity and causal/expanding (the common case):
    (clearing this table's checkpoints via `_clear_checkpoints`) when `True`.
 4. **Tests**: engine-level parity tests (`resume_X` output ==
    `compute_X` output, across arbitrary split points — see
-   `tests/test_features_resumable.py` for the primitive-level property tests
-   and `tests/test_terminal_views.py`'s `resume_curve_spread_daily`/
-   `resume_credit_spread_daily`/`resume_funding_tape_entry` tests for the
-   per-table pattern), plus integration tests against the real
-   `LocalWarehouse.build_gold()` entry point in `tests/test_local_store.py`
-   (skip-untouched, append, backfill-vs-from-scratch, and — if the table has
-   one — a downstream-consumer check, since two of the four tables done so
-   far had another Gold table reading their output, which needed a small
-   fix each time; see below).
+   `tests/test_features_resumable.py` for the primitive-level property tests;
+   `tests/test_terminal_views.py`'s `resume_curve_spread_daily`/
+   `resume_credit_spread_daily`/`resume_funding_tape_entry` tests and
+   `tests/test_regime_stats.py`'s `resume_series_correlation` tests for the
+   per-table pattern — the latter also has the random-property test to copy
+   if you build another prefix-sum-based engine), plus integration tests
+   against the real `LocalWarehouse.build_gold()` entry point in
+   `tests/test_local_store.py` (skip-untouched, append, backfill-vs-from-
+   scratch, and — if the table has one — a downstream-consumer check, since
+   two of the five tables done so far had another Gold table reading their
+   output, which needed a small fix each time; see below).
 
 **Watch for downstream consumers when removing a table from `_compute_parallel`.**
 Both `gold_credit_spread_daily` and `gold_funding_stress_daily` were read by
@@ -130,51 +150,79 @@ value is already computed fresh in Python that build — as
   their full rebuild is already cheap (tiny output).
 - **Cross-sectional composites**: `gold_funding_stress_daily` (done —
   deliberately left as an always-full recompute, not checkpointed; see its
-  docstring in `local_store.py` for the reasoning) and, at a larger scale,
+  docstring in `local_store.py` for the reasoning) and `gold_macro_regime_daily`
+  (evaluated, deliberately left alone — see below) and, at a larger scale,
   the macro PCA/factor-score tables and `macro_category_summary`. A single
   touched entity can change *other* entities' or dates' output, breaking the
   per-entity append/backfill split. Generally: recompute fully every time,
   cheaply, rather than force-fitting the checkpoint pattern.
 
-### Next tier (harder — not started, this is where to pick up)
+### Phase 3: what's left, and why it's parked (evaluated, not just unstarted)
 
-In roughly this order, per spec003's own "don't build later phases
-speculatively" discipline — do one, prove it, then move on, same as the four
-already done:
+These aren't "the next tier to do the same way" — each was looked at and
+found to be either a poor fit for the checkpoint pattern or of uncertain
+payoff. Don't start on these without re-deriving (or refuting) the reasoning
+below first; it's not a TODO list, it's a set of conclusions.
 
-1. **The regime playbook and correlation** (`gold_macro_regime_daily`,
-   `gold_series_correlation`) — `regime_stats.py`'s `compute_macro_regime`
-   and `compute_series_correlation`. Structurally similar to what's already
-   done (config-bounded entities, expanding stats), but `compute_macro_regime`
-   has *multiple pillars each with multiple weighted inputs* (a richer
-   config shape than a spread's two legs or a metric's one series) and
-   `compute_series_correlation`'s expanding correlation is computed via
-   prefix sums over *two* aligned series at once (not a single value
-   stream) — the resumable primitive for this doesn't exist yet and needs
-   designing (an exact resumable expanding-correlation accumulator: running
-   sums of x, y, x², y², xy is the natural O(1) state, analogous to Welford
-   but bivariate).
-2. **`gold_series_lead_lag` / `gold_series_structural_breaks`** — harder
-   still. Both re-scan the *entire* aligned history on every call (a
-   cross-correlation ladder over ±max_lag, a Chow-test break-date scan, a
-   CUSUM scan) with no incremental update path in the algorithm itself —
-   classified "B" earlier in this project (safe to scope to just the
-   touched pair, but that pair's *entire* history must be recomputed, not
-   just new trailing rows). The realistic win here is narrower: skip
-   untouched pairs entirely, full-recompute touched ones — genuinely
-   simpler to implement than true row-range incrementality, but check
-   whether it's worth doing given `Pipeline.run()` touches nearly every
-   series most runs (so most pairs would count as "touched" most of the
-   time) — this is the same whole-entity-vs-row-range tradeoff spec003
-   already worked through once; re-read that reasoning before assuming the
-   answer is the same here.
-3. After that: `gold_recession_probability_daily` (warm-started IRLS,
-   `last_beta` carried forward — full-entity-recompute-on-any-touch, similar
-   to item 2 above) and `gold_equity_total_return_index` (running product
-   from the ticker's first date — same shape). Then a deliberate decision on
-   whether the macro PCA/factor-score tables and anomaly scores are worth
-   incremental treatment at all, versus staying full-rebuild permanently —
-   spec003's Phase 3 status note leans toward "probably not," since they're
-   cross-sectionally coupled by construction (touching any one feature
-   series changes covariance/loadings for every other series from that
-   point forward).
+- **`gold_macro_regime_daily`** — evaluated and left as a full rebuild.
+  `compute_macro_regime` emits one row *per date* only once every pillar has
+  a live input that date, using an as-of/staleness lookup (`_asof`, a
+  `bisect_right` carrying forward each input's last value within
+  `max_staleness_days`). A single backfilled input can therefore change
+  which value gets carried into *other, already-computed* dates — not just
+  extend the series forward the way every table done so far works. Forcing
+  this into the per-entity append/backfill split risks silent staleness.
+  It's also already fast: pre-filtered to `regime_ids` by the
+  `_select_series` fix (item 3 above), its own output is bounded by unique
+  dates across a handful of config-bounded pillars/inputs (small), so the
+  win from checkpointing it would be marginal relative to the risk.
+- **`gold_series_lead_lag` / `gold_series_structural_breaks`** — not
+  started, lower priority than it looks. Both re-scan the *entire* aligned
+  history on every call (a cross-correlation ladder over ±max_lag, a
+  Chow-test break-date scan, a CUSUM scan) with no incremental update path
+  in the algorithm itself — the realistic optimization is "skip untouched
+  pairs entirely, full-recompute touched ones," not true row-range
+  incrementality. That's a real, much simpler change to make — but its
+  payoff depends on the same fact that ruled out whole-series skipping for
+  Gold generally: `Pipeline.run()` touches nearly every series on nearly
+  every run, so most configured pairs would likely count as "touched" most
+  of the time too. Get a real read on this from **spec007** below before
+  spending time here — if extraction stops touching every series every run,
+  *then* per-pair skipping for these two tables becomes worth doing, and
+  should probably be built together with that change rather than before it.
+- **`gold_recession_probability_daily`** (warm-started IRLS, `last_beta`
+  carried forward) and **`gold_equity_total_return_index`** (running product
+  from the ticker's first date) — same shape as the lead-lag/structural-
+  breaks case: full-entity-recompute-on-any-touch is the realistic ceiling,
+  same open question about whether "touched" is ever a small set in
+  practice.
+- **Macro PCA/factor-score tables and anomaly scores** — probably not worth
+  it at all. They're cross-sectionally coupled by construction (touching any
+  one feature series changes covariance/loadings for every other series from
+  that point forward), the same category as `gold_funding_stress_daily` but
+  at a larger, harder-to-bound scale. Revisit only if profiling after
+  spec007 shows them as a real bottleneck.
+
+## New scope: due-date gating on extraction (spec007, not started)
+
+**The bigger lever, found while researching Phase 3, not yet acted on.**
+`Pipeline.run()` restates *every* series passed to it on *every*
+invocation — nothing consults each series' `expected_update_frequency`
+(present in the `meta_fred_series` schema, dead code for this purpose).
+This is *why* whole-series skipping didn't work for Gold (see above), but
+the same fact applies just as much upstream, at the 42.6-minute extraction
+stage spec003 originally wrote off as "external, rate-limit-bound, largely
+un-fixable in code" — that framing assumed extraction has to touch every
+series every time. If a monthly series isn't due for a week, pulling it
+today is pure waste, independent of any rate limit. Fixing this compounds
+with everything in this doc: fewer series touched per run means extraction
+itself shrinks, *and* more of Phase 3's per-entity checkpoints get skipped
+rather than appended-to, on both the tables already done and (per the
+deferred section above) the tables gated on "how often is a pair actually
+touched."
+
+Full design questions (windowed vs. exact due-date tracking, where the
+watermark lives, interaction with `restate_last_n`, `--full` semantics,
+manifest-level overrides) are scoped in
+[`specs/spec007/README.md`](../../specs/spec007/README.md). Not started —
+read it, don't assume the design is settled, it isn't.
