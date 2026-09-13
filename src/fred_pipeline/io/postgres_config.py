@@ -1,8 +1,7 @@
 """Postgres target/DSN resolution shared by read and write backends.
 
-The write-side ``PostgresWarehouse`` is still Spec004 work, but both that
-backend and the read-only ``PostgresConnection`` need the same decision: is
-this a local Postgres instance or a managed/service database?
+Both ``PostgresWarehouse`` and the read-only ``PostgresConnection`` need the
+same decision: is this a local Postgres instance or a managed/service database?
 """
 
 from __future__ import annotations
