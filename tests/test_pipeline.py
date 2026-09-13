@@ -1,4 +1,5 @@
 import threading
+from datetime import datetime, timedelta, timezone
 
 from fred_pipeline.audit import RunStatus
 from fred_pipeline.config import Environment, PipelineConfig
@@ -10,6 +11,7 @@ from fred_pipeline.pipeline import (
     _make_tiingo,
     _normalize_tiingo_keys,
     _rate_limit_for_source,
+    _series_is_due,
 )
 
 
@@ -477,3 +479,63 @@ def test_config_table_naming():
     assert (
         cfg.table("silver", "fred_observation") == "macro_prod.silver.fred_observation"
     )
+
+
+# -- _series_is_due (spec007 due-date gating) --------------------------------
+
+
+def test_series_is_due_when_never_pulled():
+    now = datetime(2026, 9, 13, tzinfo=timezone.utc)
+    assert _series_is_due("monthly", None, now) is True
+
+
+def test_series_is_due_for_missing_or_unrecognized_frequency():
+    now = datetime(2026, 9, 13, tzinfo=timezone.utc)
+    recent = (now - timedelta(minutes=1)).isoformat()
+    assert _series_is_due("", recent, now) is True
+    assert _series_is_due("semiannual", recent, now) is True
+    assert _series_is_due("not-a-real-cadence", recent, now) is True
+
+
+def test_series_is_due_boundary_is_inclusive():
+    now = datetime(2026, 9, 13, tzinfo=timezone.utc)
+    last = (now - timedelta(hours=20)).isoformat()
+    assert _series_is_due("daily", last, now) is True
+
+
+def test_series_is_due_just_inside_and_outside_interval_per_cadence():
+    now = datetime(2026, 9, 13, tzinfo=timezone.utc)
+    cases = {
+        "daily": timedelta(hours=20),
+        "business_daily": timedelta(hours=20),
+        "weekly": timedelta(days=6),
+        "monthly": timedelta(days=27),
+        "quarterly": timedelta(days=85),
+        "annual": timedelta(days=360),
+    }
+    for cadence, interval in cases.items():
+        not_yet_due = (now - (interval - timedelta(seconds=1))).isoformat()
+        already_due = (now - (interval + timedelta(seconds=1))).isoformat()
+        assert _series_is_due(cadence, not_yet_due, now) is False, cadence
+        assert _series_is_due(cadence, already_due, now) is True, cadence
+
+
+def test_series_is_due_treats_naive_timestamp_as_utc():
+    now = datetime(2026, 9, 13, tzinfo=timezone.utc)
+    naive_last = (now - timedelta(days=1)).replace(tzinfo=None).isoformat()
+    assert _series_is_due("daily", naive_last, now) is True
+
+
+def test_series_is_due_weekend_adjacent_daily_case():
+    # A daily series pulled Friday morning must not be treated as "not due"
+    # by the time Saturday or Monday's routine run comes around -- the ~20h
+    # interval is deliberately shorter than any weekend gap so daily series
+    # are never silently held back over a weekend.
+    friday_pull = datetime(2026, 9, 11, 9, 0, tzinfo=timezone.utc)  # a Friday
+    saturday_run = datetime(2026, 9, 12, 9, 0, tzinfo=timezone.utc)
+    monday_run = datetime(2026, 9, 14, 9, 0, tzinfo=timezone.utc)
+    assert _series_is_due("daily", friday_pull.isoformat(), saturday_run) is True
+    assert _series_is_due("daily", friday_pull.isoformat(), monday_run) is True
+    # But a same-day re-run within the interval is correctly not due yet.
+    same_day_rerun = friday_pull + timedelta(hours=2)
+    assert _series_is_due("daily", friday_pull.isoformat(), same_day_rerun) is False
