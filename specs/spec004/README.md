@@ -361,7 +361,10 @@ fields, env-var fallback) — a deliberate, narrow exception to the
 "no shared connection code" precedent, justified because that logic would
 otherwise be duplicated verbatim between the two classes for no reason.
 
-**`config/warehouse.yml` shape** — support both a single `dsn` field
+**`config/warehouse.yml` shape** — Postgres must have an explicit
+`target: local | service` switch so operators can choose between a local
+Postgres instance (Docker Compose/Homebrew/etc.) and a managed/hosted
+Postgres service without code changes. Support both a single `dsn` field
 (preferred — it lets the exact same string be shared with `market_terminal`'s
 own `MACRO_DB_URL` convention) and discrete fields as a fallback, `dsn`
 taking precedence when present:
@@ -369,19 +372,30 @@ taking precedence when present:
 ```yaml
 backends:
   postgres:
-    dsn: postgresql://fred:fred@localhost:5432/fred_dev
+    target: local
+    dsn_env: FRED_POSTGRES_LOCAL_DSN
+    # dsn: postgresql://fred:fred@localhost:55432/macro_medallion
+
+    # For a managed/hosted Postgres service:
+    # target: service
+    # dsn_env: FRED_POSTGRES_SERVICE_DSN
     # or, if dsn is omitted:
     # host: localhost
-    # port: 5432
-    # database: fred_dev
+    # port: 55432
+    # database: macro_medallion
     # user: fred
     # password: ${FRED_POSTGRES_PASSWORD}
 ```
 
-Add `FRED_POSTGRES_DSN` to the environment-variables table in
-`docs/handoffs/warehouse_configuration.md` (§9), following the same
-CLI > env var > config file > default precedence already documented there.
-Never commit a real password to `config/warehouse.yml`'s tracked template.
+Resolution rules: local mode may default to
+`postgresql://fred:fred@localhost:55432/macro_medallion`; service mode must be supplied
+by `dsn`, `dsn_env`, `FRED_POSTGRES_SERVICE_DSN`, `DATABASE_URL`, or
+`FRED_POSTGRES_DSN`. Add `FRED_POSTGRES_LOCAL_DSN`,
+`FRED_POSTGRES_SERVICE_DSN`, `FRED_POSTGRES_DSN`, and `DATABASE_URL` to the
+environment-variables table in `docs/handoffs/warehouse_configuration.md`
+(§9), following the same CLI > env var > config file > default precedence
+already documented there. Never commit a real service password to
+`config/warehouse.yml`'s tracked template.
 
 **CLI surface — flagged as an open decision (§10 #3), not settled here.**
 `market_terminal`'s doc assumes a `--postgres` publish-mode flag exists; this
@@ -427,14 +441,15 @@ just unexercised because no one has hit it yet.
 
 ### Phase 3: Registration, config, docs
 
-`postgres:` block in `config/warehouse.yml`; `elif backend_name ==
-"postgres":` in `WarehouseFactory._build_backend()` with a friendly
-`ImportError` message if `psycopg` isn't installed (mirror how
-`DatabricksConnection`'s lazy import already handles a missing driver); new
+`postgres:` block in `config/warehouse.yml` with the `target: local | service`
+switch; `elif backend_name == "postgres":` in
+`WarehouseFactory._build_backend()` with a friendly `ImportError` message if
+`psycopg` isn't installed (mirror how `DatabricksConnection`'s lazy import
+already handles a missing driver); new
 `postgres = ["psycopg[binary]>=3.1"]` optional-dependency group in
-`pyproject.toml` (never a core dependency, matching `spark`/`local`'s
-existing optional-group pattern); the `warehouse_configuration.md` update
-(§9 of this spec); a Postgres quick-connect section in
+`pyproject.toml` (never a core dependency, matching `spark`/`local`'s existing
+optional-group pattern); the `warehouse_configuration.md` update (§9 of this
+spec); a Postgres quick-connect section in
 `docs/reporting/powerbi_database_connections.md` (a real side-benefit: Power
 BI has a native PostgreSQL connector, simpler than the SQLite-via-ODBC or
 DuckDB-via-Parquet-export workarounds already documented there for the other
