@@ -17,6 +17,9 @@ from typing import Any, Self
 from fred_pipeline.audit import EtlRun, EtlSeriesRun
 from fred_pipeline.config import PipelineConfig
 from fred_pipeline.io.local_store import (
+    LocalWarehouse,
+)
+from fred_pipeline.io.local_store import (
     _SCHEMA as _SQLITE_SCHEMA,
 )
 from fred_pipeline.io.local_store import (
@@ -63,6 +66,15 @@ class _PostgresConnAdapter:
         cur.execute(sql, params or None)
         return _CursorResult(cur)
 
+    def executemany(
+        self, sql: str, params_seq: Sequence[Sequence[Any] | Mapping[str, Any]]
+    ) -> None:
+        if not params_seq:
+            return
+        sql, _ = self._warehouse._adapt_sql(sql, params_seq[0])
+        cur = self._warehouse._pg_conn.cursor()
+        cur.executemany(sql, list(params_seq))
+
     def commit(self) -> None:
         self._warehouse._pg_conn.commit()
 
@@ -73,6 +85,36 @@ class _PostgresConnAdapter:
         self._warehouse._pg_conn.close()
 
 
+def _borrowed_from_local_warehouse(cls: type) -> type:
+    """Bind LocalWarehouse's spec003 Phase 3 (incremental Gold) methods onto
+    this class, the same way ``_build_gold_inner`` below reuses LocalWarehouse's
+    orchestration wholesale: these are pure Python over ``self.conn``/
+    ``self._insert``/``self._load_checkpoints`` with no SQLite-specific API
+    surface once ``_PostgresConnAdapter`` translates placeholders and flat
+    table names. Without this, PostgresWarehouse.build_gold() raises
+    AttributeError the moment ``_build_gold_inner`` reaches the checkpoint
+    watermark/per-table incremental logic -- these were added to
+    LocalWarehouse on a branch that merged in after PostgresWarehouse first
+    shipped, and never got ported.
+    """
+    for name in (
+        "_get_build_watermark",
+        "_set_build_watermark",
+        "_touched_series_since_watermark",
+        "_load_checkpoints",
+        "_write_checkpoints_batch",
+        "_clear_checkpoints",
+        "_build_curve_spread_daily",
+        "_build_credit_spread_daily",
+        "_build_funding_tape_daily",
+        "_build_funding_stress_daily",
+        "_build_series_correlation",
+    ):
+        setattr(cls, name, getattr(LocalWarehouse, name))
+    return cls
+
+
+@_borrowed_from_local_warehouse
 class PostgresWarehouse:
     """PostgreSQL implementation of the write-side Warehouse protocol."""
 
@@ -297,23 +339,6 @@ class PostgresWarehouse:
             return result
         finally:
             self._defer_commits = False
-
-    def _rebuild_gold_point_in_time_sql(self) -> int:
-        with self._pg_conn.cursor() as cur:
-            cur.execute("DELETE FROM gold.fred_point_in_time")
-            cur.execute(
-                """
-                INSERT INTO gold.fred_point_in_time (
-                    series_id, observation_date, realtime_start, realtime_end, value,
-                    revision_number, is_missing, ingested_at
-                )
-                SELECT
-                    series_id, observation_date, realtime_start, realtime_end, value,
-                    revision_number, is_missing, ingested_at
-                FROM silver.fred_observation
-                """
-            )
-            return max(cur.rowcount, 0)
 
     def _rebuild_gold_latest_observation_sql(self) -> int:
         with self._pg_conn.cursor() as cur:
@@ -613,6 +638,17 @@ FROM ranked
 WHERE rn = 1;
 
 CREATE OR REPLACE VIEW gold.v_point_in_time AS
+SELECT series_id, observation_date, realtime_start, realtime_end, value,
+       revision_number, is_missing, ingested_at
+FROM silver.fred_observation;
+
+-- Mirrors LocalWarehouse's gold_fred_point_in_time (spec003 section 7: a
+-- pure 1:1 view over Silver, not a materialized table). This is the name
+-- the flat-table-name translation in _translate_flat_tables expects when
+-- pipeline code reads "gold_fred_point_in_time" -- v_point_in_time above is
+-- a separate, human-facing alias for BI tools and is kept for that reason,
+-- not as a stand-in for this one.
+CREATE OR REPLACE VIEW gold.fred_point_in_time AS
 SELECT series_id, observation_date, realtime_start, realtime_end, value,
        revision_number, is_missing, ingested_at
 FROM silver.fred_observation;

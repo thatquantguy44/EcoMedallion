@@ -891,7 +891,9 @@ class LocalWarehouse:
         row = self.conn.execute(
             "SELECT max_ingested_at FROM gold_build_watermark WHERE id = 1"
         ).fetchone()
-        return (row[0] or "") if row else ""
+        # Keyed access, not row[0]: sqlite3.Row supports both, but
+        # PostgresWarehouse's dict_row-backed cursor only supports the key.
+        return (row["max_ingested_at"] or "") if row else ""
 
     def _set_build_watermark(self, value: str) -> None:
         self.conn.execute(

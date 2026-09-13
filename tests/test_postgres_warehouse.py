@@ -108,7 +108,10 @@ def test_postgres_warehouse_builds_core_gold_like_local(tmp_path, postgres_dsn):
         assert {row["table_schema"]: row["n"] for row in object_counts} == {
             "audit": 4,
             "bronze": 1,
-            "gold": 56,
+            # 57, not 56: includes gold_incremental_checkpoint (spec003 Phase 3
+            # checkpoint infra), added on a branch that merged in after this
+            # count was first written.
+            "gold": 57,
             "meta": 6,
             "silver": 1,
         }
@@ -120,7 +123,10 @@ def test_postgres_warehouse_builds_core_gold_like_local(tmp_path, postgres_dsn):
             GROUP BY table_schema
             """
         )
-        assert view_counts == [{"table_schema": "gold", "n": 6}]
+        # 7, not 6: includes gold.fred_point_in_time, the flat-name-translated
+        # mirror of LocalWarehouse's gold_fred_point_in_time view, alongside
+        # the pre-existing gold.v_point_in_time BI-facing alias.
+        assert view_counts == [{"table_schema": "gold", "n": 7}]
 
         local.merge_silver(rows)
         pg.merge_silver(rows)

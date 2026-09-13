@@ -357,8 +357,8 @@ Expected local copy/warehouse surface:
 | Layer | Expected |
 |---|---|
 | Schemas | `meta`, `audit`, `bronze`, `silver`, `gold` |
-| Gold base tables | 56 |
-| Gold views | 6 |
+| Gold base tables | 57 |
+| Gold views | 7 |
 
 Check with:
 
