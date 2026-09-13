@@ -509,3 +509,193 @@ def test_daily_feature_matrix_forward_fills():
     assert [r["as_of_date"] for r in rows] == ["2024-01-01", "2024-01-02", "2024-01-03"]
     assert [r["value"] for r in rows] == [1.0, 1.0, 2.0]  # jan-02 forward-filled
     assert rows[1]["raw_value"] is None  # no native release on jan-02
+
+
+# ---- spec003 Phase 3: gold_curve_spread_daily incremental end-to-end -------
+
+
+def _obs_row(series_id, observation_date, value, ingested_at, run_id="r"):
+    raw = str(value)
+    return {
+        "source": "fred",
+        "series_id": series_id,
+        "observation_date": observation_date,
+        "realtime_start": "",
+        "realtime_end": "",
+        "value": value,
+        "raw_value": raw,
+        "is_missing": False,
+        "row_hash": _row_hash(series_id, observation_date, "", raw),
+        "revision_number": 1,
+        "ingested_at": ingested_at,
+        "run_id": run_id,
+    }
+
+
+def _checkpoint(wh, spread_name="T10Y2Y"):
+    row = wh.query(
+        "SELECT frontier_date, state_json, updated_at FROM "
+        "gold_incremental_checkpoint WHERE table_name='gold_curve_spread_daily' "
+        "AND entity_key=?",
+        (spread_name,),
+    )
+    return row[0] if row else None
+
+
+def _spread_rows(wh, spread_name="T10Y2Y"):
+    return wh.query(
+        "SELECT * FROM gold_curve_spread_daily WHERE spread_name=? "
+        "ORDER BY observation_date",
+        (spread_name,),
+    )
+
+
+def test_incremental_curve_spread_daily_second_build_skips_untouched_spread(
+    tmp_path,
+):
+    wh = LocalWarehouse(_config(), db_path=str(tmp_path / "f.db"))
+    wh.merge_silver(
+        [
+            _obs_row("DGS10", "2024-01-02", 4.0, "2024-01-02T00:00:00Z"),
+            _obs_row("DGS2", "2024-01-02", 3.8, "2024-01-02T00:00:00Z"),
+        ]
+    )
+    wh.build_gold()
+
+    first_rows = _spread_rows(wh)
+    assert len(first_rows) == 1
+    first_checkpoint = _checkpoint(wh)
+    assert first_checkpoint is not None
+    assert first_checkpoint["frontier_date"] == "2024-01-02"
+
+    # No Silver changes -> the second build must skip this spread entirely,
+    # not just produce identical output via a redundant recompute.
+    wh.build_gold()
+    assert _spread_rows(wh) == first_rows
+    assert _checkpoint(wh)["updated_at"] == first_checkpoint["updated_at"]
+    wh.close()
+
+
+def test_incremental_curve_spread_daily_appends_new_observation(tmp_path):
+    wh = LocalWarehouse(_config(), db_path=str(tmp_path / "f.db"))
+    wh.merge_silver(
+        [
+            _obs_row("DGS10", "2024-01-02", 4.0, "2024-01-02T00:00:00Z"),
+            _obs_row("DGS2", "2024-01-02", 3.8, "2024-01-02T00:00:00Z"),
+        ]
+    )
+    wh.build_gold()
+    before = _spread_rows(wh)
+    assert [r["observation_date"] for r in before] == ["2024-01-02"]
+
+    # A new trailing observation, strictly past the checkpoint frontier.
+    wh.merge_silver(
+        [
+            _obs_row("DGS10", "2024-01-03", 4.1, "2024-01-03T00:00:00Z"),
+            _obs_row("DGS2", "2024-01-03", 3.9, "2024-01-03T00:00:00Z"),
+        ]
+    )
+    wh.build_gold()
+    after = _spread_rows(wh)
+    assert [r["observation_date"] for r in after] == ["2024-01-02", "2024-01-03"]
+    # The already-written first row is untouched by the append.
+    assert after[0] == before[0]
+    assert _checkpoint(wh)["frontier_date"] == "2024-01-03"
+    wh.close()
+
+
+def test_incremental_curve_spread_daily_backfill_triggers_full_recompute(tmp_path):
+    from fred_pipeline.terminal_views import compute_curve_spread_daily
+
+    wh = LocalWarehouse(_config(), db_path=str(tmp_path / "f.db"))
+    wh.merge_silver(
+        [
+            _obs_row("DGS10", "2024-01-02", 4.0, "2024-01-02T00:00:00Z"),
+            _obs_row("DGS2", "2024-01-02", 3.8, "2024-01-02T00:00:00Z"),
+            _obs_row("DGS10", "2024-01-03", 4.1, "2024-01-03T00:00:00Z"),
+            _obs_row("DGS2", "2024-01-03", 3.9, "2024-01-03T00:00:00Z"),
+        ]
+    )
+    wh.build_gold()
+    assert _checkpoint(wh)["frontier_date"] == "2024-01-03"
+
+    # Revise the OLDER date (2024-01-02), a genuine value change -> row_hash
+    # differs -> ingested_at advances -> min_touched (01-02) <= frontier
+    # (01-03) -> the backfill branch, not the append branch.
+    wh.merge_silver([_obs_row("DGS10", "2024-01-02", 4.5, "2024-06-01T00:00:00Z")])
+    wh.build_gold()
+
+    got = _spread_rows(wh)
+    # Ground truth: a full, from-scratch compute over the final Silver state.
+    latest = wh.query("SELECT * FROM gold_fred_latest_observation")
+    for r in latest:
+        r["is_missing"] = bool(r["is_missing"])
+    from fred_pipeline.spread_config import SpreadDef
+
+    expected = [
+        r
+        for r in compute_curve_spread_daily(
+            latest, [SpreadDef("T10Y2Y", "DGS10", "DGS2")]
+        )
+    ]
+    assert [dict(r) for r in got] == expected
+    wh.close()
+
+
+def test_incremental_curve_spread_daily_new_config_entry_builds_even_if_untouched(
+    tmp_path, monkeypatch
+):
+    """A spread with no checkpoint yet must be built on its first
+    opportunity even if neither leg happens to be in this run's touched
+    set (e.g. a config entry added after the legs were already ingested)."""
+    from fred_pipeline.spread_config import SpreadDef
+
+    wh = LocalWarehouse(_config(), db_path=str(tmp_path / "f.db"))
+    wh.merge_silver(
+        [
+            _obs_row("DGS10", "2024-01-02", 4.0, "2024-01-02T00:00:00Z"),
+            _obs_row("DGS2", "2024-01-02", 3.8, "2024-01-02T00:00:00Z"),
+        ]
+    )
+    wh.build_gold()
+    assert _checkpoint(wh, "T10Y2Y") is not None
+
+    # Advance the watermark past this data (simulating time passing with no
+    # further Silver activity), then "add" a new spread config entry whose
+    # legs were already ingested before this run -- neither leg is in the
+    # touched set this time.
+    import fred_pipeline.spread_config as spread_config_module
+
+    original = spread_config_module.load_spread_defs
+
+    def _with_new_entry(*a, **kw):
+        return [*original(*a, **kw), SpreadDef("T10Y2Y_DUP", "DGS10", "DGS2")]
+
+    monkeypatch.setattr("fred_pipeline.spread_config.load_spread_defs", _with_new_entry)
+    wh.build_gold()
+    assert _checkpoint(wh, "T10Y2Y_DUP") is not None
+    assert len(_spread_rows(wh, "T10Y2Y_DUP")) == 1
+    wh.close()
+
+
+def test_gold_full_bypasses_incrementality_and_resets_checkpoints(tmp_path):
+    wh = LocalWarehouse(_config(), db_path=str(tmp_path / "f.db"))
+    wh.merge_silver(
+        [
+            _obs_row("DGS10", "2024-01-02", 4.0, "2024-01-02T00:00:00Z"),
+            _obs_row("DGS2", "2024-01-02", 3.8, "2024-01-02T00:00:00Z"),
+        ]
+    )
+    wh.build_gold()
+    assert _checkpoint(wh) is not None
+
+    wh.build_gold(full=True)
+    # --full clears this table's checkpoints; the row content is unchanged
+    # since Silver didn't change, but nothing is left resumable from.
+    assert _checkpoint(wh) is None
+    assert len(_spread_rows(wh)) == 1
+
+    # The very next (non-full) build re-seeds the checkpoint from scratch.
+    wh.build_gold()
+    assert _checkpoint(wh) is not None
+    wh.close()

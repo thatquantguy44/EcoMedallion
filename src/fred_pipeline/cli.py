@@ -813,8 +813,17 @@ def _cmd_gold(args: argparse.Namespace) -> int:
         from fred_pipeline.warehouse import SparkWarehouse
 
         warehouse = SparkWarehouse(config, get_spark())
+        if args.full:
+            print("--full is a no-op on this backend (always fully rebuilds)")
     try:
-        result = warehouse.build_gold()
+        # spec003 Phase 3: only LocalWarehouse.build_gold() accepts `full` --
+        # other backends' Warehouse implementations always fully rebuild, so
+        # there's nothing to thread it through to.
+        result = (
+            warehouse.build_gold(full=args.full)
+            if args.local
+            else warehouse.build_gold()
+        )
     finally:
         warehouse.close()
     print(json.dumps(result, indent=2))
@@ -1064,6 +1073,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
     g.add_argument("--local", action="store_true", help="use a local SQLite backend")
     g.add_argument("--db-path", default="fred_local.db")
+    g.add_argument(
+        "--full",
+        action="store_true",
+        help="force a full rebuild of every incremental-capable Gold table, "
+        "ignoring per-entity checkpoints (spec003 Phase 3); mirrors `run "
+        "--full`. Local backend only -- a no-op elsewhere, since other "
+        "backends always fully rebuild.",
+    )
     g.set_defaults(func=_cmd_gold)
 
     pc = sub.add_parser(
