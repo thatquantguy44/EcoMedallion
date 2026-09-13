@@ -13,14 +13,16 @@ from fred_pipeline.catalog_config import (
     load_series_catalog,
 )
 from fred_pipeline.curve_config import (
-    CurveConfigError,
     FALLBACK_TENORS,
+    CurveConfigError,
     TenorDef,
     load_curve_defs,
 )
+from fred_pipeline.features import compute_curve_spreads
 from fred_pipeline.spread_config import SpreadDef
 from fred_pipeline.terminal_views import (
     MARKET_CALENDARS,
+    _recession_flags,
     build_dim_date,
     build_dim_series,
     compute_curve_spread_daily,
@@ -28,6 +30,7 @@ from fred_pipeline.terminal_views import (
     compute_market_calendar,
     compute_spread_inversion_episodes,
     compute_treasury_curve,
+    resume_curve_spread_daily,
 )
 
 
@@ -55,6 +58,7 @@ def _monthly(series_id, start_year, values):
 
 # ---- config loaders ---------------------------------------------------------
 
+
 def test_load_series_catalog_missing_file_is_empty(tmp_path):
     assert load_series_catalog(str(tmp_path / "nope.yml")) == []
 
@@ -74,14 +78,19 @@ def test_load_series_catalog_parses_and_validates(tmp_path):
     assert entries[1].surprise_window == 6
 
 
-@pytest.mark.parametrize("body", [
-    "series:\n  - {series_id: X, econ_category: NOPE}\n",           # bad category
-    "series:\n  - {series_id: X, econ_category: LABOR, polarity: 2}\n",
-    "series:\n  - {series_id: X, econ_category: LABOR, default_transform: yoy}\n",
-    "series:\n  - {series_id: X, econ_category: LABOR, bogus: 1}\n",  # unknown field
-    ("series:\n  - {series_id: X, econ_category: LABOR}\n"
-     "  - {series_id: X, econ_category: RATES}\n"),                  # duplicate
-])
+@pytest.mark.parametrize(
+    "body",
+    [
+        "series:\n  - {series_id: X, econ_category: NOPE}\n",  # bad category
+        "series:\n  - {series_id: X, econ_category: LABOR, polarity: 2}\n",
+        "series:\n  - {series_id: X, econ_category: LABOR, default_transform: yoy}\n",
+        "series:\n  - {series_id: X, econ_category: LABOR, bogus: 1}\n",  # unknown field
+        (
+            "series:\n  - {series_id: X, econ_category: LABOR}\n"
+            "  - {series_id: X, econ_category: RATES}\n"
+        ),  # duplicate
+    ],
+)
 def test_load_series_catalog_rejects_malformed(tmp_path, body):
     p = tmp_path / "catalog.yml"
     p.write_text(body)
@@ -178,10 +187,17 @@ def test_load_curve_defs_rejects_duplicates(tmp_path):
 
 # ---- dimensions -------------------------------------------------------------
 
+
 def test_build_dim_series_merges_meta():
     catalog = [CatalogEntry("UNRATE", "LABOR", polarity=-1)]
-    meta = [{"series_id": "UNRATE", "title": "Unemployment Rate",
-             "frequency": "m", "units": "Percent"}]
+    meta = [
+        {
+            "series_id": "UNRATE",
+            "title": "Unemployment Rate",
+            "frequency": "m",
+            "units": "Percent",
+        }
+    ]
     (row,) = build_dim_series(catalog, meta)
     assert row["title"] == "Unemployment Rate"
     assert row["econ_category"] == "LABOR"
@@ -207,7 +223,11 @@ def test_build_dim_series_carries_geo_for_regional():
 def test_build_dim_date_calendar_attributes():
     rows = build_dim_date("2024-09-29", "2024-10-02")
     assert [r["date"] for r in rows] == [
-        "2024-09-29", "2024-09-30", "2024-10-01", "2024-10-02"]
+        "2024-09-29",
+        "2024-09-30",
+        "2024-10-01",
+        "2024-10-02",
+    ]
     sep30 = rows[1]
     assert sep30["is_month_end"] is True
     assert sep30["quarter"] == 3 and sep30["fiscal_year"] == 2024
@@ -222,7 +242,7 @@ def test_build_dim_date_recession_flag():
     usrec = [_row("USREC", "2020-03-01", 1.0), _row("USREC", "2020-05-01", 0.0)]
     rows = {r["date"]: r for r in build_dim_date("2020-03-01", "2020-05-02", usrec)}
     assert rows["2020-03-15"]["is_recession"] is True
-    assert rows["2020-04-30"]["is_recession"] is True   # carries March/April print
+    assert rows["2020-04-30"]["is_recession"] is True  # carries March/April print
     assert rows["2020-05-02"]["is_recession"] is False
     # before the first USREC print -> unknown
     early = build_dim_date("2020-02-01", "2020-02-01", usrec)
@@ -259,6 +279,7 @@ def test_dim_date_option_expiry_non_quarter_month_no_witching():
 
 
 # ---- market calendars (NYSE / SIFMA / FEDWIRE) ------------------------------
+
 
 def test_market_calendar_covers_all_three_by_default():
     rows = compute_market_calendar("2026-01-01", "2026-01-31")
@@ -301,8 +322,14 @@ def test_market_calendar_columbus_and_veterans_day_nyse_stays_open():
 
 
 def test_market_calendar_juneteenth_only_from_2022():
-    rows_2021 = {r["calendar_name"]: r for r in compute_market_calendar("2021-06-18", "2021-06-18")}
-    rows_2022 = {r["calendar_name"]: r for r in compute_market_calendar("2022-06-20", "2022-06-20")}
+    rows_2021 = {
+        r["calendar_name"]: r
+        for r in compute_market_calendar("2021-06-18", "2021-06-18")
+    }
+    rows_2022 = {
+        r["calendar_name"]: r
+        for r in compute_market_calendar("2022-06-20", "2022-06-20")
+    }
     # Jun 18 2021 is a Friday -> would be the observed date if the holiday
     # applied, but Juneteenth isn't federally recognized until 2022.
     assert all(not r["is_holiday"] for r in rows_2021.values())
@@ -326,8 +353,11 @@ def test_market_calendar_saturday_holiday_asymmetry():
 def test_market_calendar_business_day_walk_and_settlement():
     # 2026-01-01 is New Year's (Thu, holiday all cals); 01-02 is Fri (open);
     # 01-03/04 is weekend; 01-05 is Monday (open).
-    rows = {r["calendar_date"]: r for r in compute_market_calendar("2025-12-30", "2026-01-06")
-            if r["calendar_name"] == "NYSE"}
+    rows = {
+        r["calendar_date"]: r
+        for r in compute_market_calendar("2025-12-30", "2026-01-06")
+        if r["calendar_name"] == "NYSE"
+    }
     assert rows["2026-01-01"]["prior_business_day"] == "2025-12-31"
     assert rows["2026-01-01"]["next_business_day"] == "2026-01-02"
     # T+2 settlement from Dec 31 (Wed): Thu Jan 1 is a holiday, so next
@@ -336,8 +366,11 @@ def test_market_calendar_business_day_walk_and_settlement():
 
 
 def test_market_calendar_business_day_of_month_and_period_boundaries():
-    rows = {r["calendar_date"]: r for r in compute_market_calendar("2026-01-01", "2026-01-31")
-            if r["calendar_name"] == "NYSE"}
+    rows = {
+        r["calendar_date"]: r
+        for r in compute_market_calendar("2026-01-01", "2026-01-31")
+        if r["calendar_name"] == "NYSE"
+    }
     # Jan 2, 2026 is the first business day of January (Jan 1 is a holiday).
     assert rows["2026-01-02"]["is_first_business_day_of_month"] is True
     assert rows["2026-01-02"]["business_day_of_month"] == 1
@@ -356,8 +389,11 @@ def test_market_calendar_only_requested_calendars_when_filtered():
 
 def test_market_calendar_manual_closure_applies_to_every_calendar():
     from datetime import date as _date
+
     rows = compute_market_calendar(
-        "2026-01-05", "2026-01-05", manual_closures=[_date(2026, 1, 5)],
+        "2026-01-05",
+        "2026-01-05",
+        manual_closures=[_date(2026, 1, 5)],
     )
     assert all(r["is_holiday"] and r["holiday_name"] == "Manual Closure" for r in rows)
 
@@ -426,7 +462,7 @@ def test_dim_date_month_fields():
     assert feb1["year_month"] == "2024-02"
     assert feb1["year_month_sort"] == 202402
     assert feb1["month_start_date"] == "2024-02-01"
-    assert feb1["month_end_date"] == "2024-02-29"   # 2024 is leap year
+    assert feb1["month_end_date"] == "2024-02-29"  # 2024 is leap year
     assert feb1["is_month_start"] is True
     assert feb1["is_month_end"] is False
     assert feb1["days_in_month"] == 29
@@ -443,8 +479,8 @@ def test_dim_date_month_fields():
 def test_dim_date_iso_week_fields():
     # 2024-01-01 is a Monday → week 1 of 2024
     r = build_dim_date("2024-01-01", "2024-01-07")
-    mon = r[0]   # 2024-01-01 Monday
-    sun = r[6]   # 2024-01-07 Sunday
+    mon = r[0]  # 2024-01-01 Monday
+    sun = r[6]  # 2024-01-07 Sunday
     assert mon["week_of_year"] == 1
     assert mon["iso_year"] == 2024
     assert mon["year_week"] == "2024-W01"
@@ -470,8 +506,8 @@ def test_dim_date_day_fields():
     assert r["day_of_year"] == 1
     assert r["day_name"] == "Monday"
     assert r["day_short_name"] == "Mon"
-    assert r["day_of_week_iso"] == 1    # 1=Monday ISO
-    assert r["day_of_week_sun"] == 2    # Monday is 2 in Sun-first convention
+    assert r["day_of_week_iso"] == 1  # 1=Monday ISO
+    assert r["day_of_week_sun"] == 2  # Monday is 2 in Sun-first convention
     assert r["is_weekday"] is True
     assert r["is_weekend"] is False
 
@@ -479,14 +515,14 @@ def test_dim_date_day_fields():
     sat = build_dim_date("2024-01-06", "2024-01-06")[0]
     assert sat["day_name"] == "Saturday"
     assert sat["day_of_week_iso"] == 6
-    assert sat["day_of_week_sun"] == 7   # Saturday = 7 in Sun-first
+    assert sat["day_of_week_sun"] == 7  # Saturday = 7 in Sun-first
     assert sat["is_weekday"] is False
     assert sat["is_weekend"] is True
 
     # 2024-01-07 is a Sunday
     sun = build_dim_date("2024-01-07", "2024-01-07")[0]
     assert sun["day_of_week_iso"] == 7
-    assert sun["day_of_week_sun"] == 1   # Sunday = 1 in Sun-first
+    assert sun["day_of_week_sun"] == 1  # Sunday = 1 in Sun-first
 
 
 def test_dim_date_day_of_year():
@@ -500,13 +536,13 @@ def test_dim_date_day_of_year():
 
 def test_dim_date_fiscal_year_fields():
     rows = {r["date"]: r for r in build_dim_date("2023-09-30", "2023-10-02")}
-    sep30 = rows["2023-09-30"]   # last day of FY2023
-    oct1 = rows["2023-10-01"]    # first day of FY2024
+    sep30 = rows["2023-09-30"]  # last day of FY2023
+    oct1 = rows["2023-10-01"]  # first day of FY2024
     oct2 = rows["2023-10-02"]
 
     assert sep30["fiscal_year"] == 2023
     assert sep30["fiscal_year_label"] == "FY2023"
-    assert sep30["fiscal_month"] == 12      # Sep = fiscal month 12
+    assert sep30["fiscal_month"] == 12  # Sep = fiscal month 12
     assert sep30["fiscal_quarter"] == 4
     assert sep30["fiscal_quarter_label"] == "FY2023-Q4"
     assert sep30["is_fiscal_year_end"] is True
@@ -516,7 +552,7 @@ def test_dim_date_fiscal_year_fields():
 
     assert oct1["fiscal_year"] == 2024
     assert oct1["fiscal_year_label"] == "FY2024"
-    assert oct1["fiscal_month"] == 1        # Oct = fiscal month 1
+    assert oct1["fiscal_month"] == 1  # Oct = fiscal month 1
     assert oct1["fiscal_quarter"] == 1
     assert oct1["fiscal_quarter_label"] == "FY2024-Q1"
     assert oct1["is_fiscal_year_start"] is True
@@ -564,13 +600,15 @@ def test_dim_date_fiscal_year_quarter_sort():
     r = build_dim_date("2024-01-15", "2024-01-15")[0]
     # FY2024, FQ2
     assert r["fiscal_year_quarter_sort"] == 20242
-    assert r["year_quarter_sort"] == 20241    # calendar Q1
+    assert r["year_quarter_sort"] == 20241  # calendar Q1
 
 
 def test_dim_date_contiguous_no_gaps():
-    from datetime import date as _date, timedelta
+    from datetime import date as _date
+    from datetime import timedelta
+
     rows = build_dim_date("2020-01-01", "2020-12-31")
-    assert len(rows) == 366   # 2020 is leap year
+    assert len(rows) == 366  # 2020 is leap year
     for i, r in enumerate(rows):
         expected = (_date(2020, 1, 1) + timedelta(days=i)).isoformat()
         assert r["date"] == expected
@@ -579,40 +617,83 @@ def test_dim_date_contiguous_no_gaps():
 def test_dim_date_complete_field_set():
     r = build_dim_date("2024-06-15", "2024-06-15")[0]
     expected_keys = {
-        "date", "date_key",
-        "year", "year_label", "year_start_date", "year_end_date",
-        "is_year_start", "is_year_end", "is_leap_year",
-        "quarter", "quarter_label", "year_quarter", "year_quarter_sort",
-        "quarter_start_date", "quarter_end_date",
-        "is_quarter_start", "is_quarter_end",
-        "month", "month_name", "month_short_name",
-        "year_month", "year_month_sort",
-        "month_start_date", "month_end_date",
-        "is_month_start", "is_month_end", "days_in_month",
-        "iso_year", "week_of_year", "year_week",
-        "week_start_date", "week_end_date", "is_week_start", "is_week_end",
-        "day_of_month", "day_of_year", "day_name", "day_short_name",
-        "day_of_week_iso", "day_of_week_sun", "is_weekday", "is_weekend",
-        "fiscal_year", "fiscal_year_label",
-        "fiscal_quarter", "fiscal_quarter_label", "fiscal_month",
+        "date",
+        "date_key",
+        "year",
+        "year_label",
+        "year_start_date",
+        "year_end_date",
+        "is_year_start",
+        "is_year_end",
+        "is_leap_year",
+        "quarter",
+        "quarter_label",
+        "year_quarter",
+        "year_quarter_sort",
+        "quarter_start_date",
+        "quarter_end_date",
+        "is_quarter_start",
+        "is_quarter_end",
+        "month",
+        "month_name",
+        "month_short_name",
+        "year_month",
+        "year_month_sort",
+        "month_start_date",
+        "month_end_date",
+        "is_month_start",
+        "is_month_end",
+        "days_in_month",
+        "iso_year",
+        "week_of_year",
+        "year_week",
+        "week_start_date",
+        "week_end_date",
+        "is_week_start",
+        "is_week_end",
+        "day_of_month",
+        "day_of_year",
+        "day_name",
+        "day_short_name",
+        "day_of_week_iso",
+        "day_of_week_sun",
+        "is_weekday",
+        "is_weekend",
+        "fiscal_year",
+        "fiscal_year_label",
+        "fiscal_quarter",
+        "fiscal_quarter_label",
+        "fiscal_month",
         "fiscal_year_quarter_sort",
-        "fiscal_year_start_date", "fiscal_year_end_date",
-        "fiscal_quarter_start_date", "fiscal_quarter_end_date",
-        "is_fiscal_year_start", "is_fiscal_year_end",
-        "is_fiscal_quarter_start", "is_fiscal_quarter_end",
+        "fiscal_year_start_date",
+        "fiscal_year_end_date",
+        "fiscal_quarter_start_date",
+        "fiscal_quarter_end_date",
+        "is_fiscal_year_start",
+        "is_fiscal_year_end",
+        "is_fiscal_quarter_start",
+        "is_fiscal_quarter_end",
         "is_recession",
-        "is_imm_date", "is_monthly_option_expiry", "is_triple_witching",
+        "is_imm_date",
+        "is_monthly_option_expiry",
+        "is_triple_witching",
     }
     assert set(r.keys()) == expected_keys
 
 
 # ---- ECON macro dashboard ---------------------------------------------------
 
+
 def _labor_catalog(window=12):
     return [
         CatalogEntry("UNRATE", "LABOR", polarity=-1, surprise_window=window),
-        CatalogEntry("PAYEMS", "LABOR", polarity=1, default_transform="chg",
-                     surprise_window=window),
+        CatalogEntry(
+            "PAYEMS",
+            "LABOR",
+            polarity=1,
+            default_transform="chg",
+            surprise_window=window,
+        ),
     ]
 
 
@@ -638,7 +719,7 @@ def test_macro_dashboard_core_columns():
 
 
 def test_macro_dashboard_polarity_and_summary():
-    unrate = _monthly("UNRATE", 2023, [4.0, 3.9, 3.8])       # falling -> good
+    unrate = _monthly("UNRATE", 2023, [4.0, 3.9, 3.8])  # falling -> good
     payems = _monthly("PAYEMS", 2023, [157000, 157200, 157400])  # rising -> good
     out = compute_macro_dashboard(unrate + payems, _labor_catalog(window=2))
     by_id = {r["series_id"]: r for r in out["dashboard"]}
@@ -653,8 +734,7 @@ def test_macro_dashboard_polarity_and_summary():
 
 def test_macro_dashboard_sparkline_capped_and_ordered():
     rows = _monthly("UNRATE", 2020, [4.0 + 0.01 * i for i in range(50)])
-    out = compute_macro_dashboard(
-        rows, [CatalogEntry("UNRATE", "LABOR", polarity=-1)])
+    out = compute_macro_dashboard(rows, [CatalogEntry("UNRATE", "LABOR", polarity=-1)])
     spark = out["sparkline"]
     assert len(spark) == 36  # capped at SPARK_POINTS
     assert [p["point_index"] for p in spark] == list(range(36))
@@ -678,8 +758,7 @@ def test_macro_dashboard_ignores_uncataloged_and_missing():
     rows = _monthly("UNRATE", 2023, [4.0, 3.9])
     rows += _monthly("NOT_IN_CATALOG", 2023, [1.0, 2.0])
     rows.append(_row("UNRATE", "2023-03-01", 99.0, is_missing=True))
-    out = compute_macro_dashboard(
-        rows, [CatalogEntry("UNRATE", "LABOR", polarity=-1)])
+    out = compute_macro_dashboard(rows, [CatalogEntry("UNRATE", "LABOR", polarity=-1)])
     (d,) = out["dashboard"]
     assert d["latest_value"] == pytest.approx(3.9)  # missing row excluded
     assert {r["series_id"] for r in out["sparkline"]} == {"UNRATE"}
@@ -693,16 +772,21 @@ def test_macro_dashboard_empty_catalog():
 # ---- Treasury Curve Lab -----------------------------------------------------
 
 _TENORS = [
-    TenorDef("3M", 3, "DGS3MO"), TenorDef("2Y", 24, "DGS2"),
-    TenorDef("5Y", 60, "DGS5"), TenorDef("10Y", 120, "DGS10"),
+    TenorDef("3M", 3, "DGS3MO"),
+    TenorDef("2Y", 24, "DGS2"),
+    TenorDef("5Y", 60, "DGS5"),
+    TenorDef("10Y", 120, "DGS10"),
     TenorDef("30Y", 360, "DGS30"),
 ]
 
 
 def _curve_day(d, y3m, y2, y5, y10, y30):
     return [
-        _row("DGS3MO", d, y3m), _row("DGS2", d, y2), _row("DGS5", d, y5),
-        _row("DGS10", d, y10), _row("DGS30", d, y30),
+        _row("DGS3MO", d, y3m),
+        _row("DGS2", d, y2),
+        _row("DGS5", d, y5),
+        _row("DGS10", d, y10),
+        _row("DGS30", d, y30),
     ]
 
 
@@ -718,8 +802,8 @@ def test_treasury_curve_rows_and_metrics():
     assert m["is_inverted_10y2y"] is True and m["is_inverted_10y3m"] is True
     assert m["curvature_2_5_10"] == pytest.approx(2 * 4.0 - 4.3 - 4.0)
     assert m["butterfly_2_10_30"] == pytest.approx(2 * 4.0 - 4.3 - 4.2)
-    assert m["curve_move"] is None          # first date has no prior
-    assert m["is_recession"] is None        # no USREC ingested
+    assert m["curve_move"] is None  # first date has no prior
+    assert m["is_recession"] is None  # no USREC ingested
 
 
 def test_treasury_curve_move_classification():
@@ -738,8 +822,11 @@ def test_treasury_curve_move_classification():
 def test_treasury_curve_skips_absent_tenors():
     # Only 3 of 5 tenors ingested: curve emits what exists; 2-5-10 curvature
     # is defined, 30Y-dependent metrics are not.
-    rows = [_row("DGS2", "2024-01-02", 4.3), _row("DGS5", "2024-01-02", 4.0),
-            _row("DGS10", "2024-01-02", 4.0)]
+    rows = [
+        _row("DGS2", "2024-01-02", 4.3),
+        _row("DGS5", "2024-01-02", 4.0),
+        _row("DGS10", "2024-01-02", 4.0),
+    ]
     out = compute_treasury_curve(rows, _TENORS)
     assert len(out["curve"]) == 3
     (m,) = out["metrics"]
@@ -750,13 +837,16 @@ def test_treasury_curve_skips_absent_tenors():
 
 # ---- enriched spread history --------------------------------------------------
 
+
 def test_curve_spread_daily_enrichment():
     spreads = [SpreadDef("T10Y2Y", "DGS10", "DGS2")]
     rows = []
     # 4 days: positive, inverts for 2 days, re-steepens
     for d, y10, y2 in [
-        ("2024-01-02", 4.0, 3.8), ("2024-01-03", 4.0, 4.1),
-        ("2024-01-04", 4.0, 4.2), ("2024-01-05", 4.3, 4.0),
+        ("2024-01-02", 4.0, 3.8),
+        ("2024-01-03", 4.0, 4.1),
+        ("2024-01-04", 4.0, 4.2),
+        ("2024-01-05", 4.3, 4.0),
     ]:
         rows += [_row("DGS10", d, y10), _row("DGS2", d, y2)]
     out = compute_curve_spread_daily(rows, spreads)
@@ -782,14 +872,117 @@ def test_curve_spread_daily_ratio_has_no_inversion_semantics():
 def test_curve_spread_daily_recession_overlay():
     spreads = [SpreadDef("T10Y2Y", "DGS10", "DGS2")]
     rows = [
-        _row("DGS10", "2020-03-15", 0.8), _row("DGS2", "2020-03-15", 0.4),
+        _row("DGS10", "2020-03-15", 0.8),
+        _row("DGS2", "2020-03-15", 0.4),
         _row("USREC", "2020-03-01", 1.0),
     ]
     (r,) = compute_curve_spread_daily(rows, spreads)
     assert r["is_recession"] is True
 
 
+# ---- spec003 Phase 3: resumable curve_spread_daily ---------------------------
+
+
+def _spread_base_rows(spread_name, spreads, rows):
+    """The exact input resume_curve_spread_daily expects for one spread:
+    compute_curve_spreads' output restricted to that spread, sorted."""
+    base = compute_curve_spreads(rows, spreads)
+    own = [r for r in base if r["spread_name"] == spread_name]
+    return sorted(own, key=lambda r: r["observation_date"])
+
+
+def _curve_spread_test_rows():
+    rows = []
+    for d, y10, y2 in [
+        ("2024-01-02", 4.0, 3.8),
+        ("2024-01-03", 4.0, 4.1),
+        ("2024-01-04", 4.0, 4.2),
+        ("2024-01-05", 4.3, 4.0),
+    ]:
+        rows += [_row("DGS10", d, y10), _row("DGS2", d, y2)]
+    return rows
+
+
+def test_resume_curve_spread_daily_matches_full_recompute_in_one_shot():
+    spreads = [SpreadDef("T10Y2Y", "DGS10", "DGS2")]
+    rows = _curve_spread_test_rows()
+    expected = compute_curve_spread_daily(rows, spreads)
+
+    base_rows = _spread_base_rows("T10Y2Y", spreads, rows)
+    flags = _recession_flags(rows)
+    _state, out = resume_curve_spread_daily("T10Y2Y", True, base_rows, None, flags)
+
+    assert out == expected
+
+
+@pytest.mark.parametrize("k", [0, 1, 2, 3, 4])
+def test_resume_curve_spread_daily_is_exact_across_a_split_point(k):
+    spreads = [SpreadDef("T10Y2Y", "DGS10", "DGS2")]
+    rows = _curve_spread_test_rows()
+    expected = compute_curve_spread_daily(rows, spreads)
+
+    base_rows = _spread_base_rows("T10Y2Y", spreads, rows)
+    flags = _recession_flags(rows)
+
+    state, out1 = resume_curve_spread_daily("T10Y2Y", True, base_rows[:k], None, flags)
+    _state, out2 = resume_curve_spread_daily(
+        "T10Y2Y", True, base_rows[k:], state, flags
+    )
+
+    assert out1 + out2 == expected
+
+
+def test_resume_curve_spread_daily_ratio_never_sets_inversion_run():
+    spreads = [SpreadDef("RATIO", "DGS10", "DGS2", op="ratio")]
+    rows = [_row("DGS10", "2024-01-02", 4.0), _row("DGS2", "2024-01-02", 2.0)]
+    base_rows = _spread_base_rows("RATIO", spreads, rows)
+    flags = _recession_flags(rows)
+
+    _state, out = resume_curve_spread_daily("RATIO", False, base_rows, None, flags)
+    (r,) = out
+    assert r["value_bps"] is None
+    assert r["is_inverted"] is None and r["inversion_run"] is None
+
+
+def test_resume_curve_spread_daily_carries_inversion_run_across_a_resume():
+    """inversion_run is sequential state beyond the two shared primitives --
+    this is the one thing a naive resume (state = just mean_std + percentile)
+    would silently get wrong: resuming into an already-inverted run must
+    continue counting, not reset to 0/1."""
+    spreads = [SpreadDef("T10Y2Y", "DGS10", "DGS2")]
+    rows = _curve_spread_test_rows()
+    expected = compute_curve_spread_daily(rows, spreads)
+    assert [r["inversion_run"] for r in expected] == [0, 1, 2, 0]
+
+    base_rows = _spread_base_rows("T10Y2Y", spreads, rows)
+    flags = _recession_flags(rows)
+
+    # Split right after the run has started (day 2, already inverted once).
+    state, out1 = resume_curve_spread_daily("T10Y2Y", True, base_rows[:2], None, flags)
+    assert [r["inversion_run"] for r in out1] == [0, 1]
+    _state, out2 = resume_curve_spread_daily(
+        "T10Y2Y", True, base_rows[2:], state, flags
+    )
+    assert [r["inversion_run"] for r in out2] == [2, 0]
+    assert out1 + out2 == expected
+
+
+def test_resume_curve_spread_daily_recession_overlay():
+    spreads = [SpreadDef("T10Y2Y", "DGS10", "DGS2")]
+    rows = [
+        _row("DGS10", "2020-03-15", 0.8),
+        _row("DGS2", "2020-03-15", 0.4),
+        _row("USREC", "2020-03-01", 1.0),
+    ]
+    base_rows = _spread_base_rows("T10Y2Y", spreads, rows)
+    flags = _recession_flags(rows)
+    _state, out = resume_curve_spread_daily("T10Y2Y", True, base_rows, None, flags)
+    (r,) = out
+    assert r["is_recession"] is True
+
+
 # ---- inversion episodes -------------------------------------------------------
+
 
 def _spread_days(pairs):
     """(date, y10, y2) triples -> latest rows for DGS10/DGS2."""
@@ -801,24 +994,26 @@ def _spread_days(pairs):
 
 def test_inversion_episodes_split_on_resteepening():
     spreads = [SpreadDef("T10Y2Y", "DGS10", "DGS2")]
-    rows = _spread_days([
-        ("2024-01-01", 4.0, 3.8),   # +0.2
-        ("2024-01-02", 4.0, 4.1),   # -0.1  episode 1 starts
-        ("2024-01-03", 4.0, 4.3),   # -0.3  trough
-        ("2024-01-04", 4.0, 4.2),   # -0.2
-        ("2024-01-05", 4.2, 4.1),   # +0.1  episode 1 ends here
-        ("2024-01-06", 4.0, 4.1),   # -0.1  episode 2 starts (new unique period)
-        ("2024-01-07", 4.3, 4.0),   # +0.3  episode 2 ends here
-    ])
+    rows = _spread_days(
+        [
+            ("2024-01-01", 4.0, 3.8),  # +0.2
+            ("2024-01-02", 4.0, 4.1),  # -0.1  episode 1 starts
+            ("2024-01-03", 4.0, 4.3),  # -0.3  trough
+            ("2024-01-04", 4.0, 4.2),  # -0.2
+            ("2024-01-05", 4.2, 4.1),  # +0.1  episode 1 ends here
+            ("2024-01-06", 4.0, 4.1),  # -0.1  episode 2 starts (new unique period)
+            ("2024-01-07", 4.3, 4.0),  # +0.3  episode 2 ends here
+        ]
+    )
     eps = compute_spread_inversion_episodes(rows, spreads)
     assert len(eps) == 2
     e1, e2 = eps
     assert (e1["episode_number"], e2["episode_number"]) == (1, 2)
     assert e1["start_date"] == "2024-01-02"
-    assert e1["end_date"] == "2024-01-05"          # first non-negative print
+    assert e1["end_date"] == "2024-01-05"  # first non-negative print
     assert e1["last_inverted_date"] == "2024-01-04"
     assert e1["observation_count"] == 3
-    assert e1["calendar_days"] == 3                # Jan 2 -> Jan 5
+    assert e1["calendar_days"] == 3  # Jan 2 -> Jan 5
     assert e1["trough_value"] == pytest.approx(-0.3)
     assert e1["trough_bps"] == pytest.approx(-30.0)
     assert e1["trough_date"] == "2024-01-03"
@@ -829,26 +1024,30 @@ def test_inversion_episodes_split_on_resteepening():
 
 def test_inversion_episode_ongoing_at_end_of_history():
     spreads = [SpreadDef("T10Y2Y", "DGS10", "DGS2")]
-    rows = _spread_days([
-        ("2024-01-01", 4.0, 4.1),   # inverted from the first observation
-        ("2024-01-03", 4.0, 4.2),   # still inverted at end of history
-    ])
+    rows = _spread_days(
+        [
+            ("2024-01-01", 4.0, 4.1),  # inverted from the first observation
+            ("2024-01-03", 4.0, 4.2),  # still inverted at end of history
+        ]
+    )
     (ep,) = compute_spread_inversion_episodes(rows, spreads)
     assert ep["start_date"] == "2024-01-01"
     assert ep["end_date"] is None and ep["is_ongoing"] is True
     assert ep["last_inverted_date"] == "2024-01-03"
-    assert ep["calendar_days"] == 2                # measured to last inverted obs
+    assert ep["calendar_days"] == 2  # measured to last inverted obs
     assert ep["observation_count"] == 2
 
 
 def test_inversion_episode_zero_is_not_inverted():
     # value == 0 matches is_inverted (v < 0) elsewhere: it closes an episode.
     spreads = [SpreadDef("T10Y2Y", "DGS10", "DGS2")]
-    rows = _spread_days([
-        ("2024-01-01", 4.0, 4.1),   # -0.1
-        ("2024-01-02", 4.0, 4.0),   #  0.0 -> episode ends
-        ("2024-01-03", 4.0, 4.1),   # -0.1 -> new episode, ongoing
-    ])
+    rows = _spread_days(
+        [
+            ("2024-01-01", 4.0, 4.1),  # -0.1
+            ("2024-01-02", 4.0, 4.0),  #  0.0 -> episode ends
+            ("2024-01-03", 4.0, 4.1),  # -0.1 -> new episode, ongoing
+        ]
+    )
     eps = compute_spread_inversion_episodes(rows, spreads)
     assert [e["episode_number"] for e in eps] == [1, 2]
     assert eps[0]["end_date"] == "2024-01-02"
@@ -866,11 +1065,13 @@ def test_inversion_episodes_never_inverted_and_ratio_excluded():
 
 def test_inversion_episode_recession_overlap():
     spreads = [SpreadDef("T10Y2Y", "DGS10", "DGS2")]
-    rows = _spread_days([
-        ("2020-02-15", 1.2, 1.3),   # inverted, pre-recession print unknown
-        ("2020-03-15", 1.0, 1.2),   # inverted, in recession
-        ("2020-04-15", 1.5, 1.0),   # re-steepens
-    ]) + [_row("USREC", "2020-03-01", 1.0)]
+    rows = _spread_days(
+        [
+            ("2020-02-15", 1.2, 1.3),  # inverted, pre-recession print unknown
+            ("2020-03-15", 1.0, 1.2),  # inverted, in recession
+            ("2020-04-15", 1.5, 1.0),  # re-steepens
+        ]
+    ) + [_row("USREC", "2020-03-01", 1.0)]
     (ep,) = compute_spread_inversion_episodes(rows, spreads)
     assert ep["recession_overlap"] is True
     # without USREC ingested the overlap is unknown, not false
@@ -882,6 +1083,7 @@ def test_inversion_episode_recession_overlap():
 
 
 # ---- local backend integration ------------------------------------------------
+
 
 def test_local_build_gold_populates_terminal_views(tmp_path, monkeypatch):
     from fred_pipeline.config import Environment, PipelineConfig
@@ -902,29 +1104,53 @@ def test_local_build_gold_populates_terminal_views(tmp_path, monkeypatch):
     )
     silver = []
     for i, v in enumerate([4.0, 3.9, 3.8, 3.9]):
-        silver.append({
-            "source": "fred", "series_id": "UNRATE",
-            "observation_date": f"2024-0{i + 1}-01",
-            "realtime_start": "", "realtime_end": "",
-            "value": v, "raw_value": str(v), "is_missing": 0,
-            "row_hash": f"h{i}", "revision_number": 1,
-            "ingested_at": "2024-05-01T00:00:00", "run_id": "r1",
-        })
+        silver.append(
+            {
+                "source": "fred",
+                "series_id": "UNRATE",
+                "observation_date": f"2024-0{i + 1}-01",
+                "realtime_start": "",
+                "realtime_end": "",
+                "value": v,
+                "raw_value": str(v),
+                "is_missing": 0,
+                "row_hash": f"h{i}",
+                "revision_number": 1,
+                "ingested_at": "2024-05-01T00:00:00",
+                "run_id": "r1",
+            }
+        )
     for d, y10, y2 in [("2024-01-02", 4.0, 3.8), ("2024-01-03", 4.0, 4.1)]:
         for sid, v in (("DGS10", y10), ("DGS2", y2)):
-            silver.append({
-                "source": "fred", "series_id": sid, "observation_date": d,
-                "realtime_start": "", "realtime_end": "",
-                "value": v, "raw_value": str(v), "is_missing": 0,
-                "row_hash": f"{sid}{d}", "revision_number": 1,
-                "ingested_at": "2024-05-01T00:00:00", "run_id": "r1",
-            })
+            silver.append(
+                {
+                    "source": "fred",
+                    "series_id": sid,
+                    "observation_date": d,
+                    "realtime_start": "",
+                    "realtime_end": "",
+                    "value": v,
+                    "raw_value": str(v),
+                    "is_missing": 0,
+                    "row_hash": f"{sid}{d}",
+                    "revision_number": 1,
+                    "ingested_at": "2024-05-01T00:00:00",
+                    "run_id": "r1",
+                }
+            )
     wh.merge_silver(silver)
     results = wh.build_gold()
-    for key in ("dim_series", "dim_date", "macro_indicator_dashboard",
-                "macro_indicator_sparkline", "macro_category_summary",
-                "treasury_curve", "treasury_curve_metrics",
-                "curve_spread_daily", "spread_inversion_episode"):
+    for key in (
+        "dim_series",
+        "dim_date",
+        "macro_indicator_dashboard",
+        "macro_indicator_sparkline",
+        "macro_category_summary",
+        "treasury_curve",
+        "treasury_curve_metrics",
+        "curve_spread_daily",
+        "spread_inversion_episode",
+    ):
         assert results[key] == "ok"
 
     (dash,) = wh.query("SELECT * FROM gold_macro_indicator_dashboard")
@@ -933,31 +1159,33 @@ def test_local_build_gold_populates_terminal_views(tmp_path, monkeypatch):
     (dim,) = wh.query("SELECT * FROM gold_dim_series")
     assert dim["econ_category"] == "LABOR"
     curve = wh.query(
-        "SELECT * FROM gold_treasury_curve ORDER BY as_of_date, tenor_months")
+        "SELECT * FROM gold_treasury_curve ORDER BY as_of_date, tenor_months"
+    )
     assert {c["tenor_label"] for c in curve} == {"2Y", "10Y"}
-    metrics = wh.query(
-        "SELECT * FROM gold_treasury_curve_metrics ORDER BY as_of_date")
+    metrics = wh.query("SELECT * FROM gold_treasury_curve_metrics ORDER BY as_of_date")
     assert metrics[0]["is_inverted_10y2y"] == 0
     assert metrics[1]["is_inverted_10y2y"] == 1
     spread = wh.query(
         "SELECT * FROM gold_curve_spread_daily WHERE spread_name='T10Y2Y' "
-        "ORDER BY observation_date")
+        "ORDER BY observation_date"
+    )
     assert [r["inversion_run"] for r in spread] == [0, 1]
     (ep,) = wh.query(
-        "SELECT * FROM gold_spread_inversion_episode "
-        "WHERE spread_name='T10Y2Y'")
+        "SELECT * FROM gold_spread_inversion_episode WHERE spread_name='T10Y2Y'"
+    )
     assert ep["start_date"] == "2024-01-03"
     assert ep["end_date"] is None and ep["is_ongoing"] == 1  # stored int
     # dim_date spans the observed range with month attributes
-    days = wh.query("SELECT COUNT(*) AS n, MIN(date) AS lo, MAX(date) AS hi "
-                    "FROM gold_dim_date")[0]
+    days = wh.query(
+        "SELECT COUNT(*) AS n, MIN(date) AS lo, MAX(date) AS hi FROM gold_dim_date"
+    )[0]
     assert days["lo"] == "2024-01-01" and days["hi"] == "2024-04-01"
     wh.close()
 
 
 # ---- Phase 4: rates complex ----------------------------------------------------
 
-from fred_pipeline.rates_complex_config import (  # noqa: E402
+from fred_pipeline.rates_complex_config import (
     BenchmarkBoardConfig,
     BenchmarkRateDef,
     CreditConfig,
@@ -971,7 +1199,7 @@ from fred_pipeline.rates_complex_config import (  # noqa: E402
     load_credit_config,
     load_funding_config,
 )
-from fred_pipeline.terminal_views import (  # noqa: E402
+from fred_pipeline.terminal_views import (
     compute_benchmark_rate_board,
     compute_credit_spread_daily,
     compute_funding_features,
@@ -991,8 +1219,7 @@ def test_rates_complex_repo_configs_parse():
     funding = load_funding_config("config/funding.yml")
     assert {s.name for s in funding.spreads} >= {"SOFR_EFFR", "SOFR_IORB"}
     assert all(
-        c.spread in {s.name for s in funding.spreads}
-        for c in funding.stress_components
+        c.spread in {s.name for s in funding.spreads} for c in funding.stress_components
     )
     credit = load_credit_config("config/credit.yml")
     assert any(c.instrument == "HY_OAS" for c in credit.instruments)
@@ -1004,9 +1231,7 @@ def test_rates_complex_loaders_reject_malformed(tmp_path):
     p.write_text("rates:\n  - {series_id: X, label: L, category: C, bogus: 1}\n")
     with pytest.raises(RatesComplexConfigError):
         load_benchmark_board(str(p))
-    p.write_text(
-        "metrics:\n  - {name: A, series_id: X, metric_type: nope}\n"
-    )
+    p.write_text("metrics:\n  - {name: A, series_id: X, metric_type: nope}\n")
     with pytest.raises(RatesComplexConfigError):
         load_funding_config(str(p))
     p.write_text(  # stress component referencing an unconfigured spread
@@ -1016,30 +1241,38 @@ def test_rates_complex_loaders_reject_malformed(tmp_path):
     )
     with pytest.raises(RatesComplexConfigError):
         load_funding_config(str(p))
-    p.write_text("instruments:\n  - {instrument: I, series_id: X}\n"
-                 "stress_percentile: 1.5\n")
+    p.write_text(
+        "instruments:\n  - {instrument: I, series_id: X}\nstress_percentile: 1.5\n"
+    )
     with pytest.raises(RatesComplexConfigError):
         load_credit_config(str(p))
 
 
 def _board():
-    return BenchmarkBoardConfig(rates=(
-        BenchmarkRateDef("SOFR", "SOFR", "secured_overnight", benchmark="EFFR"),
-        BenchmarkRateDef("EFFR", "EFFR", "policy"),
-        BenchmarkRateDef("IORB", "IORB", "policy"),  # not ingested -> no row
-    ), trend_window=2)
+    return BenchmarkBoardConfig(
+        rates=(
+            BenchmarkRateDef("SOFR", "SOFR", "secured_overnight", benchmark="EFFR"),
+            BenchmarkRateDef("EFFR", "EFFR", "policy"),
+            BenchmarkRateDef("IORB", "IORB", "policy"),  # not ingested -> no row
+        ),
+        trend_window=2,
+    )
 
 
 def test_benchmark_rate_board_columns():
     rows = []
-    for i, (d, sofr, effr) in enumerate([
-        ("2024-01-02", 5.31, 5.33), ("2024-01-03", 5.32, 5.33),
-        ("2024-01-04", 5.34, 5.33), ("2024-01-05", 5.38, 5.33),
-    ]):
+    for i, (d, sofr, effr) in enumerate(
+        [
+            ("2024-01-02", 5.31, 5.33),
+            ("2024-01-03", 5.32, 5.33),
+            ("2024-01-04", 5.34, 5.33),
+            ("2024-01-05", 5.38, 5.33),
+        ]
+    ):
         rows += [_row("SOFR", d, sofr), _row("EFFR", d, effr)]
     out = compute_benchmark_rate_board(rows, _board())
     by_id = {r["series_id"]: r for r in out}
-    assert set(by_id) == {"SOFR", "EFFR"}   # IORB absent -> no row
+    assert set(by_id) == {"SOFR", "EFFR"}  # IORB absent -> no row
     sofr = by_id["SOFR"]
     assert sofr["latest_value"] == pytest.approx(5.38)
     assert sofr["change_bps"] == pytest.approx(4.0)
@@ -1077,8 +1310,10 @@ def test_funding_tape_and_stress():
     rows = []
     # SOFR prints daily; EFFR too; reserves weekly. Last day SOFR spikes.
     for d, sofr, effr in [
-        ("2024-01-02", 5.31, 5.33), ("2024-01-03", 5.31, 5.33),
-        ("2024-01-04", 5.32, 5.33), ("2024-01-05", 5.45, 5.33),
+        ("2024-01-02", 5.31, 5.33),
+        ("2024-01-03", 5.31, 5.33),
+        ("2024-01-04", 5.32, 5.33),
+        ("2024-01-05", 5.45, 5.33),
     ]:
         rows += [_row("SOFR", d, sofr), _row("EFFR", d, effr)]
     rows.append(_row("WRESBAL", "2024-01-03", 3500.0))
@@ -1089,11 +1324,16 @@ def test_funding_tape_and_stress():
     assert ("SOFR_EFFR", "spread") in types
     spread_rows = [r for r in tape if r["metric_name"] == "SOFR_EFFR"]
     assert [r["value"] for r in spread_rows] == pytest.approx(
-        [-0.02, -0.02, -0.01, 0.12])
+        [-0.02, -0.02, -0.01, 0.12]
+    )
     # stress: one row per date where the (only) component prints
     stress = out["stress"]
     assert [s["observation_date"] for s in stress] == [
-        "2024-01-02", "2024-01-03", "2024-01-04", "2024-01-05"]
+        "2024-01-02",
+        "2024-01-03",
+        "2024-01-04",
+        "2024-01-05",
+    ]
     # first obs has no z (expanding std 0) -> neutral 50 / "normal"
     assert stress[0]["stress_score"] == pytest.approx(50.0)
     assert stress[0]["stress_bucket"] == "normal"
@@ -1111,13 +1351,14 @@ def test_funding_stress_requires_all_components():
             FundingSpreadDef("SOFR_IORB", "SOFR", "IORB"),
         ),
         stress_components=(
-            StressComponent("SOFR_EFFR"), StressComponent("SOFR_IORB"),
+            StressComponent("SOFR_EFFR"),
+            StressComponent("SOFR_IORB"),
         ),
     )
     rows = [_row("SOFR", "2024-01-02", 5.31), _row("EFFR", "2024-01-02", 5.33)]
     out = compute_funding_features(rows, cfg)  # IORB absent
     assert [r["metric_name"] for r in out["tape"]] == ["SOFR_EFFR"]
-    assert out["stress"] == []   # gauge needs every component
+    assert out["stress"] == []  # gauge needs every component
 
 
 def test_credit_spread_daily_stress_and_recession():
@@ -1137,27 +1378,25 @@ def test_credit_spread_daily_stress_and_recession():
     assert out[2]["change_bps"] == pytest.approx(470.0)
     # first obs has no percentile -> unknown, not a stress episode verdict
     assert out[0]["is_stress_episode"] is None
-    assert out[2]["is_stress_episode"] is True     # highest so far (pct 1.0)
-    assert out[3]["is_stress_episode"] is False    # pct 2/3 < 0.75
-    assert out[0]["is_recession"] is None          # before first USREC print
+    assert out[2]["is_stress_episode"] is True  # highest so far (pct 1.0)
+    assert out[3]["is_stress_episode"] is False  # pct 2/3 < 0.75
+    assert out[0]["is_recession"] is None  # before first USREC print
     assert out[2]["is_recession"] is True
 
 
 def test_credit_spread_daily_absent_series_emit_nothing():
-    cfg = CreditConfig(
-        instruments=(CreditInstrumentDef("IG_OAS", "BAMLC0A0CM"),))
-    assert compute_credit_spread_daily(
-        [_row("DGS10", "2024-01-02", 4.0)], cfg) == []
+    cfg = CreditConfig(instruments=(CreditInstrumentDef("IG_OAS", "BAMLC0A0CM"),))
+    assert compute_credit_spread_daily([_row("DGS10", "2024-01-02", 4.0)], cfg) == []
 
 
 # ---- Phase 2: Inflation Explorer -------------------------------------------------
 
-from fred_pipeline.inflation_config import (  # noqa: E402
+from fred_pipeline.inflation_config import (
     InflationConfigError,
     InflationItemDef,
     load_inflation_items,
 )
-from fred_pipeline.terminal_views import compute_inflation_explorer  # noqa: E402
+from fred_pipeline.terminal_views import compute_inflation_explorer
 
 
 def test_inflation_items_loader_missing_and_repo_file(tmp_path):
@@ -1174,23 +1413,34 @@ def test_inflation_items_loader_missing_and_repo_file(tmp_path):
     assert len(wf) == 8 and all(i.weight for i in wf)
 
 
-@pytest.mark.parametrize("body", [
-    # level-0 with a parent
-    ("items:\n  - {series_id: A, label: L, basket: CPI, sa_nsa: SA,"
-     " level: 0, parent: B}\n"
-     "  - {series_id: B, label: L2, basket: CPI, sa_nsa: SA, level: 0}\n"),
-    # unknown parent
-    ("items:\n  - {series_id: A, label: L, basket: CPI, sa_nsa: SA,"
-     " level: 1, parent: NOPE}\n"),
-    # two roots in one tree
-    ("items:\n  - {series_id: A, label: L, basket: CPI, sa_nsa: SA, level: 0}\n"
-     "  - {series_id: B, label: L2, basket: CPI, sa_nsa: SA, level: 0}\n"),
-    # waterfall without weight
-    ("items:\n  - {series_id: A, label: L, basket: CPI, sa_nsa: SA,"
-     " level: 0, waterfall: true}\n"),
-    # bad basket
-    ("items:\n  - {series_id: A, label: L, basket: RPI, sa_nsa: SA, level: 0}\n"),
-])
+@pytest.mark.parametrize(
+    "body",
+    [
+        # level-0 with a parent
+        (
+            "items:\n  - {series_id: A, label: L, basket: CPI, sa_nsa: SA,"
+            " level: 0, parent: B}\n"
+            "  - {series_id: B, label: L2, basket: CPI, sa_nsa: SA, level: 0}\n"
+        ),
+        # unknown parent
+        (
+            "items:\n  - {series_id: A, label: L, basket: CPI, sa_nsa: SA,"
+            " level: 1, parent: NOPE}\n"
+        ),
+        # two roots in one tree
+        (
+            "items:\n  - {series_id: A, label: L, basket: CPI, sa_nsa: SA, level: 0}\n"
+            "  - {series_id: B, label: L2, basket: CPI, sa_nsa: SA, level: 0}\n"
+        ),
+        # waterfall without weight
+        (
+            "items:\n  - {series_id: A, label: L, basket: CPI, sa_nsa: SA,"
+            " level: 0, waterfall: true}\n"
+        ),
+        # bad basket
+        ("items:\n  - {series_id: A, label: L, basket: RPI, sa_nsa: SA, level: 0}\n"),
+    ],
+)
 def test_inflation_items_loader_rejects_malformed(tmp_path, body):
     p = tmp_path / "items.yml"
     p.write_text(body)
@@ -1201,29 +1451,45 @@ def test_inflation_items_loader_rejects_malformed(tmp_path, body):
 def _cpi_tree():
     return [
         InflationItemDef("CPIAUCSL", "All Items", "CPI", "SA", level=0),
-        InflationItemDef("FOOD", "Food", "CPI", "SA", parent="CPIAUCSL",
-                         level=1, weight=20.0, waterfall=True),
-        InflationItemDef("ENERGY", "Energy", "CPI", "SA", parent="CPIAUCSL",
-                         level=1, weight=10.0, waterfall=True),
+        InflationItemDef(
+            "FOOD",
+            "Food",
+            "CPI",
+            "SA",
+            parent="CPIAUCSL",
+            level=1,
+            weight=20.0,
+            waterfall=True,
+        ),
+        InflationItemDef(
+            "ENERGY",
+            "Energy",
+            "CPI",
+            "SA",
+            parent="CPIAUCSL",
+            level=1,
+            weight=10.0,
+            waterfall=True,
+        ),
     ]
 
 
 def test_inflation_explorer_math():
     # 14 months of a smooth 0.5%/mo headline, then a 1.0% jump in the last month.
-    vals = [100.0 * 1.005 ** i for i in range(13)] + [100.0 * 1.005 ** 12 * 1.01]
+    vals = [100.0 * 1.005**i for i in range(13)] + [100.0 * 1.005**12 * 1.01]
     rows = _monthly("CPIAUCSL", 2023, vals)
     out = compute_inflation_explorer(
-        rows, [InflationItemDef("CPIAUCSL", "All Items", "CPI", "SA")])
+        rows, [InflationItemDef("CPIAUCSL", "All Items", "CPI", "SA")]
+    )
     last = out["explorer"][-1]
     assert last["observation_date"] == "2024-02-01"
     assert last["mom_pct"] == pytest.approx(0.01)
     # YoY: months 2..13 grew 0.5%*11 then 1.0%: (1.005^11 * 1.01) - 1
-    assert last["yoy_pct"] == pytest.approx(1.005 ** 11 * 1.01 - 1)
+    assert last["yoy_pct"] == pytest.approx(1.005**11 * 1.01 - 1)
     # acceleration: 1.0% this month vs 0.5% last month
     assert last["mom_accel"] == pytest.approx(0.005)
     # 3m annualized: (1.005^2 * 1.01)^4 - 1
-    assert last["three_month_annualized"] == pytest.approx(
-        (1.005 ** 2 * 1.01) ** 4 - 1)
+    assert last["three_month_annualized"] == pytest.approx((1.005**2 * 1.01) ** 4 - 1)
     # steady months have ~zero acceleration
     mid = out["explorer"][6]
     assert mid["mom_accel"] == pytest.approx(0.0, abs=1e-9)
@@ -1233,13 +1499,12 @@ def test_inflation_explorer_math():
 
 def test_inflation_contribution_waterfall():
     rows = (
-        _monthly("CPIAUCSL", 2024, [100.0, 100.5])   # +0.5% headline
-        + _monthly("FOOD", 2024, [100.0, 102.0])     # +2.0% * 20 -> 0.40pp
-        + _monthly("ENERGY", 2024, [100.0, 99.0])    # -1.0% * 10 -> -0.10pp
+        _monthly("CPIAUCSL", 2024, [100.0, 100.5])  # +0.5% headline
+        + _monthly("FOOD", 2024, [100.0, 102.0])  # +2.0% * 20 -> 0.40pp
+        + _monthly("ENERGY", 2024, [100.0, 99.0])  # -1.0% * 10 -> -0.10pp
     )
     out = compute_inflation_explorer(rows, _cpi_tree())
-    feb = [r for r in out["contribution"]
-           if r["observation_date"] == "2024-02-01"]
+    feb = [r for r in out["contribution"] if r["observation_date"] == "2024-02-01"]
     assert len(feb) == 3
     head = next(r for r in feb if r["is_headline_total"])
     assert head["contribution_pp"] == pytest.approx(0.5)  # headline MoM in pp
@@ -1250,8 +1515,7 @@ def test_inflation_contribution_waterfall():
     assert energy["contribution_pp"] == pytest.approx(-0.10)
     assert food["rank_in_month"] == 1 and energy["rank_in_month"] == 2
     # January: headline has no MoM (first obs) -> no waterfall rows at all
-    assert not [r for r in out["contribution"]
-                if r["observation_date"] == "2024-01-01"]
+    assert not [r for r in out["contribution"] if r["observation_date"] == "2024-01-01"]
     # explorer rows carry the same contribution for waterfall items
     food_row = [r for r in out["explorer"] if r["series_id"] == "FOOD"][-1]
     assert food_row["contribution_pp"] == pytest.approx(0.40)
@@ -1267,32 +1531,36 @@ def test_inflation_explorer_gap_yields_nulls_not_wrong_months():
         _row("CPIAUCSL", "2024-05-01", 101.5),
     ]
     out = compute_inflation_explorer(
-        rows, [InflationItemDef("CPIAUCSL", "All Items", "CPI", "SA")])
+        rows, [InflationItemDef("CPIAUCSL", "All Items", "CPI", "SA")]
+    )
     may = out["explorer"][-1]
     assert may["mom_pct"] is None and may["mom_accel"] is None
     assert may["three_month_annualized"] == pytest.approx(
-        (101.5 / 100.5) ** 4 - 1)  # Feb IS exactly 3 months back
+        (101.5 / 100.5) ** 4 - 1
+    )  # Feb IS exactly 3 months back
 
 
 def test_inflation_explorer_absent_series_and_empty_config():
-    out = compute_inflation_explorer(
-        _monthly("CPIAUCSL", 2024, [100.0, 100.5]), [])
+    out = compute_inflation_explorer(_monthly("CPIAUCSL", 2024, [100.0, 100.5]), [])
     assert out == {"explorer": [], "contribution": []}
     out = compute_inflation_explorer(
-        [], [InflationItemDef("CPIAUCSL", "All Items", "CPI", "SA")])
+        [], [InflationItemDef("CPIAUCSL", "All Items", "CPI", "SA")]
+    )
     assert out == {"explorer": [], "contribution": []}
 
 
 # ---- rolling-window stats companions ----------------------------------------------
 
-from fred_pipeline.terminal_views import (  # noqa: E402
+from datetime import date as _date
+from datetime import timedelta as _timedelta
+
+from fred_pipeline.terminal_views import (
     ROLLING_WINDOWS,
     _rolling_window_rows,
     compute_credit_spread_rolling,
     compute_curve_spread_rolling,
     compute_treasury_curve_rolling,
 )
-from datetime import date as _date, timedelta as _timedelta  # noqa: E402
 
 
 def _daily_series(values, start="2024-01-01"):
@@ -1318,7 +1586,7 @@ def test_rolling_window_rows_math():
     assert first["change"] == pytest.approx(5.0)
     assert first["pct_change"] == pytest.approx(5.0)
     # rolling mean of [2..6] = 4, pop std = sqrt(2) -> z = (6-4)/sqrt(2)
-    assert first["zscore"] == pytest.approx(2.0 / 2.0 ** 0.5)
+    assert first["zscore"] == pytest.approx(2.0 / 2.0**0.5)
 
 
 def test_rolling_window_rows_flat_and_zero_base():
@@ -1351,10 +1619,10 @@ def test_curve_spread_rolling_keys():
 
 
 def test_credit_spread_rolling_in_bps():
-    cfg = CreditConfig(
-        instruments=(CreditInstrumentDef("HY_OAS", "BAMLH0A0HYM2"),))
-    rows = [_row("BAMLH0A0HYM2", f"2024-01-{i + 1:02d}", 3.5 + 0.1 * i)
-            for i in range(3)]
+    cfg = CreditConfig(instruments=(CreditInstrumentDef("HY_OAS", "BAMLH0A0HYM2"),))
+    rows = [
+        _row("BAMLH0A0HYM2", f"2024-01-{i + 1:02d}", 3.5 + 0.1 * i) for i in range(3)
+    ]
     out = compute_credit_spread_rolling(rows, cfg, windows=(1,))
     assert [r["oas_bps"] for r in out] == pytest.approx([360.0, 370.0])
     assert all(r["change_bps"] == pytest.approx(10.0) for r in out)

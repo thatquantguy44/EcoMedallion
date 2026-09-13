@@ -976,6 +976,123 @@ class LocalWarehouse:
             (table_name,),
         )
 
+    def _build_curve_spread_daily(
+        self,
+        latest_by_series: dict[str, list[dict[str, Any]]],
+        spreads: list[Any],
+        touched: dict[str, str],
+        full: bool,
+    ) -> None:
+        """spec003 Phase 3 first slice: gold_curve_spread_daily restated
+        per-spread from a checkpoint instead of a full DELETE+rebuild every
+        run -- see resume_curve_spread_daily's docstring for the per-entity
+        state this carries. `full=True` (`gold --full`) bypasses this
+        entirely: same DELETE-all + full-recompute as every other Gold
+        table, and clears this table's checkpoints so the next incremental
+        build re-seeds them correctly rather than silently resuming from a
+        frontier the full rebuild has already moved past."""
+        from fred_pipeline.features import compute_curve_spreads
+        from fred_pipeline.terminal_views import (
+            RECESSION_SERIES,
+            _recession_flags,
+            compute_curve_spread_daily,
+            resume_curve_spread_daily,
+        )
+
+        spread_leg_ids = {s for sd in spreads for s in (sd.long_leg, sd.short_leg)} | {
+            RECESSION_SERIES
+        }
+        all_rows = _select_series(latest_by_series, spread_leg_ids)
+
+        if full:
+            self._clear_checkpoints("gold_curve_spread_daily")
+            self.conn.execute("DELETE FROM gold_curve_spread_daily")
+            self._insert(
+                "gold_curve_spread_daily",
+                compute_curve_spread_daily(all_rows, spreads),
+            )
+            return
+
+        checkpoints = self._load_checkpoints("gold_curve_spread_daily")
+        flags = _recession_flags(all_rows)
+        base_by_spread: dict[str, list[dict[str, Any]]] = {}
+        for row in compute_curve_spreads(all_rows, spreads):
+            base_by_spread.setdefault(row["spread_name"], []).append(row)
+
+        to_delete: list[str] = []
+        new_rows: list[dict[str, Any]] = []
+        checkpoint_entries: list[tuple[str, str, dict[str, Any], str]] = []
+
+        for sd in spreads:
+            checkpoint = checkpoints.get(sd.name)
+            watched = {sd.long_leg, sd.short_leg, RECESSION_SERIES}
+            config_hash = hashlib.sha256(
+                f"{sd.long_leg}|{sd.short_leg}|{sd.op}".encode()
+            ).hexdigest()
+            config_changed = (
+                checkpoint is not None and checkpoint["config_hash"] != config_hash
+            )
+            # A never-checkpointed spread (new config entry) and a
+            # config-only change (op/legs edited) must still be built even
+            # when neither leg shows up in `touched` this run -- `touched`
+            # only tracks Silver row changes, not config edits.
+            if (
+                checkpoint is not None
+                and not config_changed
+                and not (watched & touched.keys())
+            ):
+                continue
+
+            rows = sorted(
+                base_by_spread.get(sd.name, []), key=lambda r: r["observation_date"]
+            )
+            if not rows:
+                continue  # legs don't currently overlap -- nothing to build yet
+
+            min_touched = min(
+                (touched[sid] for sid in watched if sid in touched), default=None
+            )
+            needs_full = (
+                checkpoint is None
+                or config_changed
+                or min_touched is None
+                or min_touched <= checkpoint["frontier_date"]
+            )
+
+            if needs_full:
+                to_delete.append(sd.name)
+                state, out_rows = resume_curve_spread_daily(
+                    sd.name, sd.op == "spread", rows, None, flags
+                )
+            else:
+                new_base_rows = [
+                    r
+                    for r in rows
+                    if r["observation_date"] > checkpoint["frontier_date"]
+                ]
+                if not new_base_rows:
+                    continue  # touched, but not past this spread's own frontier
+                state, out_rows = resume_curve_spread_daily(
+                    sd.name,
+                    sd.op == "spread",
+                    new_base_rows,
+                    checkpoint["state"],
+                    flags,
+                )
+
+            new_rows.extend(out_rows)
+            checkpoint_entries.append(
+                (sd.name, rows[-1]["observation_date"], state, config_hash)
+            )
+
+        for name in to_delete:
+            self.conn.execute(
+                "DELETE FROM gold_curve_spread_daily WHERE spread_name = ?", (name,)
+            )
+        if new_rows:
+            self._insert("gold_curve_spread_daily", new_rows)
+        self._write_checkpoints_batch("gold_curve_spread_daily", checkpoint_entries)
+
     # ---- Warehouse surface ---------------------------------------------
 
     def sync_meta(self, manifests: Iterable[Manifest]) -> dict[str, int]:
@@ -1039,11 +1156,11 @@ class LocalWarehouse:
             ),
         )
 
-    def build_gold(self) -> dict[str, str]:
+    def build_gold(self, full: bool = False) -> dict[str, str]:
         self.conn.execute("BEGIN")
         self._defer_commits = True
         try:
-            result = self._build_gold_inner()
+            result = self._build_gold_inner(full=full)
         except BaseException:
             self.conn.rollback()
             raise
@@ -1053,7 +1170,7 @@ class LocalWarehouse:
         finally:
             self._defer_commits = False
 
-    def _build_gold_inner(self) -> dict[str, str]:
+    def _build_gold_inner(self, full: bool = False) -> dict[str, str]:
         # gold_fred_point_in_time is a VIEW (see _SCHEMA / spec003 section 7)
         # -- it always reflects current Silver with no rebuild step. Only
         # gold_fred_latest_observation still needs materializing: it's read
@@ -1063,6 +1180,17 @@ class LocalWarehouse:
         _stage_timed("latest_observation_sql")(
             self._rebuild_gold_latest_observation_sql
         )()
+
+        # spec003 Phase 3: computed once, main-thread-only (see the
+        # checkpoint helper methods above _read for why), before anything
+        # below reads Silver into Python. `full=True` (the `gold --full` CLI
+        # flag) bypasses incrementality entirely for the tables that support
+        # it -- the watermark/touched-series computation below is still
+        # cheap to run either way and updating the watermark on every
+        # successful build (full or not) keeps it meaningful for the *next*
+        # build regardless of which kind this one was.
+        prior_watermark = self._get_build_watermark()
+        touched, new_watermark = self._touched_series_since_watermark(prior_watermark)
 
         def _read_silver():
             rows = self._read("silver_fred_observation")
@@ -1220,7 +1348,6 @@ class LocalWarehouse:
             compute_benchmark_rate_board,
             compute_credit_spread_daily,
             compute_credit_spread_rolling,
-            compute_curve_spread_daily,
             compute_curve_spread_rolling,
             compute_fomc_probability,
             compute_funding_features,
@@ -1350,11 +1477,6 @@ class LocalWarehouse:
                         _select_series(latest_by_series, curve_ids), tenors
                     )
                 ),
-                "curve_spread_daily": _stage_timed("pf.curve_spread_daily")(
-                    lambda: compute_curve_spread_daily(
-                        _select_series(latest_by_series, spread_leg_ids), spreads
-                    )
-                ),
                 "spread_inversion_episode": _stage_timed("pf.spread_inversion_episode")(
                     lambda: compute_spread_inversion_episodes(
                         _select_series(latest_by_series, spread_leg_ids), spreads
@@ -1451,8 +1573,15 @@ class LocalWarehouse:
         ns_factor_rows = compute_yield_curve_ns_factors(curve["curve"])
         self.conn.execute("DELETE FROM gold_yield_curve_ns_factors")
         self._insert("gold_yield_curve_ns_factors", ns_factor_rows)
-        self.conn.execute("DELETE FROM gold_curve_spread_daily")
-        self._insert("gold_curve_spread_daily", computed["curve_spread_daily"])
+
+        # spec003 Phase 3: the first table restated per-entity instead of
+        # fully rebuilt every run -- main-thread-only (checkpoint I/O), so
+        # it's handled outside _compute_parallel entirely rather than as one
+        # of its dict entries.
+        _stage_timed("curve_spread_daily_incremental")(self._build_curve_spread_daily)(
+            latest_by_series, spreads, touched, full
+        )
+
         self.conn.execute("DELETE FROM gold_spread_inversion_episode")
         self._insert(
             "gold_spread_inversion_episode", computed["spread_inversion_episode"]
@@ -1678,6 +1807,13 @@ class LocalWarehouse:
                 latest, cfg=inf_cfg
             ),
         )
+
+        # spec003 Phase 3: only advance the watermark once every table above
+        # has succeeded -- build_gold() rolls back the whole transaction on
+        # any exception, so an update here that never executes (because an
+        # earlier step raised) is exactly the right "don't advance past data
+        # a failed build never actually incorporated" behavior.
+        self._set_build_watermark(new_watermark)
 
         return {
             k: "ok"
