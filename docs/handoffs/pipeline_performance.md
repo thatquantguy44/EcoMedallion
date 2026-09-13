@@ -1,61 +1,180 @@
-# Pipeline performance handoff: Gold rebuild is the bottleneck, root cause identified
+# Pipeline performance handoff: Gold rebuild — root cause fixed, incremental rebuild in progress
 
-**Status: Investigation done, fix not yet implemented.** A blocking
-correctness bug that prevented any real-scale measurement has been fixed and
-merged (see below). The actual performance fix — Phase 1 of
-[`specs/spec003`](../../specs/spec003/README.md) — is scoped but not started.
+**Status: Phases 1–2 done. Phase 3 (Incremental Gold) in progress — 4 of
+~58 tables wired, pattern proven, next tier identified as harder.**
 
-**Audience:** an agent working in **this** repo (`fred-bronze-to-gold-pipeline`).
-**Why:** a routine local refresh (`run --local --db-path fred_local.db`) was
-reported as slow. Extraction took 42.6 minutes for 2,821 series (external,
-mostly rate-limit-bound — not addressed here). The bigger surprise: a
-standalone `gold --local` rebuild against the real `fred_local.db` (31.8 GB,
-32.1M Silver rows) took **~51 minutes and then failed**, which is what
-triggered this investigation.
+**Audience:** an agent working in **this** repo (`fred-bronze-to-gold-pipeline`),
+picking up spec003 Phase 3. Read this first, then
+[`specs/spec003/README.md`](../../specs/spec003/README.md) (the authoritative
+design doc — Phase 3's "Status (2026-09-13)" note there has the full
+rationale for every decision summarized here) before writing any code.
 
-## What was found
+## What was found and fixed (Phases 1–2, both done)
 
-1. **The Gold rebuild was failing outright**, not just slow. Root cause:
-   `gold_dim_date` gained three columns (`is_imm_date`,
-   `is_monthly_option_expiry`, `is_triple_witching`) in commit `0773630`
-   without a matching entry in `LocalWarehouse._ADDED_COLUMNS`
-   (`src/fred_pipeline/io/local_store.py`) — the mechanism this repo already
-   uses to migrate columns onto a pre-existing local db file (`CREATE TABLE
-   IF NOT EXISTS` is a no-op against an existing table). Every `gold` run
-   against a database created before that commit has been failing since.
-   **Fixed** — the three columns are now registered in `_ADDED_COLUMNS`.
-2. **The failure was nearly undiagnosable from the logs.** `pipeline.py`
-   logged `Gold refresh failed for run <id>` followed by `NoneType: None`
-   instead of the real error, because `log.exception()` was called *after*
-   the stage tracker's exception-swallowing `with` block had already exited
-   — there was no live exception left for `log.exception()` to report, even
-   though the tracker had already captured the real `error_type`/
-   `error_message`. **Fixed** — the log line now uses the tracker's captured
-   fields directly. Regression test:
-   `tests/test_pipeline.py::test_gold_failure_logs_the_real_error_not_noneType_none`.
-3. **Why the rebuild takes ~51 minutes even when it doesn't fail:**
-   `LocalWarehouse._build_gold_inner()` materializes all 32.1M Silver rows
-   into a Python `list[dict]`, then builds two of the largest Gold tables —
-   `gold_fred_point_in_time` (32.1M rows, a straight 1:1 copy of Silver) and
-   `gold_fred_latest_observation` (20.4M rows, a Python dict-groupby + sort
-   over all 32.1M rows) — entirely in pure Python, writing each through the
-   slow per-row `_insert()` path (Python tuple + `_encode()` per cell,
-   `executemany`). A polars-accelerated write path already exists in this
-   codebase (`_insert_frame`) but is wired to four smaller tables, not these
-   two — which together are more rows than everything else in Gold combined.
-   Full detail, evidence, and the phased fix: **[`specs/spec003`](../../specs/spec003/README.md)**.
+1. **A correctness bug was blocking any real-scale measurement**: `gold_dim_date`
+   gained three columns without a matching `_ADDED_COLUMNS` migration entry,
+   failing every `gold` run against a pre-existing db. Fixed, with a
+   regression test (`tests/test_pipeline.py::test_gold_failure_logs_the_real_error_not_noneType_none`
+   also fixed a related "NoneType: None" logging bug that made this
+   undiagnosable).
+2. **`gold_fred_point_in_time` is now a SQL VIEW**, not a materialized table
+   — it's a pure 1:1 mirror of `silver_fred_observation` with no independent
+   data and no internal Python reader, so a view costs nothing to keep
+   current and eliminates its rebuild step entirely. (This was flagged as an
+   open question in spec003 §7 for a while; it's resolved now.)
+3. **`_build_gold_inner()`'s ~18 `_compute_parallel`-dispatched engines**
+   (the ECON dashboard, Curve Lab, regime/stats lab, FOMC, global views,
+   etc.) now get their input pre-filtered to just their curated series via a
+   `latest_by_series` index built once, instead of each engine independently
+   scanning all of `latest` (tens of millions of rows) — mirroring the Spark
+   backend's existing `_collect_latest()` SQL-pushdown pattern, which never
+   had this problem.
+4. `merge_silver`'s upsert now gates the update on a genuine `row_hash`
+   change, not just a matching key — a prerequisite for Phase 3 below, not
+   optional (see spec003 for why).
 
-## What's next (not started)
+**Not yet done:** a clean, full-scale timing run against the real
+`fred_local.db` to get final before/after numbers. Blocked twice this
+session by this dev machine running out of free memory (a McAfee AV scan was
+consuming ~30GB) — not a bug in the pipeline. Retry when the machine has
+headroom; it's informational at this point, not blocking further work, since
+the root causes above are already fixed by direct code inspection and the
+correctness of the fixes is proven by the full test suite.
 
-Phase 1 of spec003: rewrite `gold_fred_point_in_time` as a single
-`INSERT INTO ... SELECT` (it's a pure copy — never needs to leave SQLite) and
-`gold_fred_latest_observation` as a `ROW_NUMBER()`/`GROUP BY` SQL query
-instead of Python. Re-baseline against the real `fred_local.db` afterward;
-only pursue incremental Gold rebuilds or parallelizing the remaining ~65
-smaller tables (Phases 3–4) if the re-baseline shows they're still needed.
+## Phase 3: Incremental Gold — in progress, this is what to continue
 
-Also flagged in spec003 as an open question worth a deliberate decision, not
-a default: whether `gold_fred_point_in_time` needs to be a materialized table
-at all, versus a SQL view over Silver — that would remove roughly half of
-Gold's row-writing volume outright but changes the read contract for anything
-already querying it directly.
+**The core problem this solves:** every `gold` run does a full `DELETE` +
+rebuild of every Gold table from complete Silver history, even on a routine
+run that only restated a handful of trailing observations per series.
+**The naive fix doesn't work**: nothing in `Pipeline.run()` gates which
+series get restated by staleness (`expected_update_frequency` is dead for
+that purpose), so `restate_last_n` touches nearly every series on nearly
+every run — "skip untouched series" would provide near-zero benefit. The
+design that actually works is **row-range incrementality**: checkpoint each
+table's expanding computation state per entity (series/spread/instrument),
+and on a routine build only extend forward from the checkpointed frontier,
+falling back to a full per-entity recompute on backfill, config change, or
+first-seen.
+
+### The established pattern (4 tables done, all following this shape)
+
+Done so far, in order, each on its own commit on `spec004-postgres-deployment-runbook`:
+`afa0667` (checkpoint infrastructure + prerequisites) → `0c65080`
+(`gold_curve_spread_daily`) → `3dad9b4` (`gold --full` CLI flag +
+integration tests) → `b43f81d` (`gold_credit_spread_daily`) → `1d87eb5`
+(`gold_funding_tape_daily` + `gold_funding_stress_daily`).
+
+For a table that's per-entity and causal/expanding (the common case):
+
+1. **A resumable engine function** in `src/fred_pipeline/writer/terminal_views.py`
+   (or `regime_stats.py`/`global_views.py` for the next tier), named
+   `resume_<table>` — takes `(entity identity fields, new_points_past_frontier,
+   prior_state_or_None, ...)`, returns `(new_state, new_rows_only)`. Built from
+   the two shared exact resumable primitives in `writer/features.py`:
+   `resume_expanding_mean_std` (Welford, O(1) state) and
+   `resume_expanding_percentile` (exact via a checkpointed sorted-value list +
+   `bisect`, not approximate). Check whether the table's original
+   `compute_<table>` function carries any *additional* sequential state
+   beyond those two — `gold_curve_spread_daily`'s `inversion_run` (a
+   consecutive-count) and `gold_credit_spread_daily`'s `change_bps` (needs
+   the single prior value) both did; write a dedicated test proving a naive
+   resume without that extra state would silently produce wrong output for
+   the first point of a resumed chunk.
+2. **A `_build_<table>` orchestration method** on `LocalWarehouse` in
+   `src/fred_pipeline/io/local_store.py`, pulled out of the
+   `_compute_parallel` dict entirely (checkpoint reads/writes must stay
+   main-thread-only — `_compute_parallel`'s `ThreadPoolExecutor` workers
+   never touch `self.conn`, which is `check_same_thread=True`). Per entity:
+   compute a `config_hash` (hash of just that entity's own config fields, so
+   editing one spread's YAML entry doesn't invalidate every other spread's
+   checkpoint); skip entirely only if a checkpoint exists, the config hash
+   matches, *and* none of the entity's watched series ids are in `touched`;
+   otherwise decide append (new data is strictly past the checkpoint
+   frontier) vs. full-entity recompute (backfill/config-change/first-seen,
+   via a scoped `DELETE ... WHERE entity_col = ?`, never a table-wide
+   delete). Batch all checkpoint writes into one call to
+   `_write_checkpoints_batch` at the end, not one write per entity.
+3. **`full: bool` wiring**: `_build_gold_inner`/`build_gold` already thread
+   it through; a new table just needs its `_build_<table>` method to accept
+   `full` and branch to the old full-DELETE-and-recompute-everything path
+   (clearing this table's checkpoints via `_clear_checkpoints`) when `True`.
+4. **Tests**: engine-level parity tests (`resume_X` output ==
+   `compute_X` output, across arbitrary split points — see
+   `tests/test_features_resumable.py` for the primitive-level property tests
+   and `tests/test_terminal_views.py`'s `resume_curve_spread_daily`/
+   `resume_credit_spread_daily`/`resume_funding_tape_entry` tests for the
+   per-table pattern), plus integration tests against the real
+   `LocalWarehouse.build_gold()` entry point in `tests/test_local_store.py`
+   (skip-untouched, append, backfill-vs-from-scratch, and — if the table has
+   one — a downstream-consumer check, since two of the four tables done so
+   far had another Gold table reading their output, which needed a small
+   fix each time; see below).
+
+**Watch for downstream consumers when removing a table from `_compute_parallel`.**
+Both `gold_credit_spread_daily` and `gold_funding_stress_daily` were read by
+`compute_recession_probability` later in `_build_gold_inner` via the
+`computed[...]` dict the old full-rebuild-everything code produced. Removing
+a table from that dict without checking for this breaks silently until the
+full test suite is run — grep for the table's old `computed["..."]` key
+before deleting the `_compute_parallel` entry. Since those consumers need
+the table's *full current content*, not just one build's delta, the fix is
+to read the table back from the DB after the incremental build (or, if the
+value is already computed fresh in Python that build — as
+`_build_funding_stress_daily` is — just use that return value directly).
+
+**Not every table fits the per-entity pattern — know the exceptions:**
+
+- **Snapshot tables** (one row per entity, not per date — no history to
+  append): `gold_benchmark_rate_board`, the ECON dashboard's
+  `macro_indicator_dashboard`/`sparkline`. Not worth making incremental;
+  their full rebuild is already cheap (tiny output).
+- **Cross-sectional composites**: `gold_funding_stress_daily` (done —
+  deliberately left as an always-full recompute, not checkpointed; see its
+  docstring in `local_store.py` for the reasoning) and, at a larger scale,
+  the macro PCA/factor-score tables and `macro_category_summary`. A single
+  touched entity can change *other* entities' or dates' output, breaking the
+  per-entity append/backfill split. Generally: recompute fully every time,
+  cheaply, rather than force-fitting the checkpoint pattern.
+
+### Next tier (harder — not started, this is where to pick up)
+
+In roughly this order, per spec003's own "don't build later phases
+speculatively" discipline — do one, prove it, then move on, same as the four
+already done:
+
+1. **The regime playbook and correlation** (`gold_macro_regime_daily`,
+   `gold_series_correlation`) — `regime_stats.py`'s `compute_macro_regime`
+   and `compute_series_correlation`. Structurally similar to what's already
+   done (config-bounded entities, expanding stats), but `compute_macro_regime`
+   has *multiple pillars each with multiple weighted inputs* (a richer
+   config shape than a spread's two legs or a metric's one series) and
+   `compute_series_correlation`'s expanding correlation is computed via
+   prefix sums over *two* aligned series at once (not a single value
+   stream) — the resumable primitive for this doesn't exist yet and needs
+   designing (an exact resumable expanding-correlation accumulator: running
+   sums of x, y, x², y², xy is the natural O(1) state, analogous to Welford
+   but bivariate).
+2. **`gold_series_lead_lag` / `gold_series_structural_breaks`** — harder
+   still. Both re-scan the *entire* aligned history on every call (a
+   cross-correlation ladder over ±max_lag, a Chow-test break-date scan, a
+   CUSUM scan) with no incremental update path in the algorithm itself —
+   classified "B" earlier in this project (safe to scope to just the
+   touched pair, but that pair's *entire* history must be recomputed, not
+   just new trailing rows). The realistic win here is narrower: skip
+   untouched pairs entirely, full-recompute touched ones — genuinely
+   simpler to implement than true row-range incrementality, but check
+   whether it's worth doing given `Pipeline.run()` touches nearly every
+   series most runs (so most pairs would count as "touched" most of the
+   time) — this is the same whole-entity-vs-row-range tradeoff spec003
+   already worked through once; re-read that reasoning before assuming the
+   answer is the same here.
+3. After that: `gold_recession_probability_daily` (warm-started IRLS,
+   `last_beta` carried forward — full-entity-recompute-on-any-touch, similar
+   to item 2 above) and `gold_equity_total_return_index` (running product
+   from the ticker's first date — same shape). Then a deliberate decision on
+   whether the macro PCA/factor-score tables and anomaly scores are worth
+   incremental treatment at all, versus staying full-rebuild permanently —
+   spec003's Phase 3 status note leans toward "probably not," since they're
+   cross-sectionally coupled by construction (touching any one feature
+   series changes covariance/loadings for every other series from that
+   point forward).
