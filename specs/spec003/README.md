@@ -168,6 +168,52 @@ series' Gold rows in place, falling back to a full rebuild only on explicit
 request (e.g. after `replay`, or a new `--full` flag on the `gold` command
 mirroring `run --full`).
 
+**Status (2026-09-13): first implementation slice shipped.** The naive
+"skip untouched series" framing above turned out not to work as-is: nothing
+in `Pipeline.run()` gates which series get restated by staleness/due-date
+(`expected_update_frequency` is dead for that purpose), so `restate_last_n`
+touches nearly every series on nearly every routine run -- a whole-entity
+skip would provide close to zero benefit for the exact `run -> gold`
+sequence this phase is motivated by. The design that actually pays off is
+**row-range** incrementality: checkpoint each table's expanding computation
+state per entity (Welford mean/std, an exact resumable expanding-percentile
+via a sorted-value list + `bisect`, and any table-specific sequential state
+like a consecutive-inversion counter), and on a routine build only extend
+forward from the checkpointed frontier, falling back to a full per-entity
+recompute on backfill/config-change/first-seen. Two prerequisites had to
+land first: `merge_silver`'s upsert needed a `row_hash`-gated `WHERE` clause
+so `ingested_at` only advances on genuine content change (otherwise the
+touched-series signal is meaningless), and checkpoint I/O had to move
+off the `_compute_parallel` worker threads entirely (`self.conn` is
+`check_same_thread=True`).
+
+`gold_curve_spread_daily` (9 config-bounded spreads) is the one table wired
+up so far, proving the pattern end-to-end: a resumability property-test
+suite (`tests/test_features_resumable.py`), engine-level parity tests
+(`resume_curve_spread_daily` vs. the original `compute_curve_spread_daily`
+across arbitrary split points), and five integration tests against the real
+`build_gold()` entry point covering skip/append/backfill/new-config-entry/
+`--full`-reset. The full existing test suite passes unmodified throughout --
+a first-ever incremental build (no watermark yet) is empirically
+bit-identical to the old always-full-rebuild output. See commits on
+`spec004-postgres-deployment-runbook` (spec003 Phase 3 checkpoint infra;
+wire gold_curve_spread_daily; `gold --full` + integration tests) for the
+full implementation.
+
+Extending this to the rest of the ~54 remaining tables is deliberately left
+as follow-up work, not part of this slice (per spec003's own "don't build
+later phases speculatively" discipline) -- roughly in this order: the
+other config-group tables sharing the same two primitives (benchmark board,
+funding, credit spreads, regime playbook, correlation/stats), the ECON
+dashboard's mixed per-series + cross-sectional-category-summary case, then
+the tables needing a full per-entity recompute on any touch rather than
+true append (recession probability's warm-started IRLS, equity total return
+index's running product) -- and finally an explicit decision on whether the
+genuinely global tables (macro PCA/factor scores, and everything derived
+from them) are worth incremental treatment at all, versus staying
+full-rebuild permanently as the cheapest-to-reason-about choice for a
+handful of tables that are cross-sectionally coupled by construction.
+
 ### Phase 4: Parallelize independent table builds (if Phase 2 shows it's still needed)
 
 With Phase 1 removing the single largest sequential cost, the remaining ~65
