@@ -3,17 +3,20 @@
 **Status: Phases 1–2 done. Phase 3 (Incremental Gold) has 5 tables/groups
 wired and the pattern is proven; the remaining candidate tables are
 deliberately deferred (see "Phase 3: what's left, and why it's parked"
-below) pending real profiling data. A new, likely-bigger lever — due-date
-gating on extraction — is scoped in [`specs/spec007`](../../specs/spec007/README.md)
-and not yet started.**
+below) pending real profiling data. The bigger lever — due-date gating on
+extraction, [`specs/spec007`](../../specs/spec007/README.md) — now has real
+before/after timing (2026-09-14, ~59% wall-clock reduction on a sample,
+concentrated in low-frequency series, see below); still opt-in, not yet
+the default.**
 
 **Audience:** an agent working in **this** repo (`fred-bronze-to-gold-pipeline`).
 Read this first. For Phase 3 continuation, read
 [`specs/spec003/README.md`](../../specs/spec003/README.md) (the authoritative
 design doc — Phase 3's "Status (2026-09-13)" note there has the full
 rationale for every decision summarized here) before writing any code. For
-the extraction-gating work, read `specs/spec007/README.md` first — it's a
-design doc, not started, and needs a real decision on scope before code.
+the extraction-gating work, read `specs/spec007/README.md` first — the
+mechanism and cadence-data work are done and proven; what's left is a
+rollout decision (default-on or stay opt-in), not more research.
 
 ## What was found and fixed (Phases 1–2, both done)
 
@@ -77,6 +80,26 @@ knowing if a rebuild runs long unattended: macOS **sleep pauses** (does not
 kill) a long-running background process — the tell is large gaps between log
 timestamps next to small reported per-stage durations. Wrap long background
 runs in `caffeinate -i -w <pid>` to prevent this.
+
+**✅ The first real full-scale timing number, finally (2026-09-14):** this
+retry succeeded end-to-end against the real 32GB `fred_local.db` — every one
+of ~55 Gold tables/views reported `"ok"`. Reported `real` wall clock was
+26628.85s (~7h24m), but that's dominated by the pre-`caffeinate` sleep gaps
+diagnosed above, not actual work: summing every stage's own reported
+`finished in Xs` line (`FRED_GOLD_STAGE_TIMING=1`) gives **~3250s (~54
+minutes) of genuine active compute** for a full rebuild of every Gold
+table/view from complete Silver history (34M rows). The `_compute_parallel`
+block itself (14 tasks, the ECON dashboard/Curve Lab/regime/FOMC/global
+views/etc.) — the stage every prior attempt died before even reaching —
+finished in **49.4s total** once it actually ran, confirming the Phase 2
+`_select_series` pre-filter fix (item 3 above) works at real scale, not
+just on fixtures. Individual slow points worth knowing about for future
+optimization: `equity_total_return_index` (234.8s), `recession_probability`
+(141.8s), `cross_series_feature_pit` (178.5s), `latest_observation_sql`
+(139.5s), `read_silver`/`read_latest` (391.2s/114.6s combined just to
+materialize Silver into memory) — none blocking, but the natural next
+profiling targets if further Gold speedup is wanted beyond Phase 3's
+per-table incrementality.
 
 **Postgres is not a workaround for this**, and don't assume it is without
 re-reading this: `PostgresWarehouse._build_gold_inner()`
@@ -300,17 +323,42 @@ below first; it's not a TODO list, it's a set of conclusions.
   at a larger, harder-to-bound scale. Revisit only if profiling after
   spec007 shows them as a real bottleneck.
 
-## New scope: due-date gating on extraction (spec007, first slice shipped)
+## New scope: due-date gating on extraction (spec007, real numbers in hand)
 
-**The bigger lever, found while researching Phase 3. Status (2026-09-13):
-a first implementation slice is done, behind an opt-in flag, not yet
-re-baselined against real timing** (see `specs/spec007/README.md` §8) — a
-pure `_series_is_due` date-math function, a `last_ingested_at_by_series`
-warehouse query (which also surfaced and closed a SQLite/Postgres
-index-parity gap), and both wired into `Pipeline.run()`/`run --skip-not-due`
-with a new `RunStatus.SKIPPED_NOT_DUE` audit trail. Default behavior
-(flag omitted) is unchanged. Still owed before this goes further: real
-extraction timing with gating on vs. off (not done).
+**The bigger lever, found while researching Phase 3. Status (2026-09-14):
+first implementation slice done behind an opt-in flag, and now re-baselined
+against real timing too** (see `specs/spec007/README.md` §8 step 3 for full
+methodology) — a pure `_series_is_due` date-math function, a
+`last_ingested_at_by_series` warehouse query (which also surfaced and
+closed a SQLite/Postgres index-parity gap), and both wired into
+`Pipeline.run()`/`run --skip-not-due` with a new `RunStatus.SKIPPED_NOT_DUE`
+audit trail. Default behavior (flag omitted) is unchanged — this is proven
+now, not yet flipped on.
+
+**The real timing comparison (2026-09-14):** a stratified 204-series sample
+(40 each of quarterly/monthly/daily/weekly/annual, plus all 4
+business_daily) against real FRED/BLS/ECB/World Bank/Treasury/SEC/BIS API
+access and real `ingested_at` history from `fred_local.db`, `run --local
+--series <ids> --no-gold` once with no flag and once with
+`--skip-not-due`, from identical seed state:
+
+| | baseline (no flag) | `--skip-not-due` |
+| --- | --- | --- |
+| wall clock | 94.5s | 39.1s (**-58.6%**) |
+| series processed | 204/204 | 84/204 |
+| series skipped | 0 | 120 |
+
+The skip broke down entirely by cadence: 100% of quarterly/monthly/annual
+sampled series skipped, 0% of daily/weekly/business_daily — daily/weekly
+intervals are short enough a series is nearly always due again by the next
+run, so gating's payoff lives entirely in the slower-cadence tiers.
+Extrapolating those per-cadence rates onto the real manifest's actual
+cadence mix (2,885 active specs, 87.6% of which are
+monthly/quarterly/annual) gives an estimated **~87.6% of the real manifest
+skippable on a routine day** — likely *larger* real-world payoff than this
+sample's 58.6%, since the sample was deliberately cadence-balanced rather
+than population-representative. This is an extrapolation from measured
+per-cadence rates, not a second full-manifest run.
 
 **✅ FIXED (2026-09-13) — the two high-priority findings from validating the
 cadence→interval mapping against real publish calendars are resolved in
