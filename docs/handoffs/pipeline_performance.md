@@ -96,19 +96,47 @@ block itself (14 tasks, the ECON dashboard/Curve Lab/regime/FOMC/global
 views/etc.) — the stage every prior attempt died before even reaching —
 finished in **49.4s total** once it actually ran, confirming the Phase 2
 `_select_series` pre-filter fix (item 3 above) works at real scale, not
-just on fixtures. **One stage dominates everything else: `zscore_heatmap`
+just on fixtures. **One stage dominated everything else: `zscore_heatmap`
 took 1504.1s — 46.3% of the entire 3250s rebuild, by far the single
 biggest lever available, bigger than the rest of the slow stages
-combined.** Other individual slow points worth knowing about, all well
-behind it: `read_silver` (391.2s, 12.0%), `equity_total_return_index`
-(234.8s, 7.2%), `cross_series_feature_pit` (178.5s, 5.5%),
-`recession_probability` (141.8s, 4.4%), `latest_observation_sql` (139.5s,
-4.3%), `zscore_rolling` (118.6s, 3.6%), `read_latest` (114.6s, 3.5%) —
-`read_silver`+`read_latest` together (505.8s, 15.5%) are just materializing
-Silver into memory, before any table-specific compute starts. None of this
-is blocking, but `zscore_heatmap` is the obvious next profiling target if
-further Gold speedup is wanted beyond Phase 3's
-per-table incrementality.
+combined.**
+
+**✅ FIXED (2026-09-14).** Root cause: `compute_zscore_heatmap`
+(`zscore_views.py`) called `_expanding_percentile`, an O(n²)
+rescan-and-count per series — brutal at real scale, since `USRECD` alone
+has 62,737 observations and every Tiingo equity ticker splits into 4
+~16K-observation sub-series (`close`/`divCash`/`splitFactor`/`adjClose`),
+so hundreds of series paid this cost. Rewrote it with a running sorted
+list (`bisect`/`insort`, the same technique this codebase's own
+`resume_expanding_percentile` in `features.py` already used for a
+different function's semantics) — proven exactly equivalent to the old
+output via a property test (20 random seeds, ties deliberately forced) and
+the full suite, then re-verified against the real 20.4M-row
+`gold_fred_feature_transforms` table: **1504.1s → 283.6s, a 5.3x speedup
+for the stage** (less than the ~100x seen in an isolated single-series
+microbenchmark, because the stage also does real work beyond the fixed
+function — rolling-window stats across 4 windows and building 20.4M output
+rows — that this fix doesn't touch). **Projected new full Gold rebuild
+total: ~2030s (~33.8 min), down from ~3250s (~54.2 min) — a 37.6% cut to
+the entire rebuild from this one fix**, not yet re-verified with a full
+end-to-end run (the isolated stage re-verification above stands in for
+that; a full rebuild takes the better part of an hour to actually confirm).
+`zscore_heatmap`'s share of total time drops from 46.3% to an estimated
+~14.0%.
+
+Other individual slow points worth knowing about, now the largest
+remaining group: `read_silver` (391.2s, would be ~19.3% of the new total),
+`equity_total_return_index` (234.8s, ~11.6%), `cross_series_feature_pit`
+(178.5s, ~8.8%), `recession_probability` (141.8s, ~7.0%),
+`latest_observation_sql` (139.5s, ~6.9%), `zscore_rolling` (118.6s, ~5.8%),
+`read_latest` (114.6s, ~5.6%) — `read_silver`+`read_latest` together
+(505.8s) are just materializing Silver into memory, before any
+table-specific compute starts. None of this is blocking, but with
+`zscore_heatmap` fixed, `read_silver`/`read_latest` (the fixed
+materialization cost every Gold build pays regardless of what's actually
+changed) is arguably the next structurally-interesting target, alongside
+`equity_total_return_index`/`recession_probability` — both already
+flagged above as now-unblocked Phase 3 incrementality candidates.
 
 **Postgres is not a workaround for this**, and don't assume it is without
 re-reading this: `PostgresWarehouse._build_gold_inner()`
