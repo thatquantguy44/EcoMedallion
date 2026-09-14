@@ -1,11 +1,14 @@
 # Pipeline performance handoff: Gold rebuild fixed + incremental; extraction is the next lever
 
 **Status: Phases 1–2 done. Phase 3 (Incremental Gold) has 5 tables/groups
-wired and the pattern is proven; the remaining candidate tables are
-deliberately deferred (see "Phase 3: what's left, and why it's parked"
-below) pending real profiling data. A new, likely-bigger lever — due-date
-gating on extraction — is scoped in [`specs/spec007`](../../specs/spec007/README.md)
-and not yet started.**
+wired and the pattern is proven. The remaining candidate tables were
+re-evaluated against current code on 2026-09-14 (analysis only, no real
+profiling data — see "Phase 3: what's left, and why it's parked" below):
+four stay deliberately parked, one (`gold_equity_total_return_index`) was
+un-parked — it fits the established pattern directly and is ready to
+implement next, no new primitive needed. A new, likely-bigger lever —
+due-date gating on extraction — is scoped in
+[`specs/spec007`](../../specs/spec007/README.md) and not yet started.**
 
 **Audience:** an agent working in **this** repo (`fred-bronze-to-gold-pipeline`).
 Read this first. For Phase 3 continuation, read
@@ -261,44 +264,93 @@ found to be either a poor fit for the checkpoint pattern or of uncertain
 payoff. Don't start on these without re-deriving (or refuting) the reasoning
 below first; it's not a TODO list, it's a set of conclusions.
 
-- **`gold_macro_regime_daily`** — evaluated and left as a full rebuild.
-  `compute_macro_regime` emits one row *per date* only once every pillar has
-  a live input that date, using an as-of/staleness lookup (`_asof`, a
-  `bisect_right` carrying forward each input's last value within
-  `max_staleness_days`). A single backfilled input can therefore change
-  which value gets carried into *other, already-computed* dates — not just
-  extend the series forward the way every table done so far works. Forcing
-  this into the per-entity append/backfill split risks silent staleness.
-  It's also already fast: pre-filtered to `regime_ids` by the
-  `_select_series` fix (item 3 above), its own output is bounded by unique
-  dates across a handful of config-bounded pillars/inputs (small), so the
-  win from checkpointing it would be marginal relative to the risk.
-- **`gold_series_lead_lag` / `gold_series_structural_breaks`** — not
-  started, lower priority than it looks. Both re-scan the *entire* aligned
-  history on every call (a cross-correlation ladder over ±max_lag, a
-  Chow-test break-date scan, a CUSUM scan) with no incremental update path
-  in the algorithm itself — the realistic optimization is "skip untouched
-  pairs entirely, full-recompute touched ones," not true row-range
-  incrementality. That's a real, much simpler change to make — but its
-  payoff depends on the same fact that ruled out whole-series skipping for
-  Gold generally: `Pipeline.run()` touches nearly every series on nearly
-  every run, so most configured pairs would likely count as "touched" most
-  of the time too. Get a real read on this from **spec007** below before
-  spending time here — if extraction stops touching every series every run,
-  *then* per-pair skipping for these two tables becomes worth doing, and
-  should probably be built together with that change rather than before it.
-- **`gold_recession_probability_daily`** (warm-started IRLS, `last_beta`
-  carried forward) and **`gold_equity_total_return_index`** (running product
-  from the ticker's first date) — same shape as the lead-lag/structural-
-  breaks case: full-entity-recompute-on-any-touch is the realistic ceiling,
-  same open question about whether "touched" is ever a small set in
-  practice.
-- **Macro PCA/factor-score tables and anomaly scores** — probably not worth
-  it at all. They're cross-sectionally coupled by construction (touching any
-  one feature series changes covariance/loadings for every other series from
-  that point forward), the same category as `gold_funding_stress_daily` but
-  at a larger, harder-to-bound scale. Revisit only if profiling after
-  spec007 shows them as a real bottleneck.
+**Re-derived against current code, 2026-09-14** (analysis only — no real
+extraction/`--skip-not-due` data exists yet; see "New scope" below for why).
+Four of the five original conclusions held or got a stronger justification;
+one was wrong and is now unparked below.
+
+- **`gold_macro_regime_daily`** — confirmed, leave parked.
+  `compute_macro_regime` (`writer/regime_stats.py:84-180`) emits one row
+  *per date* only once every pillar is live that date (`:152-153`), using
+  an as-of/staleness lookup (`_asof`'s `bisect_right`, `:130-137`) over
+  per-input expanding z-scores. A single backfilled input changes that
+  input's z-score, which `_asof` then serves to every later date's
+  composite — this is a correctness-shape problem (cross-date coupling in
+  the algorithm), not a frequency one, so **it doesn't depend on spec007 at
+  all**: even if extraction stops touching every series every run, this
+  table still can't be safely checkpointed. `_select_series` pre-filtering
+  to `regime_ids` confirmed at `io/local_store.py:1996-1998`;
+  `config/regime.yml` has only 15 series — genuinely small, confirming the
+  "marginal win" call.
+- **`gold_series_lead_lag` / `gold_series_structural_breaks`** — confirmed,
+  leave parked, for a reason independent of spec007. Both fully rescan
+  aligned history every call: `compute_series_lead_lag`
+  (`regime_stats.py:809-875`, full ±max_lag CCF + Granger) and
+  `compute_series_structural_breaks` (`:699-806`) via `_chow_scan`
+  (`:573-652`) and `_cusum_scan` (`:655-696`) — no cross-call state exists,
+  so "skip untouched pairs, full-recompute touched ones" is the real
+  ceiling, as stated. But `config/stats_pairs.yml` has only **8 pairs**
+  total — even a perfect skip-if-untouched implementation caps the benefit
+  at skipping ≤8 recomputations. The payoff ceiling is too low to justify
+  the work on its own; spec007 data wouldn't change that conclusion, so
+  don't gate revisiting this on it.
+- **`gold_recession_probability_daily`** — confirmed, stronger reason than
+  originally written, leave parked. Warm-started IRLS (`last_beta`
+  carried forward, `ml/recession_model.py:359-367`) was the stated shape,
+  but it understates the risk: `_forward_labels` (`:130-153`) only grants a
+  date `t` a label once `add_months(t, h) <= last_date` (`:147`), where
+  `last_date` is the newest USREC print in the input. Appending a **new**
+  USREC print (not a backfill) advances `last_date` and newly labels
+  boundary dates up to `h` months back — `compute_recession_probability`
+  (`:257-...`) recomputes `train_dates`/`X_train`/`y_train` from
+  `labels_by_h` fresh on *every* `obs_date` iteration (`:344-357`),
+  including already-emitted historical ones, so those rows' `beta` and
+  probability silently change too. Verified directly (not just by the
+  research agent): this means even a pure forward append — not just a
+  backfill — can retroactively change already-computed gold rows, the same
+  cross-date-coupling family as `gold_macro_regime_daily`, and equally
+  independent of the touch-frequency question spec007 answers.
+- **`gold_equity_total_return_index`** — **REFUTED as grouped with the
+  recession-probability case; un-park this, it's a good Phase-3 candidate.**
+  Verified directly: `compute_equity_total_return_index`
+  (`writer/equity_views.py:206-272`) is a running product per ticker
+  (`tr_index *= 1.0 + tr`, `pr_index *= 1.0 + pr`, `:248-249`) driven only
+  by `prev_close` carried forward (`:271`) — unlike the recession model,
+  appending a new date for a ticker never touches that ticker's past rows;
+  only a genuine backfill (e.g. a restated dividend) does, and that's
+  exactly the backfill case the established per-entity pattern already
+  handles. `trailing_12m_dividend` (`:252-257`) is a backward-only 365-day
+  window via `bisect_left` over sorted dividend dates — the same shape
+  `resume_series_correlation`'s prefix-sum ring-buffer technique already
+  solves elsewhere in this codebase (see "established pattern" above), so
+  no new primitive is needed: entity = ticker, sequential state =
+  (`prev_close`, `tr_index`, `pr_index`) exactly like
+  `gold_credit_spread_daily`'s single-prior-value shape, plus that one
+  rolling-window primitive for the dividend sum.
+- **Macro PCA/factor-score tables and anomaly scores** — mostly confirmed,
+  leave parked, with a refinement. `compute_macro_factor_scores`
+  (`ml/macro_pca.py:87-198`) and `compute_macro_anomaly_scores`
+  (`ml/anomaly.py:86-165`) both carry Welford state (mean/`M2`,
+  `macro_pca.py:137-158`) — the same primitive family as
+  `resume_expanding_mean_std`, just matrix-valued — so the state itself is
+  small and cheap to hold either way; the blocker is real cross-sectional
+  coupling (backfilling one feature changes `mean`/`M2` for every factor
+  from that point forward), the same category as `gold_funding_stress_daily`
+  but at larger scale, as originally written. Refinement the original
+  write-up missed: because *many* input features feed these *few* shared
+  entities (factors), P(at least one touched) saturates fast — a
+  skip-if-untouched scheme would actually perform *worse* here than for
+  lead-lag/structural-breaks (item 2 above), not just "the same idea at
+  larger scale." **`compute_equity_factor_attribution`**
+  (`ml/equity_factor_attribution.py:271-401`) is a different case: it's
+  *already* incrementally checkpointed per (ticker, window) via
+  Sherman-Morrison rolling-window updates — its Phase-3 exclusion is
+  inherited entirely from consuming the volatile `macro_factor_scores`
+  output above, not from its own shape. Revisit it only once/if the PCA
+  table's own coupling problem is solved; revisit the PCA/anomaly tables
+  themselves only if real profiling shows them as a bottleneck (spec007 or
+  otherwise — this one's payoff-vs-risk call, unlike items 1-3, could
+  plausibly change with better data).
 
 ## New scope: due-date gating on extraction (spec007, first slice shipped)
 
