@@ -41,3 +41,4 @@ config/*.local.yaml
 .idea/
 .vscode/
 .DS_Store
+tmp/perf/gold_rebuild_20260912_221031.log
