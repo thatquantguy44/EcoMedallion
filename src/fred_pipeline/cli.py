@@ -1024,11 +1024,15 @@ def build_parser() -> argparse.ArgumentParser:
     )
     r.add_argument(
         "--skip-not-due",
-        action="store_true",
+        action=argparse.BooleanOptionalAction,
+        default=True,
         help=(
             "skip extracting a series if it isn't due yet per its "
-            "expected_update_frequency (spec007, opt-in for now); "
-            "--full always bypasses this"
+            "expected_update_frequency (spec007; default on since "
+            "2026-09-14 -- real timing showed ~59%% wall-clock savings on "
+            "a sample, concentrated in monthly/quarterly/annual series). "
+            "Pass --no-skip-not-due to attempt every series regardless of "
+            "due-date. --full always bypasses this."
         ),
     )
     r.add_argument(

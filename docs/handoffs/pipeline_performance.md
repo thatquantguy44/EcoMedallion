@@ -3,11 +3,13 @@
 **Status: Phases 1–2 done. Phase 3 (Incremental Gold) has 5 tables/groups
 wired and the pattern is proven; the remaining candidate tables are
 deliberately deferred (see "Phase 3: what's left, and why it's parked"
-below) pending real profiling data. The bigger lever — due-date gating on
-extraction, [`specs/spec007`](../../specs/spec007/README.md) — now has real
-before/after timing (2026-09-14, ~59% wall-clock reduction on a sample,
-concentrated in low-frequency series, see below); still opt-in, not yet
-the default.**
+below), now revisitable with real touched-vs-skipped data (see next
+paragraph). The bigger lever — due-date gating on extraction,
+[`specs/spec007`](../../specs/spec007/README.md) — has real before/after
+timing (2026-09-14, ~59% wall-clock reduction on a sample, concentrated in
+low-frequency series, see below) **and is now the default**
+(`skip_not_due=True` in `Pipeline.run()`; CLI `--no-skip-not-due` to opt
+out, `--full` still always bypasses it).
 
 **Audience:** an agent working in **this** repo (`fred-bronze-to-gold-pipeline`).
 Read this first. For Phase 3 continuation, read
@@ -15,8 +17,9 @@ Read this first. For Phase 3 continuation, read
 design doc — Phase 3's "Status (2026-09-13)" note there has the full
 rationale for every decision summarized here) before writing any code. For
 the extraction-gating work, read `specs/spec007/README.md` first — the
-mechanism and cadence-data work are done and proven; what's left is a
-rollout decision (default-on or stay opt-in), not more research.
+mechanism, cadence-data work, and rollout are all done; what's left is
+revisiting spec003's parked tables with the real skip data this unlocked,
+not more due-date-gating work itself.
 
 ## What was found and fixed (Phases 1–2, both done)
 
@@ -306,16 +309,21 @@ below first; it's not a TODO list, it's a set of conclusions.
   payoff depends on the same fact that ruled out whole-series skipping for
   Gold generally: `Pipeline.run()` touches nearly every series on nearly
   every run, so most configured pairs would likely count as "touched" most
-  of the time too. Get a real read on this from **spec007** below before
-  spending time here — if extraction stops touching every series every run,
-  *then* per-pair skipping for these two tables becomes worth doing, and
-  should probably be built together with that change rather than before it.
+  of the time too. **This condition is no longer open** — spec007's
+  `--skip-not-due` gating is now default-on and its real benchmark
+  (`specs/spec007/README.md` §8 step 3) shows ~87.6% of the real manifest
+  is skippable on a routine day, concentrated in the slower-cadence series
+  that dominate this manifest by count. Extraction genuinely no longer
+  touches nearly every series on nearly every run — re-derive whether
+  per-pair skipping for these two tables is worth building now, using that
+  real number instead of the "would likely count as touched" guess above.
 - **`gold_recession_probability_daily`** (warm-started IRLS, `last_beta`
   carried forward) and **`gold_equity_total_return_index`** (running product
   from the ticker's first date) — same shape as the lead-lag/structural-
-  breaks case: full-entity-recompute-on-any-touch is the realistic ceiling,
-  same open question about whether "touched" is ever a small set in
-  practice.
+  breaks case, same now-resolved precondition above: full-entity-recompute-
+  on-any-touch is the realistic ceiling, and whether "touched" is a small
+  set in practice can now be checked against spec007's real skip data
+  instead of guessed at.
 - **Macro PCA/factor-score tables and anomaly scores** — probably not worth
   it at all. They're cross-sectionally coupled by construction (touching any
   one feature series changes covariance/loadings for every other series from
@@ -323,17 +331,18 @@ below first; it's not a TODO list, it's a set of conclusions.
   at a larger, harder-to-bound scale. Revisit only if profiling after
   spec007 shows them as a real bottleneck.
 
-## New scope: due-date gating on extraction (spec007, real numbers in hand)
+## New scope: due-date gating on extraction (spec007, shipped and default-on)
 
 **The bigger lever, found while researching Phase 3. Status (2026-09-14):
-first implementation slice done behind an opt-in flag, and now re-baselined
-against real timing too** (see `specs/spec007/README.md` §8 step 3 for full
-methodology) — a pure `_series_is_due` date-math function, a
-`last_ingested_at_by_series` warehouse query (which also surfaced and
-closed a SQLite/Postgres index-parity gap), and both wired into
-`Pipeline.run()`/`run --skip-not-due` with a new `RunStatus.SKIPPED_NOT_DUE`
-audit trail. Default behavior (flag omitted) is unchanged — this is proven
-now, not yet flipped on.
+implementation shipped, re-baselined against real timing, and now
+default-on** (see `specs/spec007/README.md` §8 step 3 for full methodology)
+— a pure `_series_is_due` date-math function, a `last_ingested_at_by_series`
+warehouse query (which also surfaced and closed a SQLite/Postgres
+index-parity gap), and both wired into `Pipeline.run()`/`run_from_manifest()`
+with a new `RunStatus.SKIPPED_NOT_DUE` audit trail. `skip_not_due` defaults
+to `True` as of 2026-09-14 (CLI: `--skip-not-due`/`--no-skip-not-due`, the
+latter for old "attempt everything" behavior); `--full` always bypasses it
+regardless.
 
 **The real timing comparison (2026-09-14):** a stratified 204-series sample
 (40 each of quarterly/monthly/daily/weekly/annual, plus all 4
