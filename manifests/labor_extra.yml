@@ -1361,7 +1361,7 @@ series:
   units: Percent
   active: true
   load_type: incremental
-  expected_update_frequency: annual
+  expected_update_frequency: quarterly
   vintage_enabled: true
   validation_profile: standard
   business_owner: ''
@@ -1421,7 +1421,7 @@ series:
   units: Thousands of Persons
   active: true
   load_type: incremental
-  expected_update_frequency: annual
+  expected_update_frequency: quarterly
   vintage_enabled: true
   validation_profile: standard
   business_owner: ''
@@ -1441,7 +1441,7 @@ series:
   units: 1982-84 CPI Adjusted Dollars
   active: true
   load_type: incremental
-  expected_update_frequency: annual
+  expected_update_frequency: quarterly
   vintage_enabled: true
   validation_profile: standard
   business_owner: ''
@@ -1461,7 +1461,7 @@ series:
   units: Thousands of Persons
   active: true
   load_type: incremental
-  expected_update_frequency: annual
+  expected_update_frequency: quarterly
   vintage_enabled: true
   validation_profile: standard
   business_owner: ''
@@ -1481,7 +1481,7 @@ series:
   units: Dollars
   active: true
   load_type: incremental
-  expected_update_frequency: annual
+  expected_update_frequency: quarterly
   vintage_enabled: true
   validation_profile: standard
   business_owner: ''
@@ -1541,7 +1541,7 @@ series:
   units: Thousands of Persons
   active: true
   load_type: incremental
-  expected_update_frequency: annual
+  expected_update_frequency: quarterly
   vintage_enabled: true
   validation_profile: standard
   business_owner: ''
@@ -1561,7 +1561,7 @@ series:
   units: Thousands of Persons
   active: true
   load_type: incremental
-  expected_update_frequency: annual
+  expected_update_frequency: quarterly
   vintage_enabled: true
   validation_profile: standard
   business_owner: ''
@@ -1581,7 +1581,7 @@ series:
   units: Dollars
   active: true
   load_type: incremental
-  expected_update_frequency: annual
+  expected_update_frequency: quarterly
   vintage_enabled: true
   validation_profile: standard
   business_owner: ''
@@ -1700,7 +1700,7 @@ series:
   units: Thousands of Persons
   active: true
   load_type: incremental
-  expected_update_frequency: annual
+  expected_update_frequency: quarterly
   vintage_enabled: true
   validation_profile: standard
   business_owner: ''

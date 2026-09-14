@@ -1065,7 +1065,7 @@ series:
   units: Percent
   active: true
   load_type: incremental
-  expected_update_frequency: annual
+  expected_update_frequency: monthly
   vintage_enabled: true
   validation_profile: standard
   business_owner: ''
@@ -1220,7 +1220,7 @@ series:
   units: Index 2017=100
   active: true
   load_type: incremental
-  expected_update_frequency: annual
+  expected_update_frequency: monthly
   vintage_enabled: true
   validation_profile: standard
   business_owner: ''
@@ -1240,7 +1240,7 @@ series:
   units: Index 2017=100
   active: true
   load_type: incremental
-  expected_update_frequency: annual
+  expected_update_frequency: monthly
   vintage_enabled: true
   validation_profile: standard
   business_owner: ''
@@ -4226,7 +4226,7 @@ series:
   units: Thousands of Units
   active: true
   load_type: incremental
-  expected_update_frequency: annual
+  expected_update_frequency: monthly
   vintage_enabled: true
   validation_profile: standard
   business_owner: ''
@@ -4245,7 +4245,7 @@ series:
   units: Dollars
   active: true
   load_type: incremental
-  expected_update_frequency: annual
+  expected_update_frequency: monthly
   vintage_enabled: true
   validation_profile: standard
   business_owner: ''
@@ -4682,7 +4682,7 @@ series:
   units: Index 2000=100
   active: true
   load_type: incremental
-  expected_update_frequency: annual
+  expected_update_frequency: quarterly
   vintage_enabled: true
   validation_profile: standard
   business_owner: ''
@@ -5105,7 +5105,7 @@ series:
   units: Index 2000=100
   active: true
   load_type: incremental
-  expected_update_frequency: annual
+  expected_update_frequency: quarterly
   vintage_enabled: true
   validation_profile: standard
   business_owner: ''
@@ -5870,7 +5870,7 @@ series:
   units: Index 2000=100
   active: true
   load_type: incremental
-  expected_update_frequency: annual
+  expected_update_frequency: quarterly
   vintage_enabled: true
   validation_profile: standard
   business_owner: ''
@@ -6080,7 +6080,7 @@ series:
   units: Index 2000=100
   active: true
   load_type: incremental
-  expected_update_frequency: annual
+  expected_update_frequency: quarterly
   vintage_enabled: true
   validation_profile: standard
   business_owner: ''
@@ -6290,7 +6290,7 @@ series:
   units: Index 2000=100
   active: true
   load_type: incremental
-  expected_update_frequency: annual
+  expected_update_frequency: quarterly
   vintage_enabled: true
   validation_profile: standard
   business_owner: ''
@@ -6424,7 +6424,7 @@ series:
   units: Index 2000=100
   active: true
   load_type: incremental
-  expected_update_frequency: annual
+  expected_update_frequency: quarterly
   vintage_enabled: true
   validation_profile: standard
   business_owner: ''
@@ -6443,7 +6443,7 @@ series:
   units: Index 2000=100
   active: true
   load_type: incremental
-  expected_update_frequency: annual
+  expected_update_frequency: quarterly
   vintage_enabled: true
   validation_profile: standard
   business_owner: ''
@@ -6481,7 +6481,7 @@ series:
   units: Index 2000=100
   active: true
   load_type: incremental
-  expected_update_frequency: annual
+  expected_update_frequency: quarterly
   vintage_enabled: true
   validation_profile: standard
   business_owner: ''
@@ -6596,7 +6596,7 @@ series:
   units: Index 2000=100
   active: true
   load_type: incremental
-  expected_update_frequency: annual
+  expected_update_frequency: quarterly
   vintage_enabled: true
   validation_profile: standard
   business_owner: ''
@@ -6673,7 +6673,7 @@ series:
   units: Index 2000=100
   active: true
   load_type: incremental
-  expected_update_frequency: annual
+  expected_update_frequency: quarterly
   vintage_enabled: true
   validation_profile: standard
   business_owner: ''
@@ -6711,7 +6711,7 @@ series:
   units: Index 2000=100
   active: true
   load_type: incremental
-  expected_update_frequency: annual
+  expected_update_frequency: quarterly
   vintage_enabled: true
   validation_profile: standard
   business_owner: ''

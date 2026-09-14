@@ -5,10 +5,13 @@ complete); cadence intervals validated against real publish calendars and
 retuned to match (§5/§10 item 5 -- all five intervals now in code);
 expected_update_frequency backfilled across all 3,003 manifest entries
 (§9/§10 item 4 -- previously only 164 had a real value, not ~2,513 as
-first counted); found and fixed a 13-entry fred/annual sub-cluster with
-the same silent-staleness risk as the quarterly/GDP finding (§5 follow-up,
-§10 item 6) -- ~120 more fred/annual entries remain unverified, open;
-still not the default, still not re-baselined against real timing
+first counted); the cadence-data-accuracy work is now done -- 121 fred
+entries found mistagged (a "frequency" copy that didn't match the real
+source's update cadence) and corrected across two passes (§5 follow-up,
+§10 item 6), 12 more checked and confirmed already correct; the only
+thing left before this is fully trustworthy is the real extraction-timing
+re-baseline (§4), which needs API access or a fred_local.db, not more
+research; still not the default
 Last verified: 2026-09-14
 Primary owner: TBD
 Target: `Pipeline.run()` (`src/fred_pipeline/pipeline.py`) — every `run`
@@ -298,15 +301,13 @@ per-entity skipping there low-value (see `docs/handoffs/pipeline_performance.md`
   rather than left as an open question: **all 13 were retagged from
   `annual` to `quarterly`** directly in the manifest (not a code change —
   `_CADENCE_MIN_INTERVAL` is untouched), the same safety-first choice
-  already made for `quarterly` itself. `national_accounts_extra.yml` (82
-  `fred`/`annual` entries), `labor_extra.yml` (9), `regional_aggregates.yml`
-  (12), `production_housing.yml` (16), and `international.yml` (1) were
-  **not** touched — these look like genuine BEA/BLS annual aggregates by
-  title, not Z.1/H.8 transforms, but that has not been researched the way
-  the money_banking.yml cluster was. Anyone continuing this work should
-  spot-check that remaining ~120-entry population before trusting the
-  180-day interval for it, using real FRED series metadata if this ever
-  runs somewhere `fred.stlouisfed.org` is reachable.
+  already made for `quarterly` itself. The remaining ~120-entry
+  `fred`/`annual` population (`national_accounts_extra.yml`,
+  `production_housing.yml`, `regional_aggregates.yml`, `labor_extra.yml`,
+  `international.yml`) was checked in a second pass the same day — see
+  §10 item 6 for the full results (most were also mistagged; one cluster,
+  Census regional population, was confirmed genuinely annual and left
+  alone).
 
   **Sources:** [BLS Employment Situation 2026 schedule](https://www.bls.gov/schedule/2026/home.htm),
   [BLS CPI release schedule](https://www.bls.gov/cpi/),
@@ -484,20 +485,58 @@ re-litigating them:
    quarterly series is found that would benefit from a longer, separately
    tracked interval — that would need a new sub-cadence, not a reversion
    of this fix.
-6. 🔴 **DECISION NEEDED (new, 2026-09-14) — the remaining ~120
-   `fred`/`annual` manifest entries outside `money_banking.yml` are
-   unverified.** The follow-up finding under §5 resolved the 13-entry
-   Z.1/H.8 cluster by retagging it `quarterly`. The larger population in
-   `national_accounts_extra.yml` (82), `production_housing.yml` (16),
-   `regional_aggregates.yml` (12), `labor_extra.yml` (9), and
-   `international.yml` (1) has not been checked the same way — it looks
-   like genuine BEA/BLS/Census annual aggregates by series title, but
-   that's an inference from naming, not a verified release-calendar
-   check, and `fred.stlouisfed.org`/`alfred.stlouisfed.org` were both
-   blocked from the environment this was found in. Before trusting the
-   180-day `annual` interval for this population (or before flipping
-   `--skip-not-due`'s default per decision #1), spot-check a sample
-   against real FRED series metadata from an environment that can reach
-   it — same method as the money_banking.yml cluster: does the specific
-   tracked series ID actually only get a new value once a year, or is it
-   a low-frequency transform of a more-often-published source release?
+6. ✅ **RESOLVED (2026-09-14) — the remaining 120 `fred`/`annual`
+   manifest entries outside `money_banking.yml`, checked against real
+   release calendars (not blocked this time — verified via public release
+   schedules for each source, without needing `fred.stlouisfed.org`
+   itself):**
+   - **`national_accounts_extra.yml` (82 entries, all NIPA line items —
+     GDP components, personal income, corporate profits, etc.)**:
+     confirmed the same failure mode as the GDP/`quarterly` finding
+     itself — BEA's own documentation states NIPAs "are updated more
+     frequently throughout the year with advance, preliminary, and
+     revised estimates for quarterly GDP," and the July annual update is
+     an *additional* revision layered on top of that ongoing quarterly
+     cycle, not the only one. **Retagged all 82 to `quarterly`.**
+   - **`production_housing.yml` (16 entries)**: split by actual source —
+     Fed G.17 Industrial Production (3 entries: `CAPUTLG3311A2A`,
+     `IPB50001A`, `IPG3344A`) and Census/HUD New Residential Sales (2:
+     `HSN1FA`, `MSPNHSUSA`) are both confirmed **monthly** releases
+     (G.17 ~15 days after month-end) — **retagged to `monthly`**. FHFA's
+     All-Transactions House Price Index (11 county-level entries,
+     `ATNHPIUS*`) is confirmed **quarterly-only** by FHFA's own FAQ (the
+     All-Transactions variant specifically, unlike FHFA's separate
+     purchase-only index which does have a monthly cut) — **retagged to
+     `quarterly`**.
+   - **`labor_extra.yml` (9 entries, `LEU0*` usual-weekly-earnings
+     series)**: confirmed BLS releases "Usual Weekly Earnings of Wage and
+     Salary Workers" **quarterly** (most recent at time of check: Q2 2026
+     results published July 21, 2026) — the FRED series we track is the
+     annual-transform variant of an inherently quarterly source (FRED
+     also publishes a sibling `...Q`-suffixed quarterly-frequency series
+     for the same concept, confirming the pattern). **Retagged to
+     `quarterly`.**
+   - **`international.yml` (1 entry, `IEABCA` — Balance on current
+     account)**: confirmed BEA's U.S. International Transactions release
+     is **quarterly** (~80 days after quarter-end). **Retagged to
+     `quarterly`.**
+   - **`regional_aggregates.yml` (12 entries — Census/BEA regional
+     resident population)**: confirmed **genuinely annual** — the Census
+     Population Estimates Program publishes one new "vintage" per year
+     (staggered December–June by geography), and unlike NIPA/Z.1/H.8,
+     revisions to prior years arrive bundled into that same once-a-year
+     vintage release, not scattered through the year. **Left unchanged**
+     at `annual`/180 days — the one cluster in this whole investigation
+     that turned out to already be correctly tagged.
+
+   Net effect across all 120: 108 reclassified (99 to `quarterly`, 5 to
+   `monthly`, plus the 13 already fixed under §5's follow-up finding — so
+   121 total `fred` entries corrected across both passes), 12 confirmed
+   correct as-is. `fred`/`annual` dropped from 170 to 49 systemwide
+   (170 total minus 121 reclassified). Every edit verified to touch only
+   the `expected_update_frequency` line for its own entry (no other field
+   changed), full test suite green throughout. This closes out the
+   cadence-data-accuracy work from this investigation — the only thing
+   left before `--skip-not-due` is fully trustworthy is the real
+   extraction-timing re-baseline (§4), which needs actual API access or a
+   `fred_local.db`, not more research.

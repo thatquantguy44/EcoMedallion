@@ -1454,7 +1454,7 @@ series:
   units: Millions of Dollars
   active: true
   load_type: incremental
-  expected_update_frequency: annual
+  expected_update_frequency: quarterly
   vintage_enabled: true
   validation_profile: standard
   business_owner: ''
