@@ -2,9 +2,6 @@
 
 from __future__ import annotations
 
-import math
-import statistics
-
 import pytest
 
 from fred_pipeline.zscore_views import (
@@ -15,25 +12,27 @@ from fred_pipeline.zscore_views import (
     compute_zscore_heatmap,
 )
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _ft_rows(series_id: str, values: list[float], start_year: int = 2000) -> list[dict]:
     """Build synthetic feature_transform_rows for one series."""
     rows = []
     year, month = start_year, 1
     for v in values:
-        rows.append({
-            "series_id": series_id,
-            "observation_date": f"{year:04d}-{month:02d}-01",
-            "value": v,
-            "mom": None,
-            "diff": None,
-            "yoy": None,
-            "zscore": None,
-        })
+        rows.append(
+            {
+                "series_id": series_id,
+                "observation_date": f"{year:04d}-{month:02d}-01",
+                "value": v,
+                "mom": None,
+                "diff": None,
+                "yoy": None,
+                "zscore": None,
+            }
+        )
         month += 1
         if month > 12:
             month = 1
@@ -41,7 +40,9 @@ def _ft_rows(series_id: str, values: list[float], start_year: int = 2000) -> lis
     return rows
 
 
-def _ft_rows_with_z(series_id: str, values: list[float], start_year: int = 2000) -> list[dict]:
+def _ft_rows_with_z(
+    series_id: str, values: list[float], start_year: int = 2000
+) -> list[dict]:
     """Build synthetic feature_transform_rows with pre-computed expanding z-scores."""
     rows = _ft_rows(series_id, values, start_year)
     # Compute expanding z-scores to simulate what fred_feature_transforms provides.
@@ -59,6 +60,7 @@ def _ft_rows_with_z(series_id: str, values: list[float], start_year: int = 2000)
 # ---------------------------------------------------------------------------
 # _rolling_stats
 # ---------------------------------------------------------------------------
+
 
 def test_rolling_stats_all_none_below_window():
     values = [1.0, 2.0, 3.0]
@@ -152,6 +154,7 @@ def test_rolling_stats_percentile_min():
 # _expanding_percentile
 # ---------------------------------------------------------------------------
 
+
 def test_expanding_percentile_first_is_100():
     pct = _expanding_percentile([42.0])
     assert pct[0] == pytest.approx(100.0)
@@ -177,9 +180,41 @@ def test_expanding_percentile_length():
     assert len(_expanding_percentile(values)) == 4
 
 
+def _naive_expanding_percentile(values: list[float]) -> list[float]:
+    """The original O(n^2) implementation, kept only as an equivalence
+    oracle for the bisect/insort rewrite below -- never call this on real
+    data, it's the exact thing that made zscore_heatmap the single slowest
+    stage (46% of a full Gold rebuild) before the rewrite."""
+    out = []
+    for i, v in enumerate(values):
+        rank = sum(1 for x in values[: i + 1] if x <= v)
+        out.append(rank / (i + 1) * 100.0)
+    return out
+
+
+@pytest.mark.parametrize("seed", range(20))
+def test_expanding_percentile_matches_naive_rescan(seed):
+    """Property test: the bisect/insort rewrite must match the original
+    O(n^2) rescan-and-count exactly, including on ties (repeated values),
+    which is the case most likely to break a rank-based rewrite."""
+    import random
+
+    rng = random.Random(seed)
+    n = rng.randint(1, 200)
+    # Deliberately narrow value range to force frequent ties.
+    values = [float(rng.randint(0, 10)) for _ in range(n)]
+    assert _expanding_percentile(values) == _naive_expanding_percentile(values)
+
+
+def test_expanding_percentile_matches_naive_rescan_all_identical():
+    values = [7.0] * 50
+    assert _expanding_percentile(values) == _naive_expanding_percentile(values)
+
+
 # ---------------------------------------------------------------------------
 # compute_fred_series_zscore_rolling
 # ---------------------------------------------------------------------------
+
 
 def test_rolling_empty_input():
     assert compute_fred_series_zscore_rolling([]) == []
@@ -196,8 +231,14 @@ def test_rolling_output_schema():
     result = compute_fred_series_zscore_rolling(rows, windows=(12,))
     assert len(result) > 0
     expected_keys = {
-        "series_id", "observation_date", "window",
-        "value", "change", "pct_change", "zscore", "percentile",
+        "series_id",
+        "observation_date",
+        "window",
+        "value",
+        "change",
+        "pct_change",
+        "zscore",
+        "percentile",
     }
     assert set(result[0].keys()) == expected_keys
 
@@ -217,9 +258,8 @@ def test_rolling_series_id_preserved():
 
 
 def test_rolling_multiple_series_independent():
-    rows = (
-        _ft_rows("AAA", [float(i) for i in range(20)])
-        + _ft_rows("BBB", [float(i) * 2 for i in range(20)])
+    rows = _ft_rows("AAA", [float(i) for i in range(20)]) + _ft_rows(
+        "BBB", [float(i) * 2 for i in range(20)]
     )
     result = compute_fred_series_zscore_rolling(rows, windows=(12,))
     sids = {r["series_id"] for r in result}
@@ -237,9 +277,8 @@ def test_rolling_observation_dates_are_strings():
 
 
 def test_rolling_sorted_by_series_then_date():
-    rows = (
-        _ft_rows("ZZZ", [float(i) for i in range(20)])
-        + _ft_rows("AAA", [float(i) for i in range(20)])
+    rows = _ft_rows("ZZZ", [float(i) for i in range(20)]) + _ft_rows(
+        "AAA", [float(i) for i in range(20)]
     )
     result = compute_fred_series_zscore_rolling(rows, windows=(12,))
     keys = [(r["series_id"], r["observation_date"]) for r in result]
@@ -276,8 +315,7 @@ def test_rolling_default_windows():
 
 def test_rolling_zscore_manual_verification():
     """Manually verify zscore against statistics.stdev for a small window."""
-    values = [1.0, 3.0, 2.0, 5.0, 4.0, 6.0, 7.0, 3.0, 5.0, 8.0,
-              2.0, 4.0, 6.0]
+    values = [1.0, 3.0, 2.0, 5.0, 4.0, 6.0, 7.0, 3.0, 5.0, 8.0, 2.0, 4.0, 6.0]
     rows = _ft_rows("X", values)
     result = compute_fred_series_zscore_rolling(rows, windows=(5,))
     # Find the last row (i=12, window=5 → window values [6,7,3,5,8] wait no...)
@@ -287,13 +325,14 @@ def test_rolling_zscore_manual_verification():
     mean = sum(w_vals) / 5
     # Population variance (matches the prefix-sum formula).
     var = sum((x - mean) ** 2 for x in w_vals) / 5
-    expected_z = (values[12] - mean) / var ** 0.5 if var > 0 else None
+    expected_z = (values[12] - mean) / var**0.5 if var > 0 else None
     assert last["zscore"] == pytest.approx(expected_z, abs=1e-9)
 
 
 # ---------------------------------------------------------------------------
 # compute_zscore_heatmap
 # ---------------------------------------------------------------------------
+
 
 def test_heatmap_empty_input():
     assert compute_zscore_heatmap([]) == []
@@ -304,9 +343,16 @@ def test_heatmap_output_schema_default_windows():
     result = compute_zscore_heatmap(rows)
     assert len(result) > 0
     r = result[0]
-    base_keys = {"series_id", "observation_date", "value",
-                 "zscore_expanding", "percentile_expanding"}
-    window_keys = {f"zscore_{w}" for w in ZSCORE_WINDOWS} | {f"percentile_{w}" for w in ZSCORE_WINDOWS}
+    base_keys = {
+        "series_id",
+        "observation_date",
+        "value",
+        "zscore_expanding",
+        "percentile_expanding",
+    }
+    window_keys = {f"zscore_{w}" for w in ZSCORE_WINDOWS} | {
+        f"percentile_{w}" for w in ZSCORE_WINDOWS
+    }
     assert base_keys | window_keys == set(r.keys())
 
 
@@ -364,9 +410,8 @@ def test_heatmap_rolling_percentile_bounds():
 
 
 def test_heatmap_multiple_series():
-    rows = (
-        _ft_rows_with_z("SERIES_A", [float(i) for i in range(15)])
-        + _ft_rows_with_z("SERIES_B", [float(i) * 2 for i in range(15)])
+    rows = _ft_rows_with_z("SERIES_A", [float(i) for i in range(15)]) + _ft_rows_with_z(
+        "SERIES_B", [float(i) * 2 for i in range(15)]
     )
     result = compute_zscore_heatmap(rows, windows=(12,))
     assert len(result) == 30
@@ -375,9 +420,8 @@ def test_heatmap_multiple_series():
 
 
 def test_heatmap_sorted_by_series_then_date():
-    rows = (
-        _ft_rows_with_z("ZZZ", [float(i) for i in range(15)])
-        + _ft_rows_with_z("AAA", [float(i) for i in range(15)])
+    rows = _ft_rows_with_z("ZZZ", [float(i) for i in range(15)]) + _ft_rows_with_z(
+        "AAA", [float(i) for i in range(15)]
     )
     result = compute_zscore_heatmap(rows, windows=(12,))
     keys = [(r["series_id"], r["observation_date"]) for r in result]

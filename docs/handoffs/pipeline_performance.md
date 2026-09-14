@@ -96,12 +96,18 @@ block itself (14 tasks, the ECON dashboard/Curve Lab/regime/FOMC/global
 views/etc.) — the stage every prior attempt died before even reaching —
 finished in **49.4s total** once it actually ran, confirming the Phase 2
 `_select_series` pre-filter fix (item 3 above) works at real scale, not
-just on fixtures. Individual slow points worth knowing about for future
-optimization: `equity_total_return_index` (234.8s), `recession_probability`
-(141.8s), `cross_series_feature_pit` (178.5s), `latest_observation_sql`
-(139.5s), `read_silver`/`read_latest` (391.2s/114.6s combined just to
-materialize Silver into memory) — none blocking, but the natural next
-profiling targets if further Gold speedup is wanted beyond Phase 3's
+just on fixtures. **One stage dominates everything else: `zscore_heatmap`
+took 1504.1s — 46.3% of the entire 3250s rebuild, by far the single
+biggest lever available, bigger than the rest of the slow stages
+combined.** Other individual slow points worth knowing about, all well
+behind it: `read_silver` (391.2s, 12.0%), `equity_total_return_index`
+(234.8s, 7.2%), `cross_series_feature_pit` (178.5s, 5.5%),
+`recession_probability` (141.8s, 4.4%), `latest_observation_sql` (139.5s,
+4.3%), `zscore_rolling` (118.6s, 3.6%), `read_latest` (114.6s, 3.5%) —
+`read_silver`+`read_latest` together (505.8s, 15.5%) are just materializing
+Silver into memory, before any table-specific compute starts. None of this
+is blocking, but `zscore_heatmap` is the obvious next profiling target if
+further Gold speedup is wanted beyond Phase 3's
 per-table incrementality.
 
 **Postgres is not a workaround for this**, and don't assume it is without
