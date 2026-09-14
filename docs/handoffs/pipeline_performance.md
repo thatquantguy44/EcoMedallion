@@ -3,17 +3,23 @@
 **Status: Phases 1–2 done. Phase 3 (Incremental Gold) has 5 tables/groups
 wired and the pattern is proven; the remaining candidate tables are
 deliberately deferred (see "Phase 3: what's left, and why it's parked"
-below) pending real profiling data. A new, likely-bigger lever — due-date
-gating on extraction — is scoped in [`specs/spec007`](../../specs/spec007/README.md)
-and not yet started.**
+below), now revisitable with real touched-vs-skipped data (see next
+paragraph). The bigger lever — due-date gating on extraction,
+[`specs/spec007`](../../specs/spec007/README.md) — has real before/after
+timing (2026-09-14, ~59% wall-clock reduction on a sample, concentrated in
+low-frequency series, see below) **and is now the default**
+(`skip_not_due=True` in `Pipeline.run()`; CLI `--no-skip-not-due` to opt
+out, `--full` still always bypasses it).
 
 **Audience:** an agent working in **this** repo (`fred-bronze-to-gold-pipeline`).
 Read this first. For Phase 3 continuation, read
 [`specs/spec003/README.md`](../../specs/spec003/README.md) (the authoritative
 design doc — Phase 3's "Status (2026-09-13)" note there has the full
 rationale for every decision summarized here) before writing any code. For
-the extraction-gating work, read `specs/spec007/README.md` first — it's a
-design doc, not started, and needs a real decision on scope before code.
+the extraction-gating work, read `specs/spec007/README.md` first — the
+mechanism, cadence-data work, and rollout are all done; what's left is
+revisiting spec003's parked tables with the real skip data this unlocked,
+not more due-date-gating work itself.
 
 ## What was found and fixed (Phases 1–2, both done)
 
@@ -77,6 +83,60 @@ knowing if a rebuild runs long unattended: macOS **sleep pauses** (does not
 kill) a long-running background process — the tell is large gaps between log
 timestamps next to small reported per-stage durations. Wrap long background
 runs in `caffeinate -i -w <pid>` to prevent this.
+
+**✅ The first real full-scale timing number, finally (2026-09-14):** this
+retry succeeded end-to-end against the real 32GB `fred_local.db` — every one
+of ~55 Gold tables/views reported `"ok"`. Reported `real` wall clock was
+26628.85s (~7h24m), but that's dominated by the pre-`caffeinate` sleep gaps
+diagnosed above, not actual work: summing every stage's own reported
+`finished in Xs` line (`FRED_GOLD_STAGE_TIMING=1`) gives **~3250s (~54
+minutes) of genuine active compute** for a full rebuild of every Gold
+table/view from complete Silver history (34M rows). The `_compute_parallel`
+block itself (14 tasks, the ECON dashboard/Curve Lab/regime/FOMC/global
+views/etc.) — the stage every prior attempt died before even reaching —
+finished in **49.4s total** once it actually ran, confirming the Phase 2
+`_select_series` pre-filter fix (item 3 above) works at real scale, not
+just on fixtures. **One stage dominated everything else: `zscore_heatmap`
+took 1504.1s — 46.3% of the entire 3250s rebuild, by far the single
+biggest lever available, bigger than the rest of the slow stages
+combined.**
+
+**✅ FIXED (2026-09-14).** Root cause: `compute_zscore_heatmap`
+(`zscore_views.py`) called `_expanding_percentile`, an O(n²)
+rescan-and-count per series — brutal at real scale, since `USRECD` alone
+has 62,737 observations and every Tiingo equity ticker splits into 4
+~16K-observation sub-series (`close`/`divCash`/`splitFactor`/`adjClose`),
+so hundreds of series paid this cost. Rewrote it with a running sorted
+list (`bisect`/`insort`, the same technique this codebase's own
+`resume_expanding_percentile` in `features.py` already used for a
+different function's semantics) — proven exactly equivalent to the old
+output via a property test (20 random seeds, ties deliberately forced) and
+the full suite, then re-verified against the real 20.4M-row
+`gold_fred_feature_transforms` table: **1504.1s → 283.6s, a 5.3x speedup
+for the stage** (less than the ~100x seen in an isolated single-series
+microbenchmark, because the stage also does real work beyond the fixed
+function — rolling-window stats across 4 windows and building 20.4M output
+rows — that this fix doesn't touch). **Projected new full Gold rebuild
+total: ~2030s (~33.8 min), down from ~3250s (~54.2 min) — a 37.6% cut to
+the entire rebuild from this one fix**, not yet re-verified with a full
+end-to-end run (the isolated stage re-verification above stands in for
+that; a full rebuild takes the better part of an hour to actually confirm).
+`zscore_heatmap`'s share of total time drops from 46.3% to an estimated
+~14.0%.
+
+Other individual slow points worth knowing about, now the largest
+remaining group: `read_silver` (391.2s, would be ~19.3% of the new total),
+`equity_total_return_index` (234.8s, ~11.6%), `cross_series_feature_pit`
+(178.5s, ~8.8%), `recession_probability` (141.8s, ~7.0%),
+`latest_observation_sql` (139.5s, ~6.9%), `zscore_rolling` (118.6s, ~5.8%),
+`read_latest` (114.6s, ~5.6%) — `read_silver`+`read_latest` together
+(505.8s) are just materializing Silver into memory, before any
+table-specific compute starts. None of this is blocking, but with
+`zscore_heatmap` fixed, `read_silver`/`read_latest` (the fixed
+materialization cost every Gold build pays regardless of what's actually
+changed) is arguably the next structurally-interesting target, alongside
+`equity_total_return_index`/`recession_probability` — both already
+flagged above as now-unblocked Phase 3 incrementality candidates.
 
 **Postgres is not a workaround for this**, and don't assume it is without
 re-reading this: `PostgresWarehouse._build_gold_inner()`
@@ -283,16 +343,21 @@ below first; it's not a TODO list, it's a set of conclusions.
   payoff depends on the same fact that ruled out whole-series skipping for
   Gold generally: `Pipeline.run()` touches nearly every series on nearly
   every run, so most configured pairs would likely count as "touched" most
-  of the time too. Get a real read on this from **spec007** below before
-  spending time here — if extraction stops touching every series every run,
-  *then* per-pair skipping for these two tables becomes worth doing, and
-  should probably be built together with that change rather than before it.
+  of the time too. **This condition is no longer open** — spec007's
+  `--skip-not-due` gating is now default-on and its real benchmark
+  (`specs/spec007/README.md` §8 step 3) shows ~87.6% of the real manifest
+  is skippable on a routine day, concentrated in the slower-cadence series
+  that dominate this manifest by count. Extraction genuinely no longer
+  touches nearly every series on nearly every run — re-derive whether
+  per-pair skipping for these two tables is worth building now, using that
+  real number instead of the "would likely count as touched" guess above.
 - **`gold_recession_probability_daily`** (warm-started IRLS, `last_beta`
   carried forward) and **`gold_equity_total_return_index`** (running product
   from the ticker's first date) — same shape as the lead-lag/structural-
-  breaks case: full-entity-recompute-on-any-touch is the realistic ceiling,
-  same open question about whether "touched" is ever a small set in
-  practice.
+  breaks case, same now-resolved precondition above: full-entity-recompute-
+  on-any-touch is the realistic ceiling, and whether "touched" is a small
+  set in practice can now be checked against spec007's real skip data
+  instead of guessed at.
 - **Macro PCA/factor-score tables and anomaly scores** — probably not worth
   it at all. They're cross-sectionally coupled by construction (touching any
   one feature series changes covariance/loadings for every other series from
@@ -300,17 +365,43 @@ below first; it's not a TODO list, it's a set of conclusions.
   at a larger, harder-to-bound scale. Revisit only if profiling after
   spec007 shows them as a real bottleneck.
 
-## New scope: due-date gating on extraction (spec007, first slice shipped)
+## New scope: due-date gating on extraction (spec007, shipped and default-on)
 
-**The bigger lever, found while researching Phase 3. Status (2026-09-13):
-a first implementation slice is done, behind an opt-in flag, not yet
-re-baselined against real timing** (see `specs/spec007/README.md` §8) — a
-pure `_series_is_due` date-math function, a `last_ingested_at_by_series`
+**The bigger lever, found while researching Phase 3. Status (2026-09-14):
+implementation shipped, re-baselined against real timing, and now
+default-on** (see `specs/spec007/README.md` §8 step 3 for full methodology)
+— a pure `_series_is_due` date-math function, a `last_ingested_at_by_series`
 warehouse query (which also surfaced and closed a SQLite/Postgres
-index-parity gap), and both wired into `Pipeline.run()`/`run --skip-not-due`
-with a new `RunStatus.SKIPPED_NOT_DUE` audit trail. Default behavior
-(flag omitted) is unchanged. Still owed before this goes further: real
-extraction timing with gating on vs. off (not done).
+index-parity gap), and both wired into `Pipeline.run()`/`run_from_manifest()`
+with a new `RunStatus.SKIPPED_NOT_DUE` audit trail. `skip_not_due` defaults
+to `True` as of 2026-09-14 (CLI: `--skip-not-due`/`--no-skip-not-due`, the
+latter for old "attempt everything" behavior); `--full` always bypasses it
+regardless.
+
+**The real timing comparison (2026-09-14):** a stratified 204-series sample
+(40 each of quarterly/monthly/daily/weekly/annual, plus all 4
+business_daily) against real FRED/BLS/ECB/World Bank/Treasury/SEC/BIS API
+access and real `ingested_at` history from `fred_local.db`, `run --local
+--series <ids> --no-gold` once with no flag and once with
+`--skip-not-due`, from identical seed state:
+
+| | baseline (no flag) | `--skip-not-due` |
+| --- | --- | --- |
+| wall clock | 94.5s | 39.1s (**-58.6%**) |
+| series processed | 204/204 | 84/204 |
+| series skipped | 0 | 120 |
+
+The skip broke down entirely by cadence: 100% of quarterly/monthly/annual
+sampled series skipped, 0% of daily/weekly/business_daily — daily/weekly
+intervals are short enough a series is nearly always due again by the next
+run, so gating's payoff lives entirely in the slower-cadence tiers.
+Extrapolating those per-cadence rates onto the real manifest's actual
+cadence mix (2,885 active specs, 87.6% of which are
+monthly/quarterly/annual) gives an estimated **~87.6% of the real manifest
+skippable on a routine day** — likely *larger* real-world payoff than this
+sample's 58.6%, since the sample was deliberately cadence-balanced rather
+than population-representative. This is an extrapolation from measured
+per-cadence rates, not a second full-manifest run.
 
 **✅ FIXED (2026-09-13) — the two high-priority findings from validating the
 cadence→interval mapping against real publish calendars are resolved in

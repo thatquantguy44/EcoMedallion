@@ -7,8 +7,8 @@ from fred_pipeline.fred_client import FredAPIError
 from fred_pipeline.local_store import LocalWarehouse
 from fred_pipeline.manifest import SeriesSpec, ValidationProfile
 from fred_pipeline.pipeline import (
-    FredPipeline,
     _CADENCE_MIN_INTERVAL,
+    FredPipeline,
     _extract_workers_for_source,
     _make_tiingo,
     _normalize_tiingo_keys,
@@ -541,7 +541,9 @@ def test_series_is_due_weekend_adjacent_daily_case():
 # -- Pipeline.run(skip_not_due=...) wiring (spec007) -------------------------
 
 
-def test_skip_not_due_skips_a_recently_pulled_series(tmp_path, observations_payload, fake_client_cls):
+def test_skip_not_due_skips_a_recently_pulled_series(
+    tmp_path, observations_payload, fake_client_cls
+):
     db = str(tmp_path / "fred.db")
     wh = LocalWarehouse(_config(), db_path=db)
     client = fake_client_cls({"CPIAUCSL": observations_payload})
@@ -578,7 +580,9 @@ def test_skip_not_due_never_holds_back_a_series_that_has_never_been_pulled(
     wh.close()
 
 
-def test_skip_not_due_leaves_a_failed_extraction_due_next_run(tmp_path, fake_client_cls):
+def test_skip_not_due_leaves_a_failed_extraction_due_next_run(
+    tmp_path, fake_client_cls
+):
     db = str(tmp_path / "fred.db")
     wh = LocalWarehouse(_config(), db_path=db)
     client = fake_client_cls({}, errors={"CPIAUCSL": FredAPIError("boom")})
@@ -595,7 +599,9 @@ def test_skip_not_due_leaves_a_failed_extraction_due_next_run(tmp_path, fake_cli
     wh.close()
 
 
-def test_force_full_bypasses_skip_not_due(tmp_path, observations_payload, fake_client_cls):
+def test_force_full_bypasses_skip_not_due(
+    tmp_path, observations_payload, fake_client_cls
+):
     db = str(tmp_path / "fred.db")
     wh = LocalWarehouse(_config(), db_path=db)
     client = fake_client_cls({"CPIAUCSL": observations_payload})
@@ -611,7 +617,9 @@ def test_force_full_bypasses_skip_not_due(tmp_path, observations_payload, fake_c
     wh.close()
 
 
-def test_skip_not_due_summary_counts_add_up(tmp_path, observations_payload, fake_client_cls):
+def test_skip_not_due_summary_counts_add_up(
+    tmp_path, observations_payload, fake_client_cls
+):
     db = str(tmp_path / "fred.db")
     wh = LocalWarehouse(_config(), db_path=db)
     client = fake_client_cls(
@@ -645,3 +653,24 @@ def test_skip_not_due_does_nothing_when_warehouse_lacks_the_method(
     run = pipe.run([spec], skip_not_due=True)
     assert run.series_skipped_not_due == 0
     assert client.requested == ["CPIAUCSL"]
+
+
+def test_skip_not_due_defaults_on_without_passing_the_flag(
+    tmp_path, observations_payload, fake_client_cls
+):
+    """Gating is on by default as of 2026-09-14 (spec007's real timing
+    benchmark justified flipping it) -- this guards against a silent
+    regression back to opt-in-only, since every other test in this file
+    passes skip_not_due explicitly and wouldn't catch that."""
+    db = str(tmp_path / "fred.db")
+    wh = LocalWarehouse(_config(), db_path=db)
+    client = fake_client_cls({"CPIAUCSL": observations_payload})
+    pipe = FredPipeline(_config(), client=client, warehouse=wh, persist_audit=False)
+    spec = _spec("CPIAUCSL", expected_update_frequency="monthly")
+
+    pipe.run([spec])
+    second = pipe.run([spec])
+    assert second.series_skipped_not_due == 1
+    assert second.series_runs[0].status == RunStatus.SKIPPED_NOT_DUE
+    assert client.requested == ["CPIAUCSL"]
+    wh.close()

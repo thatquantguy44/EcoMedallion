@@ -452,7 +452,7 @@ class FredPipeline:
         sources: list[str] | None = None,
         exclude_sources: list[str] | None = None,
         force_full: bool = False,
-        skip_not_due: bool = False,
+        skip_not_due: bool = True,
     ) -> EtlRun:
         manifests = load_manifests(manifest_path)
         specs = all_series(manifests, active_only=True)
@@ -502,7 +502,7 @@ class FredPipeline:
         triggered_by: str = "",
         build_gold_layer: bool = True,
         force_full: bool = False,
-        skip_not_due: bool = False,
+        skip_not_due: bool = True,
     ) -> EtlRun:
         specs = list(specs)
         run = EtlRun(
@@ -907,9 +907,12 @@ class FredPipeline:
         first return value so every later stage (extraction, progress
         counts) only ever sees series that are actually running this pass.
 
-        Gating is opt-in (``skip_not_due``, per spec007's rollout decision)
-        and ``force_full`` always bypasses it entirely -- ``--full`` already
-        means "stop being clever, just pull everything."
+        Gating (``skip_not_due``) defaults on as of 2026-09-14 -- spec007's
+        real extraction-timing benchmark showed ~59% wall-clock savings on
+        a sample, concentrated entirely in monthly/quarterly/annual series
+        -- and can be disabled per-call or via CLI ``--no-skip-not-due``.
+        ``force_full`` always bypasses it entirely regardless -- ``--full``
+        already means "stop being clever, just pull everything."
         """
         gate_active = skip_not_due and not force_full
         last_ingested = self._last_ingested_at_by_series() if gate_active else {}

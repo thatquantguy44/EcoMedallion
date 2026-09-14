@@ -1,17 +1,22 @@
 # Spec 007: Due-Date Gating on Extraction
 
-Status: first implementation slice shipped behind --skip-not-due (§8 steps 1-3
-complete); cadence intervals validated against real publish calendars and
-retuned to match (§5/§10 item 5 -- all five intervals now in code);
-expected_update_frequency backfilled across all 3,003 manifest entries
-(§9/§10 item 4 -- previously only 164 had a real value, not ~2,513 as
-first counted); the cadence-data-accuracy work is now done -- 121 fred
-entries found mistagged (a "frequency" copy that didn't match the real
-source's update cadence) and corrected across two passes (§5 follow-up,
-§10 item 6), 12 more checked and confirmed already correct; the only
-thing left before this is fully trustworthy is the real extraction-timing
-re-baseline (§4), which needs API access or a fred_local.db, not more
-research; still not the default
+Status: **shipped and default-on (2026-09-14).** First implementation
+slice shipped behind --skip-not-due (§8 steps 1-3 complete); cadence
+intervals validated against real publish calendars and retuned to match
+(§5/§10 item 5 -- all five intervals now in code); expected_update_frequency
+backfilled across all 3,003 manifest entries (§9/§10 item 4 -- previously
+only 164 had a real value, not ~2,513 as first counted); the
+cadence-data-accuracy work is done -- 121 fred entries found mistagged (a
+"frequency" copy that didn't match the real source's update cadence) and
+corrected across two passes (§5 follow-up, §10 item 6), 12 more checked and
+confirmed already correct; the extraction-timing re-baseline (§4) is done
+(2026-09-14, real numbers, real API, see §8 step 3) -- -58.6% wall clock on
+a sample, ~87.6% of the real manifest estimated skippable on a routine day.
+**With the number in hand, the rollout decision from §10 decision #1
+(opt-in-first) has been revisited and superseded: `skip_not_due` now
+defaults to `True` in `Pipeline.run()`/`run_from_manifest()`, and the CLI
+flag is `--skip-not-due`/`--no-skip-not-due` (default on) instead of a
+plain `store_true`.** `--full` still always bypasses gating entirely.
 Last verified: 2026-09-14
 Primary owner: TBD
 Target: `Pipeline.run()` (`src/fred_pipeline/pipeline.py`) — every `run`
@@ -174,6 +179,16 @@ per-entity skipping there low-value (see `docs/handoffs/pipeline_performance.md`
   being right for every series in every manifest — a mapping bug could
   under-refresh a series (stale data silently served). Validate against real
   data before it becomes the assumed path, not after.
+  **✅ SUPERSEDED (2026-09-14) — flipped to default-on.** The "at least one
+  observation cycle" condition above is satisfied: the cadence→interval
+  mapping was validated against real publish calendars and corrected (§5
+  follow-up, §10 items 5/6), `expected_update_frequency` coverage went from
+  164/3,003 to 3,003/3,003 real values (§9), and the real extraction-timing
+  comparison (§8 step 3) confirms both that gating saves real time and that
+  it fails open correctly (missing/unrecognized cadence, or a series never
+  pulled, are always due — never silently skipped). `skip_not_due` now
+  defaults to `True`; `--no-skip-not-due` is the opt-out for anyone who
+  needs old "attempt everything" behavior.
 - ✅ **DECIDED (2026-09-13) — `--full` bypasses gating; no dedicated flag.**
   Reuse the existing `--full` flag rather than introducing
   `--ignore-due-date` or similar. One flag, one well-understood meaning
@@ -389,7 +404,11 @@ per-entity skipping there low-value (see `docs/handoffs/pipeline_performance.md`
   deliberately-fresh `ingested_at` that would otherwise be skipped.
 - A real extraction timing comparison (gating on vs. off, same manifest
   set, same day) — this is the number that actually justifies the spec;
-  don't close it out on unit tests alone.
+  don't close it out on unit tests alone. **✅ Done 2026-09-14, see §8
+  step 3**: -58.6% wall clock on a cadence-balanced 204-series sample
+  (94.5s → 39.1s), skip concentrated 100% in monthly/quarterly/annual and
+  0% in daily/weekly/business_daily, extrapolating to an estimated ~87.6%
+  of the real 2,885-series manifest skippable on a routine day.
 
 ## 8. Suggested First Implementation Slice
 
@@ -405,20 +424,65 @@ per-entity skipping there low-value (see `docs/handoffs/pipeline_performance.md`
    `PostgresWarehouse`; found and closed an existing index-parity gap
    between the two backends along the way.)
 3. ✅ Wired into `Pipeline.run()` behind the rollout flag from §5
-   (`skip_not_due`, exposed as CLI `--skip-not-due`), with the
-   audit-trail/summary changes from step 3 above
-   (`EtlRun.series_skipped_not_due`, `RunStatus.SKIPPED_NOT_DUE`). Stopped
-   here as planned — the default is still "attempt everything"
-   (`skip_not_due=False`), spec003's deferred tables are untouched, and
-   real before/after extraction timing with gating on is still owed
-   (§4's acceptance criteria item, not yet run — needs real API access
-   and a full-size manifest, not available in the environment this slice
-   shipped from).
+   (`skip_not_due`, exposed as CLI `--skip-not-due`/`--no-skip-not-due`),
+   with the audit-trail/summary changes from step 3 above
+   (`EtlRun.series_skipped_not_due`, `RunStatus.SKIPPED_NOT_DUE`). **As of
+   2026-09-14, `skip_not_due` defaults to `True`** (see §5's superseded
+   note) — the real timing result below is what justified the flip.
+   spec003's deferred tables (§9) can now be revisited with real
+   touched-vs-skipped data instead of guessing.
 
-**Not yet done, deliberately** (per §10 item 3 and this slice's own
-scope): the cadence→interval mapping in §5 has not been validated against
-real per-source publish history. Confirm that before ever flipping the
-default in step 1 above — the values there are still a starting point.
+   **✅ Real before/after extraction timing — done 2026-09-14, against live
+   FRED/BLS/ECB/World Bank/Treasury/SEC/BIS API access and real ingestion
+   history from `fred_local.db`.** Methodology: a stratified sample of 204
+   active series (40 each of `quarterly`/`monthly`/`daily`/`weekly`/
+   `annual`, plus all 4 `business_daily`), chosen from series that already
+   had real Silver history in `fred_local.db` (so `last_ingested_at` per
+   series reflects genuine past pipeline runs, not a cold start). Two
+   identical seed databases were built from that same real history (via
+   `ATTACH`-based row copy, not a full 32GB file copy — both fast and safe
+   to run alongside an unrelated concurrent Gold rebuild on the live file,
+   since the source db is in WAL mode), then `run --local --series
+   <the 204 ids> --no-gold` was run once per seed db — once with no flag
+   (baseline), once with `--skip-not-due` (gated):
+
+   | | baseline (no flag) | `--skip-not-due` |
+   | --- | --- | --- |
+   | wall clock | 94.5s | 39.1s (**-58.6%**) |
+   | series processed | 204/204 | 84/204 |
+   | series skipped | 0 | 120 (`SKIPPED_NOT_DUE`) |
+
+   Per-series cost was consistent across both runs (~0.46s/series
+   processed either way — confirms the flag skips real work rather than
+   adding fixed overhead). The skip broke down **entirely** along cadence
+   lines: all 40 `quarterly`, all 40 `monthly`, and all 40 `annual` sampled
+   series were skipped (100% each); none of the 40 `daily`, 40 `weekly`,
+   or 4 `business_daily` sampled series were skipped (0% each) — daily/
+   weekly intervals are short enough that a series is almost always due
+   again by the time a routine run reaches it, so gating's payoff is
+   concentrated entirely in the slower-cadence tiers, exactly as the
+   mechanism predicts (`_series_is_due`'s interval check).
+
+   Extrapolating those per-cadence skip rates onto the *real* manifest
+   population mix (2,885 active specs: 651 quarterly, 1,826 monthly, 235
+   daily, 120 weekly, 49 annual, 4 business_daily — very different from
+   this sample's deliberately-balanced 40/40/40/40/40/4 split, chosen for
+   per-cadence statistical coverage, not to mirror the population) gives
+   an estimated **~87.6% of the real manifest (2,526 of 2,885 series)
+   skippable on a routine day**, because `monthly`+`quarterly`+`annual`
+   together are 87.6% of the active manifest by count while `daily`/
+   `weekly`/`business_daily` are only 12.4% — i.e., the real-world payoff
+   is likely *larger* than the 58.6% seen on this deliberately cadence-
+   balanced sample, not smaller. This is an extrapolation from measured
+   per-cadence rates, not a second full-manifest run — flag as such if
+   citing it.
+
+**✅ RESOLVED (2026-09-13/14):** the cadence→interval mapping in §5 *was*
+validated against real per-source publish history (§10 item 5, §5
+follow-up) and corrected (`quarterly` tightened to 25 days, `weekly`/
+`monthly`/`annual` retuned), which is exactly the precondition step 1 above
+required before ever flipping the default — that condition is now met, and
+the default was flipped 2026-09-14.
 
 ## 9. Follow-Ups
 
@@ -449,7 +513,8 @@ All four decisions below were resolved 2026-09-13; see §5/§9 for full
 rationale on each. Recorded here so implementation can start without
 re-litigating them:
 
-1. ✅ Opt-in flag first (`run --skip-not-due`), not default-on (§5).
+1. ✅ Opt-in flag first (`run --skip-not-due`), not default-on -- **then
+   superseded 2026-09-14, now default-on** (§5).
 2. ✅ Reuse `--full` for gating bypass; no dedicated flag (§5).
 3. ✅ Validate the cadence → interval mapping against real publish patterns
    *before* writing gating logic (§5, §6 step 1) — **done 2026-09-13**,
