@@ -297,6 +297,48 @@ outstanding, each a separate decision: the Kenneth French license check (§7
 step 2, still blocked on network access in every environment this has been
 worked from since), and building a second source (IMF or Kenneth French).
 
+### 7.1 Prep work for IMF and CFTC, done blocked on network (2026-09-14)
+
+Both IMF (§5.1) and CFTC (§5.2) are the two most-scoped unbuilt candidates,
+and both need a live probe before any client code — exactly the discipline
+this spec's verification caveat asks for. **Network access to every relevant
+host (`api.imf.org`, `api.us.socrata.com`, `www.cftc.gov`) was blocked in
+this environment** (proxy returned 403 on the CONNECT tunnel for each, the
+same failure mode as FRED/OECD/Dartmouth earlier), so neither could be
+probed for real here. What shipped instead is the probe tooling itself, so
+the next session with access can run one command rather than write this
+from scratch:
+
+- **`scripts/probe_imf_dataflows.py`** — hits IMF's SDMX 3.0 dataflow-list
+  structure endpoint, classifies each dataflow as stable vs. vintage-rotating
+  (by id suffix and by the `VINTAGE`-annotation text §5.1 already found), and
+  checks the result against the 2026-09-12 baseline (191 total / 77 stable /
+  114 vintage) — a mismatch means either the catalogue changed or the
+  classification logic needs adjusting, and the script says so rather than
+  silently trusting either count. This is also directly reusable as the
+  eventual `sources/imf.py`'s stable-dataflow input list once run for real
+  (open decision #5's "ignore" branch needs exactly this list; the "exploit"
+  branch's two open verification questions — do old vintage flows stay
+  queryable, and do they cover different data than the 77 stable flows — are
+  a separate, harder probe, not attempted here).
+- **`scripts/probe_cftc_format.py`** — tries CFTC's Socrata open-data catalog
+  search API (`publicreporting.cftc.gov`) alongside a couple of lower-
+  confidence legacy bulk-file URL guesses, and reports which one (if any)
+  actually works. This matters because §5.2's own assumption — "fixed-width/
+  CSV bulk files, `ishares.py`-shaped" — was never checked against what CFTC
+  actually serves today; if the Socrata REST API works, that's a materially
+  better structural fit (real documented fields, a stable dataset id) than
+  scraping bulk text files, and open decision #2's "COT should follow
+  `ishares.py`'s shape" conclusion would be worth revisiting before, not
+  after, building it that way.
+
+Both scripts were run in this environment and confirmed to fail cleanly
+(exit 1, proxy 403 on every candidate URL) rather than crash or fabricate
+output — that's the honest result of this pass, not a placeholder for one.
+Neither the IMF stable-dataflow list nor CFTC's real file format is known
+yet; don't write either into this spec or into code until one of these
+scripts has actually been run somewhere with access.
+
 ## 8. Acceptance Criteria
 
 - §5/§6 candidate rows carry a verified/assumed marker and a date — no
