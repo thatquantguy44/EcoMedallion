@@ -5,15 +5,16 @@ description: >
   whole consumer basket can be ingested rather than the partial set FRED mirrors.
   Series are CPI-U, NOT seasonally adjusted, U.S. city average (CUUR0000<item>);
   NSA is published for every stratum, whereas SA (CUSR0000<item>) exists only for
-  the major aggregates. Shipped inactive (active: true); keyless works at a
-  lower quota.
+  the major aggregates. Keyless; works at a lower quota.
 
-  ⚠️ VERIFY BEFORE ACTIVATING: these BLS item codes were assembled from the
-  documented CPI item structure but not checked against the live BLS series
-  directory from the build environment. Confirm each id at
+  ⚠️ ACTIVE BUT NOT YET VERIFIED (flagged docs/handoffs/INTEGRATION_READY.md,
+  2026-09-14): these BLS item codes were assembled from the documented CPI
+  item structure but were never checked against the live BLS series
+  directory before `active: true` shipped. Confirm each id at
   https://data.bls.gov/toppicks?survey=cr (or the series-ID lookup) — a wrong id
-  fails only that one series (per-series isolation), not the run. Index base
-  periods differ by item; 'units' below is informational.
+  fails only that one series (per-series isolation), not the run, so this is a
+  silent-data-quality risk, not a crash risk. Index base periods differ by
+  item; 'units' below is informational.
 version: 1
 
 series:
