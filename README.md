@@ -156,6 +156,38 @@ uses), so you can run it repeatedly against the same file without duplicates.
 The same code path, pointed at a `SparkWarehouse` instead, is what runs on
 Databricks — so local results match production semantics.
 
+### Run locally against PostgreSQL instead of SQLite
+
+`PostgresWarehouse` is a fully working alternative to the SQLite backend —
+same medallion schema (`meta`/`audit`/`bronze`/`silver`/`gold`), same compute
+path, just a different SQL engine underneath. It auto-creates all schemas
+and tables on first connect. There's no `--backend` CLI flag; the backend is
+selected in `config/warehouse.yml` (`primary_backend: postgres` under
+`default:` or a specific `environments:` entry).
+
+```bash
+docker compose up -d postgres   # fred:fred@localhost:55432/macro_medallion
+export FRED_API_KEY=your_key_here
+export FRED_POSTGRES_LOCAL_DSN=postgresql://fred:fred@localhost:55432/macro_medallion
+# then set primary_backend: postgres in config/warehouse.yml (default or your --env section)
+PYTHONPATH=src python -m fred_pipeline run --env dev
+```
+
+Port **55432** (not Postgres's standard 5432) is this project's documented
+default — see `docker-compose.yml` and `config/warehouse.yml`'s `postgres:`
+block for the full set of connection knobs. If you already have a *native*
+Postgres install on this machine (e.g. via the EnterpriseDB installer or
+Homebrew) rather than using Docker, it's typically on the standard port 5432
+under its own superuser, with no `fred` role or `macro_medallion` database
+yet — create those yourself first, then point `FRED_POSTGRES_LOCAL_DSN` at
+port 5432 instead. The two setups are independent; see
+`config/warehouse.yml`'s comments and
+[`docs/handoffs/pipeline_performance.md`](docs/handoffs/pipeline_performance.md)
+for a real example of mixing them up and how it was resolved.
+
+Switching backends changes where data is stored, not how much memory a full
+Gold rebuild needs — see the performance handoff above for that constraint.
+
 ## Operations reference
 
 Every `python -m fred_pipeline <command>` the CLI supports, grouped by what

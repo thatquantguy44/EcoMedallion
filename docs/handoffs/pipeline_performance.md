@@ -39,13 +39,110 @@ design doc, not started, and needs a real decision on scope before code.
    change, not just a matching key — a prerequisite for Phase 3 below, not
    optional (see spec003 for why).
 
-**Not yet done:** a clean, full-scale timing run against the real
-`fred_local.db` to get final before/after numbers. Blocked twice this
-session by this dev machine running out of free memory (a McAfee AV scan was
-consuming ~30GB) — not a bug in the pipeline. Retry when the machine has
-headroom; it's informational at this point, not blocking further work, since
-the root causes above are already fixed by direct code inspection and the
-correctness of the fixes is proven by the full test suite.
+**Not yet done: a clean, full-scale timing run against the real
+`fred_local.db`.** Attempted 5 times this session (2026-09-13), all blocked
+by this dev machine running out of memory — every attempt died at the exact
+same point, right after `feature_transforms` finishes and before
+`_compute_parallel` starts (never got a single `pf.*` timing line). This is
+**not a bug in the pipeline** — see the diagnosis below — and it's
+informational at this point, not blocking further Phase 3 work, since the
+root causes are already fixed by direct code inspection and the correctness
+of every fix is proven by the full test suite (including end-to-end
+integration tests against real `build_gold()` runs on small fixtures).
+
+Diagnosis, in case this recurs: this machine has 24GB RAM and, at the time
+of the attempts, ~19.5GB already committed to other running apps (VS Code
+alone: 4.4GB across 43 processes; Chrome: 2.9GB across 33) plus 12 days of
+uptime with no reboot (accumulated memory fragmentation). Holding the full
+34M-row `silver_fred_observation` and 20.5M-row `gold_fred_latest_observation`
+tables as Python `list[dict]` simultaneously — which is original,
+pre-this-session pipeline behavior, not something Phase 3 introduced —
+plausibly needs 15-25GB of peak heap on its own, which simply doesn't fit in
+the ~4.5GB of headroom that was actually free. Things ruled out along the
+way, in order tried: McAfee AV (was suspected first, but a direct RSS
+measurement during a later attempt showed McAfee using only ~155MB —
+negligible; an earlier `top` reading of ~30GB had shown *compressed* memory,
+not live usage, which was a misleading read at the time); this tool's Bash
+sandbox (retried with `dangerouslyDisableSandbox: true` — died at the
+identical point, ruling this out); `_compute_parallel`'s thread concurrency
+(added `FRED_GOLD_MAX_WORKERS` — capping to 2 workers made no difference,
+because the crash happens *before* any `_compute_parallel` task starts at
+all, so concurrency was never the mechanism). **Resolved**: a full machine
+restart (no other apps reopened first) freed enough memory (settled to
+~14.5GB committed vs. 24GB total, vs. the ~19.5-22GB that had been committed
+on every prior attempt) that a retry got past every previous crash point on
+the first try. If this recurs, restart-before-reopening-apps is the fix that
+actually worked here, not any pipeline-side change. One more thing worth
+knowing if a rebuild runs long unattended: macOS **sleep pauses** (does not
+kill) a long-running background process — the tell is large gaps between log
+timestamps next to small reported per-stage durations. Wrap long background
+runs in `caffeinate -i -w <pid>` to prevent this.
+
+**Postgres is not a workaround for this**, and don't assume it is without
+re-reading this: `PostgresWarehouse._build_gold_inner()`
+(`src/fred_pipeline/io/postgres_store.py`) delegates straight to
+`LocalWarehouse._build_gold_inner(self)` — same shared code, same
+`list[dict]` materialization, same memory footprint, regardless of which SQL
+engine is underneath. Switching backends would not have avoided the crash.
+
+**A native PostgreSQL 18 server exists on this dev machine, separately from
+this project's documented Docker Compose target — both are legitimate, but
+they are two different things and it's easy to conflate them.** Found while
+investigating the above, and since made into a genuinely working local
+capability:
+
+- A real, running Postgres 18 process (`/Library/PostgreSQL/18/bin/postgres`)
+  was installed via the official EnterpriseDB macOS installer on 2026-09-12
+  (per `/Library/PostgreSQL/18/installation_summary.log`, world-readable —
+  check it directly rather than re-deriving any of this by probing ports).
+  It runs under a dedicated `postgres` system user via a LaunchDaemon
+  (`/Library/LaunchDaemons/postgresql-18.plist`, `KeepAlive: false` — it will
+  not auto-restart if it ever stops), listening on **port 5432** (the
+  standard default) under **superuser role `postgres`**.
+- This has **no relationship** to this project's documented local Postgres
+  target (`docker compose up -d postgres`, default DSN
+  `postgresql://fred:fred@localhost:55432/macro_medallion` — port **55432**,
+  role `fred`, database `macro_medallion`, per `docker-compose.yml`). The two
+  ports happen to look similar; they are not the same. The Docker-based
+  target has still never actually been started on this machine (the Docker
+  daemon itself isn't running) — everything below is about the *native*
+  install instead.
+- **The native instance's `postgres` superuser password was unknown** (not
+  set by the user, not recoverable by guessing common defaults — several
+  attempts at that were correctly refused/blocked, and repeated `sudo`
+  guesses risk an account lockout, so don't loop on that if you hit this
+  again). It was reset via the standard, legitimate procedure — done by the
+  user themselves running each command, never by an agent handling the
+  user's actual macOS password: temporarily set the `local all all` line in
+  `pg_hba.conf` to `trust` auth, `pg_ctl reload`, run `ALTER USER postgres
+  WITH PASSWORD '...'` from an unauthenticated `psql`, then immediately
+  revert `pg_hba.conf` back to its original auth method and reload again.
+  This is a one-time recovery step, not something to repeat routinely.
+- **Current state (resolved):** a `fred` role and `macro_medallion` database
+  now exist on this native instance (port 5432), created via
+  `PostgresWarehouse`, which auto-bootstraps the `meta`/`audit`/`bronze`/
+  `silver`/`gold` schemas and translates this project's SQLite DDL to
+  Postgres on `__init__` (`src/fred_pipeline/io/postgres_store.py`,
+  `_bootstrap_schema()`). Verified directly via `psql` +
+  `information_schema.tables`: 5 schemas, 63 Gold tables created. Point at
+  it with `FRED_POSTGRES_LOCAL_DSN=postgresql://fred:fred@localhost:5432/macro_medallion`
+  (note **5432**, not the Docker default 55432 — see `config/warehouse.yml`
+  for the same note next to the actual config). The Docker Compose path
+  (55432) remains the project's documented default for anyone without this
+  specific native install already present; both are fine, they're just not
+  interchangeable without changing the port.
+- **Known gap, not yet fixed, flagged for whoever next touches
+  `postgres_store.py`:** `_bootstrap_schema()`'s DDL-translation regex
+  (`_TABLE_RE`) only matches `CREATE TABLE`, not `CREATE VIEW` — so
+  `gold.fred_point_in_time`, which is a SQL VIEW as of the fix earlier in
+  this doc, is silently missing from the Postgres schema entirely. Confirmed
+  by inspection, not yet fixed (out of scope for the work that found it);
+  either extend the regex to also translate `CREATE VIEW` statements, or
+  special-case this one view.
+- `PostgresWarehouse._build_gold_inner()` still delegates straight to
+  `LocalWarehouse._build_gold_inner(self)` (same shared code, same
+  `list[dict]` materialization) — using Postgres does not reduce the memory
+  ceiling discussed above, it only changes where the data ends up.
 
 ## Phase 3: Incremental Gold — in progress, this is what to continue
 

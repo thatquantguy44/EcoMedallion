@@ -49,9 +49,33 @@ default:
       #   service = managed/hosted Postgres; requires a DSN from dsn, dsn_env,
       #             FRED_POSTGRES_SERVICE_DSN, DATABASE_URL, or
       #             FRED_POSTGRES_DSN.
+      #
+      # Docker vs. a native install -- the port differs, and both are valid:
+      #   `docker compose up -d postgres` (docker-compose.yml, this repo's
+      #   documented default) maps the container's Postgres to host port
+      #   55432, already configured with the fred/fred/macro_medallion
+      #   role/database/password below -- no extra setup needed.
+      #   A natively-installed Postgres (e.g. the official EnterpriseDB
+      #   macOS installer, or `brew install postgresql`) instead listens on
+      #   the standard default port 5432, under whatever superuser/role
+      #   setup that installer created -- it will NOT already have a `fred`
+      #   role or `macro_medallion` database; create them yourself first
+      #   (`CREATE ROLE fred LOGIN PASSWORD 'fred';
+      #   CREATE DATABASE macro_medallion OWNER fred;`) as that install's
+      #   own superuser, then point FRED_POSTGRES_LOCAL_DSN at port 5432
+      #   instead of 55432. `PostgresWarehouse` auto-creates the
+      #   meta/audit/bronze/silver/gold schemas and tables on first connect
+      #   either way -- only the role/database creation step is manual for
+      #   a native install. Don't assume a Postgres process you find running
+      #   locally is this project's target without checking its actual port
+      #   and superuser first; a native install and the Docker Compose
+      #   target are two independent things that can both exist on the same
+      #   machine (see docs/handoffs/pipeline_performance.md's Postgres
+      #   section for a real example of this exact mix-up).
       target: local
       dsn_env: FRED_POSTGRES_LOCAL_DSN
-      # dsn: postgresql://fred:fred@localhost:55432/macro_medallion
+      # dsn: postgresql://fred:fred@localhost:55432/macro_medallion  # Docker Compose (documented default)
+      # dsn: postgresql://fred:fred@localhost:5432/macro_medallion   # native install, once fred/macro_medallion exist
       # For service mode, prefer secrets in env vars:
       # target: service
       # dsn_env: FRED_POSTGRES_SERVICE_DSN
