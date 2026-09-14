@@ -257,20 +257,29 @@ entry's existing `frequency` code the same way `bls_discovery.py`/
 `ecb_discovery.py` already do); all 3,003 entries now have a real value,
 verified to change nothing else in the manifests.
 
-**⚠️ Follow-up (2026-09-14) found by that backfill: 13 `fred`/`annual`
-entries had the same silent-staleness risk as the quarterly/GDP finding
-above.** All 13 live in `manifests/money_banking.yml` and turned out to be
-FRED's annual-frequency transform of two Fed releases that don't publish
-annually at all — the **Z.1 Financial Accounts** (quarterly) and **H.8
-Assets and Liabilities of Commercial Banks** (weekly). Retagged all 13 from
-`annual` to `quarterly` in the manifest directly (no code change) as the
-same safety-first call already made for `quarterly` itself. **Not fully
-closed**: ~120 more `fred`/`annual` entries elsewhere (mostly
-`national_accounts_extra.yml`) look like genuine BEA/BLS annual data by
-title but were not verified the same way — `fred.stlouisfed.org` and
-`alfred.stlouisfed.org` are both blocked from this environment. See
-spec007 §10 item 6 before trusting the `annual` interval for that
-remaining population, or before flipping `--skip-not-due`'s default.
+**✅ Follow-up (2026-09-14), now fully closed: 121 of 170 `fred`/`annual`
+entries were mistagged with the same silent-staleness risk as the
+quarterly/GDP finding above.** Found in two passes. First, 13 entries in
+`manifests/money_banking.yml` turned out to be FRED's annual-frequency
+transform of two Fed releases that don't publish annually at all — the
+**Z.1 Financial Accounts** (quarterly) and **H.8 Assets and Liabilities of
+Commercial Banks** (weekly). Then a second pass checked the remaining ~120
+entries against real release calendars for each source: **82** NIPA line
+items in `national_accounts_extra.yml` (BEA's own documentation confirms
+NIPAs update on the same quarterly advance/second/third cycle as GDP
+itself, plus an additional July annual revision layered on top — the exact
+GDP failure mode, just for every NIPA component); **16** in
+`production_housing.yml` split between Fed G.17 Industrial Production and
+Census New Residential Sales (both monthly) and FHFA's All-Transactions
+House Price Index (confirmed quarterly-only); **9** BLS "usual weekly
+earnings" series in `labor_extra.yml` (confirmed quarterly); and **1** BEA
+international-transactions series (confirmed quarterly). All retagged
+directly in the manifests, no code change. The one cluster checked and
+found **already correct**: 12 Census/BEA regional population entries in
+`regional_aggregates.yml` — the Census Population Estimates Program really
+does publish one annual vintage, with revisions bundled into that same
+release rather than scattered through the year. `fred`/`annual` dropped
+from 170 to 49 systemwide. Full details and sources in spec007 §10 item 6.
 
 By default, `Pipeline.run()` still restates *every* series passed to it on
 *every* invocation — nothing consults each series' `expected_update_frequency`
