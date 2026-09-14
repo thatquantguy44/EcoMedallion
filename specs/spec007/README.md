@@ -5,9 +5,11 @@ complete); cadence intervals validated against real publish calendars and
 retuned to match (§5/§10 item 5 -- all five intervals now in code);
 expected_update_frequency backfilled across all 3,003 manifest entries
 (§9/§10 item 4 -- previously only 164 had a real value, not ~2,513 as
-first counted); still not the default, still not re-baselined against
-real timing
-Last verified: 2026-09-13
+first counted); found and fixed a 13-entry fred/annual sub-cluster with
+the same silent-staleness risk as the quarterly/GDP finding (§5 follow-up,
+§10 item 6) -- ~120 more fred/annual entries remain unverified, open;
+still not the default, still not re-baselined against real timing
+Last verified: 2026-09-14
 Primary owner: TBD
 Target: `Pipeline.run()` (`src/fred_pipeline/pipeline.py`) — every `run`
 invocation, local and Spark alike.
@@ -245,13 +247,15 @@ per-entity skipping there low-value (see `docs/handoffs/pipeline_performance.md`
     safety-first choice rather than a taxonomy redesign (see that
     decision for the reasoning and the door left open for a future
     single-release vs. multi-revision split).
-  - ✅ **`annual` — FIXED (360 → 180 days).** World Bank (the only source
-    using this tag here — `worldbank_global.yml`'s GDP and population
-    series) revises data outside its own nominal annual cycle: the World
-    Development Indicators database's own last update landed July 17,
-    2026; a related World Bank dataset (Global Development Finance) is
-    explicitly updated *twice* a year (January and April); and WDI's own
-    documentation notes historical values can be recalculated
+  - ✅ **`annual` — FIXED (360 → 180 days).** World Bank (at the time this
+    was written, the only *researched* source using this tag —
+    `worldbank_global.yml`'s GDP and population series; see the follow-up
+    finding below for why "only source" turned out to be wrong once the
+    backfill ran) revises data outside its own nominal annual cycle: the
+    World Development Indicators database's own last update landed July
+    17, 2026; a related World Bank dataset (Global Development Finance)
+    is explicitly updated *twice* a year (January and April); and WDI's
+    own documentation notes historical values can be recalculated
     retroactively on a methodology revision, independent of the regular
     annual refresh. The old 360-day interval would have missed any of
     these out-of-cycle corrections for up to a year. Lower severity than
@@ -263,6 +267,46 @@ per-entity skipping there low-value (see `docs/handoffs/pipeline_performance.md`
   `test_series_is_due_just_inside_and_outside_interval_per_cadence` reads
   the real dict rather than a duplicated literal, so it can't silently
   drift from these values on a future retune.
+
+  ### Follow-up finding after the backfill (2026-09-14): a FRED annual
+  ### sub-cluster mistagged, same failure mode as `quarterly`
+
+  Once §9's backfill gave every manifest entry a real
+  `expected_update_frequency`, `fred` turned out to be a second source
+  using `annual` — 170 entries, not the 0 assumed above. A source/frequency
+  breakdown plus spot-checking (this session's second research pass) found
+  13 of those, all in `manifests/money_banking.yml`, are FRED's
+  annual-frequency transform of two Federal Reserve statistical releases
+  that do **not** publish annually at all: the **Z.1 Financial Accounts of
+  the United States** (`BOGZ1*`/`ROWTASA027N`/`MMMFFAA027N`/`ADSGFIA027N`/
+  `FGTFASA027N` — Z.1 is published **quarterly**) and the **H.8 Assets and
+  Liabilities of Commercial Banks** release (`H8B1152NCBCAG`,
+  `H8B1001NCBCAG` — H.8 is published **weekly**). This is the same
+  underlying failure mode as the `quarterly`/GDP finding above: the
+  manifest's `frequency` code describes the *observation* granularity of
+  the specific FRED series ID tracked (one data point per year for these
+  transforms), not necessarily how often a *new* observation actually
+  appears or gets revised, which is governed by the source release's own
+  cadence.
+
+  Unlike the GDP case, this could **not** be conclusively verified from
+  this environment: `fred.stlouisfed.org` and `alfred.stlouisfed.org` are
+  both blocked by the network egress proxy here, so the exact update
+  mechanics of these 13 specific series IDs (do they only get a new value
+  once a year, or do they roll/revise every time the underlying quarterly
+  Z.1 or weekly H.8 release drops?) is unconfirmed. Resolved defensively
+  rather than left as an open question: **all 13 were retagged from
+  `annual` to `quarterly`** directly in the manifest (not a code change —
+  `_CADENCE_MIN_INTERVAL` is untouched), the same safety-first choice
+  already made for `quarterly` itself. `national_accounts_extra.yml` (82
+  `fred`/`annual` entries), `labor_extra.yml` (9), `regional_aggregates.yml`
+  (12), `production_housing.yml` (16), and `international.yml` (1) were
+  **not** touched — these look like genuine BEA/BLS annual aggregates by
+  title, not Z.1/H.8 transforms, but that has not been researched the way
+  the money_banking.yml cluster was. Anyone continuing this work should
+  spot-check that remaining ~120-entry population before trusting the
+  180-day interval for it, using real FRED series metadata if this ever
+  runs somewhere `fred.stlouisfed.org` is reachable.
 
   **Sources:** [BLS Employment Situation 2026 schedule](https://www.bls.gov/schedule/2026/home.htm),
   [BLS CPI release schedule](https://www.bls.gov/cpi/),
@@ -440,3 +484,20 @@ re-litigating them:
    quarterly series is found that would benefit from a longer, separately
    tracked interval — that would need a new sub-cadence, not a reversion
    of this fix.
+6. 🔴 **DECISION NEEDED (new, 2026-09-14) — the remaining ~120
+   `fred`/`annual` manifest entries outside `money_banking.yml` are
+   unverified.** The follow-up finding under §5 resolved the 13-entry
+   Z.1/H.8 cluster by retagging it `quarterly`. The larger population in
+   `national_accounts_extra.yml` (82), `production_housing.yml` (16),
+   `regional_aggregates.yml` (12), `labor_extra.yml` (9), and
+   `international.yml` (1) has not been checked the same way — it looks
+   like genuine BEA/BLS/Census annual aggregates by series title, but
+   that's an inference from naming, not a verified release-calendar
+   check, and `fred.stlouisfed.org`/`alfred.stlouisfed.org` were both
+   blocked from the environment this was found in. Before trusting the
+   180-day `annual` interval for this population (or before flipping
+   `--skip-not-due`'s default per decision #1), spot-check a sample
+   against real FRED series metadata from an environment that can reach
+   it — same method as the money_banking.yml cluster: does the specific
+   tracked series ID actually only get a new value once a year, or is it
+   a low-frequency transform of a more-often-published source release?

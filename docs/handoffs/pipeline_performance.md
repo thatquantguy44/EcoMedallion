@@ -257,6 +257,21 @@ entry's existing `frequency` code the same way `bls_discovery.py`/
 `ecb_discovery.py` already do); all 3,003 entries now have a real value,
 verified to change nothing else in the manifests.
 
+**⚠️ Follow-up (2026-09-14) found by that backfill: 13 `fred`/`annual`
+entries had the same silent-staleness risk as the quarterly/GDP finding
+above.** All 13 live in `manifests/money_banking.yml` and turned out to be
+FRED's annual-frequency transform of two Fed releases that don't publish
+annually at all — the **Z.1 Financial Accounts** (quarterly) and **H.8
+Assets and Liabilities of Commercial Banks** (weekly). Retagged all 13 from
+`annual` to `quarterly` in the manifest directly (no code change) as the
+same safety-first call already made for `quarterly` itself. **Not fully
+closed**: ~120 more `fred`/`annual` entries elsewhere (mostly
+`national_accounts_extra.yml`) look like genuine BEA/BLS annual data by
+title but were not verified the same way — `fred.stlouisfed.org` and
+`alfred.stlouisfed.org` are both blocked from this environment. See
+spec007 §10 item 6 before trusting the `annual` interval for that
+remaining population, or before flipping `--skip-not-due`'s default.
+
 By default, `Pipeline.run()` still restates *every* series passed to it on
 *every* invocation — nothing consults each series' `expected_update_frequency`
 (present in the `meta_fred_series` schema, unused for this purpose unless
