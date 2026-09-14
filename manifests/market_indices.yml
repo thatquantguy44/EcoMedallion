@@ -15,6 +15,7 @@ series:
     title: CBOE Volatility Index (VIX)
     category: market_indices
     frequency: d
+    expected_update_frequency: daily
     units: Index
     active: true
     vintage_enabled: false
@@ -28,6 +29,7 @@ series:
     title: S&P 500
     category: market_indices
     frequency: d
+    expected_update_frequency: daily
     units: Index
     active: true
     vintage_enabled: false
@@ -41,6 +43,7 @@ series:
     title: NASDAQ Composite Index
     category: market_indices
     frequency: d
+    expected_update_frequency: daily
     units: Index Feb 5, 1971=100
     active: true
     vintage_enabled: false
@@ -54,6 +57,7 @@ series:
     title: Dow Jones Industrial Average
     category: market_indices
     frequency: d
+    expected_update_frequency: daily
     units: Index
     active: true
     vintage_enabled: false
@@ -67,6 +71,7 @@ series:
     title: Crude Oil Prices, West Texas Intermediate (WTI)
     category: market_indices
     frequency: d
+    expected_update_frequency: daily
     units: Dollars per Barrel
     active: true
     vintage_enabled: false

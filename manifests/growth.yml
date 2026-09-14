@@ -26,6 +26,7 @@ series:
     title: Real Gross Domestic Product (Chained 2017 Dollars, SAAR)
     category: growth
     frequency: q
+    expected_update_frequency: quarterly
     units: Billions of Chained 2017 Dollars
     load_type: incremental
     vintage_enabled: true
@@ -39,6 +40,7 @@ series:
     title: Industrial Production - Total Index (SA)
     category: growth
     frequency: m
+    expected_update_frequency: monthly
     units: Index 2017=100
     load_type: incremental
     downstream_use_case: nowcasting
@@ -49,6 +51,7 @@ series:
     title: Advance Retail Sales - Retail and Food Services (SA)
     category: growth
     frequency: m
+    expected_update_frequency: monthly
     units: Millions of Dollars
     downstream_use_case: consumption_nowcast
     priority: 2
@@ -58,6 +61,7 @@ series:
     title: New Privately-Owned Housing Units Started - Total (SAAR)
     category: growth
     frequency: m
+    expected_update_frequency: monthly
     units: Thousands of Units
     downstream_use_case: housing_activity
     priority: 3
@@ -67,6 +71,7 @@ series:
     title: New Private Housing Units Authorized by Building Permits (SAAR)
     category: growth
     frequency: m
+    expected_update_frequency: monthly
     units: Thousands of Units
     downstream_use_case: housing_activity
     priority: 3

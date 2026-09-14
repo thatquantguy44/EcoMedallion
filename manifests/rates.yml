@@ -29,6 +29,7 @@ series:
     title: 3-Month Treasury Constant Maturity Rate
     category: rates
     frequency: d
+    expected_update_frequency: daily
     units: Percent
     vintage_enabled: false
     downstream_use_case: yield_curve
@@ -39,6 +40,7 @@ series:
     title: 6-Month Treasury Constant Maturity Rate
     category: rates
     frequency: d
+    expected_update_frequency: daily
     units: Percent
     vintage_enabled: false
     downstream_use_case: yield_curve
@@ -49,6 +51,7 @@ series:
     title: 1-Year Treasury Constant Maturity Rate
     category: rates
     frequency: d
+    expected_update_frequency: daily
     units: Percent
     vintage_enabled: false
     downstream_use_case: yield_curve
@@ -59,6 +62,7 @@ series:
     title: 2-Year Treasury Constant Maturity Rate
     category: rates
     frequency: d
+    expected_update_frequency: daily
     units: Percent
     vintage_enabled: false
     downstream_use_case: yield_curve
@@ -69,6 +73,7 @@ series:
     title: 5-Year Treasury Constant Maturity Rate
     category: rates
     frequency: d
+    expected_update_frequency: daily
     units: Percent
     vintage_enabled: false
     downstream_use_case: yield_curve
@@ -79,6 +84,7 @@ series:
     title: 10-Year Treasury Constant Maturity Rate
     category: rates
     frequency: d
+    expected_update_frequency: daily
     units: Percent
     vintage_enabled: false
     downstream_use_case: yield_curve
@@ -89,6 +95,7 @@ series:
     title: 30-Year Treasury Constant Maturity Rate
     category: rates
     frequency: d
+    expected_update_frequency: daily
     units: Percent
     vintage_enabled: false
     downstream_use_case: yield_curve
@@ -102,6 +109,7 @@ series:
     title: 3-Year Treasury Constant Maturity Rate
     category: rates
     frequency: d
+    expected_update_frequency: daily
     units: Percent
     active: true
     vintage_enabled: false
@@ -113,6 +121,7 @@ series:
     title: 7-Year Treasury Constant Maturity Rate
     category: rates
     frequency: d
+    expected_update_frequency: daily
     units: Percent
     active: true
     vintage_enabled: false
@@ -124,6 +133,7 @@ series:
     title: 20-Year Treasury Constant Maturity Rate
     category: rates
     frequency: d
+    expected_update_frequency: daily
     units: Percent
     active: true
     vintage_enabled: false
@@ -137,6 +147,7 @@ series:
     title: Bank Prime Loan Rate (daily)
     category: rates
     frequency: d
+    expected_update_frequency: daily
     units: Percent
     active: true
     vintage_enabled: false
@@ -150,6 +161,7 @@ series:
     title: 30-Year Fixed Rate Mortgage Average (weekly)
     category: rates
     frequency: w
+    expected_update_frequency: weekly
     units: Percent
     active: true
     vintage_enabled: false
@@ -163,6 +175,7 @@ series:
     title: 15-Year Fixed Rate Mortgage Average (weekly)
     category: rates
     frequency: w
+    expected_update_frequency: weekly
     units: Percent
     active: true
     vintage_enabled: false
@@ -176,6 +189,7 @@ series:
     title: 10-Year TIPS (Real) Yield
     category: rates
     frequency: d
+    expected_update_frequency: daily
     units: Percent
     active: true
     vintage_enabled: false
@@ -187,6 +201,7 @@ series:
     title: 5-Year, 5-Year Forward Inflation Expectation Rate
     category: rates
     frequency: d
+    expected_update_frequency: daily
     units: Percent
     active: true
     vintage_enabled: false
@@ -198,6 +213,7 @@ series:
     title: 10-Year Treasury Minus 2-Year Treasury (2s10s, FRED-computed)
     category: rates
     frequency: d
+    expected_update_frequency: daily
     units: Percent
     active: true
     vintage_enabled: false
@@ -209,6 +225,7 @@ series:
     title: 10-Year Treasury Minus 3-Month Treasury (FRED-computed)
     category: rates
     frequency: d
+    expected_update_frequency: daily
     units: Percent
     active: true
     vintage_enabled: false
@@ -220,6 +237,7 @@ series:
     title: 4-Week Treasury Bill Secondary Market Rate, Discount Basis
     category: rates
     frequency: d
+    expected_update_frequency: daily
     units: Percent
     active: true
     vintage_enabled: false
@@ -231,6 +249,7 @@ series:
     title: 3-Month Treasury Bill Secondary Market Rate, Discount Basis
     category: rates
     frequency: d
+    expected_update_frequency: daily
     units: Percent
     active: true
     vintage_enabled: false
@@ -242,6 +261,7 @@ series:
     title: 6-Month Treasury Bill Secondary Market Rate, Discount Basis
     category: rates
     frequency: d
+    expected_update_frequency: daily
     units: Percent
     active: true
     vintage_enabled: false

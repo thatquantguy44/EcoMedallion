@@ -17,6 +17,7 @@ series:
     title: iShares Core S&P 500 ETF — holdings
     category: equity
     frequency: d
+    expected_update_frequency: daily
     units: Weight Percent
     active: true
     source: ishares

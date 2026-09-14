@@ -213,9 +213,64 @@ warehouse query (which also surfaced and closed a SQLite/Postgres
 index-parity gap), and both wired into `Pipeline.run()`/`run --skip-not-due`
 with a new `RunStatus.SKIPPED_NOT_DUE` audit trail. Default behavior
 (flag omitted) is unchanged. Still owed before this goes further: real
-extraction timing with gating on vs. off, and validating the cadence→interval
-mapping against real per-source publish history (spec007 §5/§10) — neither
-is done yet.
+extraction timing with gating on vs. off (not done).
+
+**✅ FIXED (2026-09-13) — the two high-priority findings from validating the
+cadence→interval mapping against real publish calendars are resolved in
+code** (`_CADENCE_MIN_INTERVAL` in `pipeline.py`; spec007 §5/§10 item 5 and
+the "Cadence validation findings" subsection have the full evidence):
+
+1. **`quarterly` (was 85 days, a correctness gap, not a tuning nit) →
+   tightened to 25 days.** `GDP`, BEA's NIPA quarterly series, and BLS
+   productivity are tagged `quarterly` in this repo's manifests, but none
+   of them publish once per quarter — each gets three official revisions
+   per quarter (advance/second/third estimates at ~30/55-60/90 days after
+   quarter-end). Real gap between updates is ~25-35 days, not ~91. The old
+   85-day interval would have silently **skipped the second and third
+   revisions entirely** for a GDP-like series — stale data served for up
+   to two months longer than intended. Resolved by converging `quarterly`
+   onto the same interval as `monthly`, a deliberate safety-first choice
+   (see spec007 §10 item 5 for the full reasoning and what would justify
+   revisiting it).
+2. **`monthly` (was 27 days, zero safety margin) → tightened to 25 days.**
+   The real 2026 CPI release calendar has a minimum observed gap of
+   exactly 27 days (Oct 14 → Nov 10) — identical to the old interval, not
+   looser than it as the design intends. A single scheduling shift
+   (holiday, agency delay) could have caused a missed print with no slack
+   to absorb it.
+
+`weekly` (6 → 5 days) and `annual` (360 → 180 days) got the same tightening
+for smaller versions of the same margin problem. `daily`/`business_daily`
+were confirmed already safe and left unchanged. None of this has been
+re-baselined against real timing yet (see below) — these are correctness
+fixes to the interval math, not a performance measurement.
+
+**✅ Also fixed (2026-09-13): `expected_update_frequency` coverage was far
+worse than documented.** Spec007 originally estimated ~490 of 3,003
+manifest entries were missing this field — a grep-based count that
+conflated the YAML key being *present* (mostly as `''`) with the field
+having a *real* value. A corrected parse found only **164 entries had a
+real value; 2,839 (94.5%) did not**, which would have made gating close
+to a no-op regardless of how correct the intervals above are. Backfilled
+via the new `scripts/backfill_expected_update_frequency.py` (maps each
+entry's existing `frequency` code the same way `bls_discovery.py`/
+`ecb_discovery.py` already do); all 3,003 entries now have a real value,
+verified to change nothing else in the manifests.
+
+**⚠️ Follow-up (2026-09-14) found by that backfill: 13 `fred`/`annual`
+entries had the same silent-staleness risk as the quarterly/GDP finding
+above.** All 13 live in `manifests/money_banking.yml` and turned out to be
+FRED's annual-frequency transform of two Fed releases that don't publish
+annually at all — the **Z.1 Financial Accounts** (quarterly) and **H.8
+Assets and Liabilities of Commercial Banks** (weekly). Retagged all 13 from
+`annual` to `quarterly` in the manifest directly (no code change) as the
+same safety-first call already made for `quarterly` itself. **Not fully
+closed**: ~120 more `fred`/`annual` entries elsewhere (mostly
+`national_accounts_extra.yml`) look like genuine BEA/BLS annual data by
+title but were not verified the same way — `fred.stlouisfed.org` and
+`alfred.stlouisfed.org` are both blocked from this environment. See
+spec007 §10 item 6 before trusting the `annual` interval for that
+remaining population, or before flipping `--skip-not-due`'s default.
 
 By default, `Pipeline.run()` still restates *every* series passed to it on
 *every* invocation — nothing consults each series' `expected_update_frequency`
@@ -238,4 +293,6 @@ watermark lives, interaction with `restate_last_n`, `--full` semantics,
 manifest-level overrides) are scoped in
 [`specs/spec007/README.md`](../../specs/spec007/README.md). Rollout and
 `--full` semantics are decided (§5/§10); the cadence→interval mapping is
-still an unvalidated starting point — read the spec before touching it.
+now validated against real publish calendars and retuned to match
+(§5/§10 item 5) — nothing left blocking `--skip-not-due` on interval
+safety grounds, only on the still-owed real timing re-baseline above.

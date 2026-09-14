@@ -33,6 +33,7 @@ series:
     title: "Empire State Manufacturing Survey: Current General Business Conditions (Diffusion Index, SA)"
     category: regional_fed
     frequency: m
+    expected_update_frequency: monthly
     units: Diffusion Index (SA)
     active: true
     vintage_enabled: false
@@ -45,6 +46,7 @@ series:
     title: "Philadelphia Fed Manufacturing Business Outlook Survey: Current General Activity (Diffusion Index, SA)"
     category: regional_fed
     frequency: m
+    expected_update_frequency: monthly
     units: Diffusion Index (SA)
     active: true
     vintage_enabled: false
@@ -57,6 +59,7 @@ series:
     title: "Texas Manufacturing Outlook Survey: Current General Business Activity (Diffusion Index, SA)"
     category: regional_fed
     frequency: m
+    expected_update_frequency: monthly
     units: Diffusion Index (SA)
     active: true
     vintage_enabled: false
@@ -69,6 +72,7 @@ series:
     title: "Cleveland Fed Median CPI (Index Level, Dec 1982=100)"
     category: regional_fed
     frequency: m
+    expected_update_frequency: monthly
     units: Index Dec 1982=100
     active: true
     vintage_enabled: false
@@ -82,6 +86,7 @@ series:
     title: Kansas City Financial Stress Index
     category: regional_fed
     frequency: m
+    expected_update_frequency: monthly
     units: Index
     active: true
     vintage_enabled: false

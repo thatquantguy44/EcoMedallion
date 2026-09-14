@@ -1,8 +1,15 @@
 # Spec 007: Due-Date Gating on Extraction
 
 Status: first implementation slice shipped behind --skip-not-due (§8 steps 1-3
-complete); not yet the default, not yet re-baselined against real timing
-Last verified: 2026-09-13
+complete); cadence intervals validated against real publish calendars and
+retuned to match (§5/§10 item 5 -- all five intervals now in code);
+expected_update_frequency backfilled across all 3,003 manifest entries
+(§9/§10 item 4 -- previously only 164 had a real value, not ~2,513 as
+first counted); found and fixed a 13-entry fred/annual sub-cluster with
+the same silent-staleness risk as the quarterly/GDP finding (§5 follow-up,
+§10 item 6) -- ~120 more fred/annual entries remain unverified, open;
+still not the default, still not re-baselined against real timing
+Last verified: 2026-09-14
 Primary owner: TBD
 Target: `Pipeline.run()` (`src/fred_pipeline/pipeline.py`) — every `run`
 invocation, local and Spark alike.
@@ -57,13 +64,18 @@ per-entity skipping there low-value (see `docs/handoffs/pipeline_performance.md`
     ones: `bls_discovery.py:316-324` and `ecb_discovery.py:567+` both map a
     source's native frequency code (`d`/`w`/`m`/`q`/`sa`/`a`) to
     `expected_update_frequency` when generating candidate manifests.
-  - Real coverage, counted directly from `manifests/*.yml` in this repo:
-    3,003 `series_id:` entries total, 2,513 have `expected_update_frequency:`
-    set (including some explicitly set to `''`); the taxonomy actually in
-    use is `{daily, business_daily, weekly, monthly, quarterly, annual}`
-    (`semiannual` is supported by the BLS-discovery mapping but not
-    currently used by any manifest). The remaining ~490 entries with no
-    field at all get the dataclass default `""`.
+  - Real coverage, counted directly from `manifests/*.yml` in this repo
+    (2026-09-13, original count in this bullet's history): 3,003
+    `series_id:` entries total. **The original count here (2,513 "have it
+    set") was wrong** — it conflated the YAML key being *present* (mostly
+    as `''`) with the field having a *real value*. A corrected parse
+    (`e.get("expected_update_frequency") or ""` truthiness, not key
+    presence) found only **164** entries with a real value and **2,839
+    (94.5%) empty or absent** — see §9's backfill entry, now done, which
+    closed this gap entirely. The taxonomy actually in use is `{daily,
+    business_daily, weekly, monthly, quarterly, annual}` (`semiannual` is
+    supported by the BLS-discovery mapping but not currently used by any
+    manifest).
   - It is genuinely dead code for gating today — confirmed by exhaustive
     grep across `src/fred_pipeline/`: the field is written by the three
     call sites above and read nowhere except passthrough into
@@ -120,10 +132,13 @@ per-entity skipping there low-value (see `docs/handoffs/pipeline_performance.md`
   "overdue" incorrectly), and clock/timezone skew between this pipeline's
   run schedule and the source's publish schedule.
 - **A missing or unrecognized `expected_update_frequency` must default to
-  "always due."** ~490 manifest entries have no value set at all today: a
-  bug or gap in this mapping must never silently stop refreshing a series
-  that would have refreshed correctly before this change existed. The
-  existing behavior (always attempt) is the safe fallback, not an error.
+  "always due."** This mattered a great deal in practice: 2,839 of 3,003
+  manifest entries had no real value until the 2026-09-13 backfill (§9) —
+  a bug or gap in this mapping must never silently stop refreshing a
+  series that would have refreshed correctly before this change existed.
+  The existing behavior (always attempt) is the safe fallback, not an
+  error, and stays the fallback for any future entry that ships without
+  the field set.
 - **A failed extraction must not count as a successful pull for gating
   purposes.** Since the due-date check is keyed off `MAX(ingested_at)` in
   Silver (only ever set on a successful merge), this falls out naturally —
@@ -180,6 +195,127 @@ per-entity skipping there low-value (see `docs/handoffs/pipeline_performance.md`
   manifest uses it yet) → always due. These are deliberately looser than
   the nominal cadence, not equal to it — being a day early costs nothing;
   being a day late misses a print until the next run.
+
+  ### Cadence validation findings (2026-09-13, against real publish calendars)
+
+  Checked against this repo's own manifests (`manifests/*.yml`, grouped by
+  `expected_update_frequency`) and each series' real publisher's release
+  calendar. Sources at the end of this subsection.
+
+  - ✅ **`daily`/`business_daily` — confirmed safe.** Sampled series
+    (`SOFR`, Treasury `debt_to_penny`, `DGS1MO`, ECB `EST`/`YC_PUB` rates)
+    are genuinely business-day-only with no revision-cycle complications.
+    The weekend-adjacent case is already covered by
+    `test_series_is_due_weekend_adjacent_daily_case`. No change needed.
+  - ✅ **`weekly` — FIXED (6 → 5 days).** `ICSA` (Initial Claims)
+    publishes every Thursday, pulled forward by one business day in a
+    week containing a federal holiday — the observed worst-case gap
+    between two consecutive releases is **exactly 6 days** (Thu → Wed).
+    Since `_series_is_due`'s boundary is inclusive (`>=`), the old 6-day
+    interval technically still caught this case on the day it landed, but
+    with no slack at all — a second holiday adjustment in the same
+    window, or a slightly different pull time of day, would have missed
+    it. Tightened to 5 days to restore a real margin.
+  - ✅ **`monthly` — FIXED (27 → 25 days).** The real, published 2026 CPI
+    release calendar (Sep 11 → Oct 14 → Nov 10) has a **minimum observed
+    gap of exactly 27 days** (Oct 14 → Nov 10). The old interval was
+    *equal to*, not looser than, this real minimum — zero safety margin,
+    the opposite of "generous rather than tight." The Employment
+    Situation calendar compounds this: real 2026 releases regularly land
+    on the *second* Friday of a month instead of the first (holiday
+    shifts, and once a government-shutdown delay), which lengthens some
+    gaps but does not rule out a short one following it. Tightened to 25
+    days.
+  - ✅ **`quarterly` — FIXED (85 → 25 days); was the most important
+    finding here.** `GDP`, BEA's NIPA quarterly series, and BLS
+    productivity/costs are all tagged `quarterly` in this repo's
+    manifests, but none of them publish only once per quarter — each gets
+    **three official estimates within the quarter's own revision cycle**:
+    BEA GDP's advance/second/third estimates land at ~30, ~55-60, and ~90
+    days after each quarter ends (official BEA definitions); BLS
+    Productivity and Costs follows the same shape, tied to the GDP
+    schedule. The real gap *between* consecutive updates to one of these
+    series is on the order of **25-35 days, not 85**. The old 85-day
+    re-check interval didn't just cut it close here — it would have
+    silently **skipped the second and third estimate revisions entirely**
+    for a GDP-like series, catching only roughly one of the three updates
+    in a quarter instead of all three: a correctness gap (stale data
+    served for up to ~2 months longer than intended), not just an
+    efficiency tuning question. Resolved per open decision #5 below by
+    tightening to the same 25-day value as `monthly` — `quarterly` now
+    functionally behaves like `monthly` for these series, a deliberate
+    safety-first choice rather than a taxonomy redesign (see that
+    decision for the reasoning and the door left open for a future
+    single-release vs. multi-revision split).
+  - ✅ **`annual` — FIXED (360 → 180 days).** World Bank (at the time this
+    was written, the only *researched* source using this tag —
+    `worldbank_global.yml`'s GDP and population series; see the follow-up
+    finding below for why "only source" turned out to be wrong once the
+    backfill ran) revises data outside its own nominal annual cycle: the
+    World Development Indicators database's own last update landed July
+    17, 2026; a related World Bank dataset (Global Development Finance)
+    is explicitly updated *twice* a year (January and April); and WDI's
+    own documentation notes historical values can be recalculated
+    retroactively on a methodology revision, independent of the regular
+    annual refresh. The old 360-day interval would have missed any of
+    these out-of-cycle corrections for up to a year. Lower severity than
+    the quarterly finding (a stale annual macro figure is less
+    market-critical than stale GDP), tightened to 180 days.
+
+  All four tightened values are live in `_CADENCE_MIN_INTERVAL`
+  (`pipeline.py`) as of 2026-09-13; `tests/test_pipeline.py`'s
+  `test_series_is_due_just_inside_and_outside_interval_per_cadence` reads
+  the real dict rather than a duplicated literal, so it can't silently
+  drift from these values on a future retune.
+
+  ### Follow-up finding after the backfill (2026-09-14): a FRED annual
+  ### sub-cluster mistagged, same failure mode as `quarterly`
+
+  Once §9's backfill gave every manifest entry a real
+  `expected_update_frequency`, `fred` turned out to be a second source
+  using `annual` — 170 entries, not the 0 assumed above. A source/frequency
+  breakdown plus spot-checking (this session's second research pass) found
+  13 of those, all in `manifests/money_banking.yml`, are FRED's
+  annual-frequency transform of two Federal Reserve statistical releases
+  that do **not** publish annually at all: the **Z.1 Financial Accounts of
+  the United States** (`BOGZ1*`/`ROWTASA027N`/`MMMFFAA027N`/`ADSGFIA027N`/
+  `FGTFASA027N` — Z.1 is published **quarterly**) and the **H.8 Assets and
+  Liabilities of Commercial Banks** release (`H8B1152NCBCAG`,
+  `H8B1001NCBCAG` — H.8 is published **weekly**). This is the same
+  underlying failure mode as the `quarterly`/GDP finding above: the
+  manifest's `frequency` code describes the *observation* granularity of
+  the specific FRED series ID tracked (one data point per year for these
+  transforms), not necessarily how often a *new* observation actually
+  appears or gets revised, which is governed by the source release's own
+  cadence.
+
+  Unlike the GDP case, this could **not** be conclusively verified from
+  this environment: `fred.stlouisfed.org` and `alfred.stlouisfed.org` are
+  both blocked by the network egress proxy here, so the exact update
+  mechanics of these 13 specific series IDs (do they only get a new value
+  once a year, or do they roll/revise every time the underlying quarterly
+  Z.1 or weekly H.8 release drops?) is unconfirmed. Resolved defensively
+  rather than left as an open question: **all 13 were retagged from
+  `annual` to `quarterly`** directly in the manifest (not a code change —
+  `_CADENCE_MIN_INTERVAL` is untouched), the same safety-first choice
+  already made for `quarterly` itself. `national_accounts_extra.yml` (82
+  `fred`/`annual` entries), `labor_extra.yml` (9), `regional_aggregates.yml`
+  (12), `production_housing.yml` (16), and `international.yml` (1) were
+  **not** touched — these look like genuine BEA/BLS annual aggregates by
+  title, not Z.1/H.8 transforms, but that has not been researched the way
+  the money_banking.yml cluster was. Anyone continuing this work should
+  spot-check that remaining ~120-entry population before trusting the
+  180-day interval for it, using real FRED series metadata if this ever
+  runs somewhere `fred.stlouisfed.org` is reachable.
+
+  **Sources:** [BLS Employment Situation 2026 schedule](https://www.bls.gov/schedule/2026/home.htm),
+  [BLS CPI release schedule](https://www.bls.gov/cpi/),
+  [BEA GDP release schedule](https://www.bea.gov/data/gdp/gross-domestic-product),
+  [BEA "second estimate" glossary](https://www.bea.gov/index.php/help/glossary/second-estimate),
+  [BLS Productivity and Costs release schedule](https://www.bls.gov/productivity/schedule-releases.htm),
+  [DOL/FRED Initial Claims release mechanics](https://fred.stlouisfed.org/series/ICSA),
+  [World Bank Data Updates and Errata](https://datahelpdesk.worldbank.org/knowledgebase/articles/906522-data-updates-and-errata),
+  [World Development Indicators](https://en.wikipedia.org/wiki/World_Development_Indicators).
 - **Where the check lives**: inside `Pipeline.run()`'s existing "plan"
   stage (`pipeline.py:464-472`), as a filter applied to `specs` before
   `series_runs`/`plans` are built — not inside `_plan_extract` itself,
@@ -289,16 +425,22 @@ default in step 1 above — the values there are still a starting point.
   (§6 step 5 above already covers this — repeated here as a pointer since
   it's the main reason this spec was written from spec003's research in
   the first place, not a standalone concern).
-- ✅ **DECIDED (2026-09-13):** backfilling `expected_update_frequency` for
-  the ~490 manifest entries that don't have it set is a **separate,
-  independent follow-up**, not part of this spec's first slice. Today an
-  omission is harmless (defaults to "always due"); once gating ships it's
-  still harmless correctness-wise, it just means those ~490 series get none
-  of the benefit until backfilled later.
-- `manifests/*.yml`'s `expected_update_frequency` values were counted by
-  grep against the manifest files' declared, not-yet-generated state at
-  the time this spec was written — re-count before relying on exact
-  figures if manifests have changed meaningfully since 2026-09-13.
+- ✅ **DONE (2026-09-13):** backfilling `expected_update_frequency` was
+  originally deferred here as a "separate, independent follow-up" under
+  the assumption that only ~490 manifest entries were missing it — a
+  grep-based count that conflated the YAML key being present (mostly as
+  `''`) with the field having a real value. A corrected parse found
+  **2,839 of 3,003 entries (94.5%)** were actually missing a usable
+  value, meaning gating would have provided almost no real benefit until
+  this was fixed. Backfilled via `scripts/backfill_expected_update_frequency.py`
+  (maps the existing per-entry `frequency` code the same way
+  `bls_discovery.py`/`ecb_discovery.py` already do: `d→daily`,
+  `w→weekly`, `m→monthly`, `q→quarterly`, `a→annual`), as a text-level
+  edit rather than a YAML round-trip (a full ruamel.yaml load/dump was
+  tried first and silently dropped every blank line and inline comment
+  in the file — unacceptable for hand-maintained manifests). All 3,003
+  entries now have a real value; verified byte-for-byte that no other
+  field changed anywhere.
 
 ## 10. Open Decisions
 
@@ -309,13 +451,53 @@ re-litigating them:
 1. ✅ Opt-in flag first (`run --skip-not-due`), not default-on (§5).
 2. ✅ Reuse `--full` for gating bypass; no dedicated flag (§5).
 3. ✅ Validate the cadence → interval mapping against real publish patterns
-   *before* writing gating logic (§5, §6 step 1) — the values in §5 are a
-   starting point for that validation, not a conclusion to build on
-   directly.
+   *before* writing gating logic (§5, §6 step 1) — **done 2026-09-13**,
+   see "Cadence validation findings" under §5. `daily`/`business_daily`
+   confirmed safe as-is; `weekly` and `monthly` need tightening (to ~5
+   days and ~24-25 days respectively) for genuine safety margin;
+   `annual` should tighten to ~180 days for World Bank sources. None of
+   these four are code changes yet — recorded as findings, not applied,
+   pending a decision on whether to fix now or roll into the eventual
+   default-flip validation cycle from decision #1.
 4. ✅ Back-filling `expected_update_frequency` for manifest entries missing
-   it is separate, follow-up work — not blocking this spec's first slice
-   (§9).
-
-The only decision still genuinely open is the *outcome* of #3 (the actual
-validated intervals) — that requires cross-checking real source publish
-history per §6 step 1, not a judgment call to make from this doc alone.
+   it — **done 2026-09-13** (§9). Originally deferred as low-priority
+   under a wrong count (~490 missing); the real number was 2,839 of
+   3,003 (94.5%), which would have made gating nearly a no-op, so this
+   was completed rather than left deferred.
+5. ✅ **RESOLVED (2026-09-13) — what to do about `quarterly`: tighten it
+   to the same 25-day value as `monthly`, live in `_CADENCE_MIN_INTERVAL`.**
+   The validation above found that `quarterly`-tagged series in this
+   repo's manifests (`GDP`, BEA NIPA quarterly series, BLS productivity)
+   don't publish once per quarter — they get three revisions per quarter
+   at roughly 30/55-60/90 days after quarter-end, a real update cadence
+   of ~25-35 days, not ~91. The old 85-day interval would have silently
+   skipped the second and third revisions for these series entirely: a
+   correctness gap, not a tuning nit. Chose the safety-first fix
+   (converge `quarterly` onto `monthly`'s real cadence) over leaving the
+   silent-staleness gap live while a taxonomy redesign is debated — this
+   is a deliberate, documented trade-off, not a "the numbers happen to
+   match" coincidence: it gives up the efficiency benefit of a separate,
+   longer `quarterly` bucket for single-release quarterly series (if any
+   exist in this manifest set) in exchange for correctness on the
+   multi-revision ones, which is the safer failure mode per this spec's
+   own stated principle. Revisit only if a genuine single-release
+   quarterly series is found that would benefit from a longer, separately
+   tracked interval — that would need a new sub-cadence, not a reversion
+   of this fix.
+6. 🔴 **DECISION NEEDED (new, 2026-09-14) — the remaining ~120
+   `fred`/`annual` manifest entries outside `money_banking.yml` are
+   unverified.** The follow-up finding under §5 resolved the 13-entry
+   Z.1/H.8 cluster by retagging it `quarterly`. The larger population in
+   `national_accounts_extra.yml` (82), `production_housing.yml` (16),
+   `regional_aggregates.yml` (12), `labor_extra.yml` (9), and
+   `international.yml` (1) has not been checked the same way — it looks
+   like genuine BEA/BLS/Census annual aggregates by series title, but
+   that's an inference from naming, not a verified release-calendar
+   check, and `fred.stlouisfed.org`/`alfred.stlouisfed.org` were both
+   blocked from the environment this was found in. Before trusting the
+   180-day `annual` interval for this population (or before flipping
+   `--skip-not-due`'s default per decision #1), spot-check a sample
+   against real FRED series metadata from an environment that can reach
+   it — same method as the money_banking.yml cluster: does the specific
+   tracked series ID actually only get a new value once a year, or is it
+   a low-frequency transform of a more-often-published source release?

@@ -8,6 +8,7 @@ from fred_pipeline.local_store import LocalWarehouse
 from fred_pipeline.manifest import SeriesSpec, ValidationProfile
 from fred_pipeline.pipeline import (
     FredPipeline,
+    _CADENCE_MIN_INTERVAL,
     _extract_workers_for_source,
     _make_tiingo,
     _normalize_tiingo_keys,
@@ -505,16 +506,11 @@ def test_series_is_due_boundary_is_inclusive():
 
 
 def test_series_is_due_just_inside_and_outside_interval_per_cadence():
+    # Iterates the real _CADENCE_MIN_INTERVAL table rather than a duplicated
+    # literal copy, so this test can't silently drift from the validated
+    # values (spec007 §5/§10 item 5) the next time they're tightened.
     now = datetime(2026, 9, 13, tzinfo=timezone.utc)
-    cases = {
-        "daily": timedelta(hours=20),
-        "business_daily": timedelta(hours=20),
-        "weekly": timedelta(days=6),
-        "monthly": timedelta(days=27),
-        "quarterly": timedelta(days=85),
-        "annual": timedelta(days=360),
-    }
-    for cadence, interval in cases.items():
+    for cadence, interval in _CADENCE_MIN_INTERVAL.items():
         not_yet_due = (now - (interval - timedelta(seconds=1))).isoformat()
         already_due = (now - (interval + timedelta(seconds=1))).isoformat()
         assert _series_is_due(cadence, not_yet_due, now) is False, cadence

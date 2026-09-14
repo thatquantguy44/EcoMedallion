@@ -25,6 +25,7 @@ series:
     title: All Employees, Total Nonfarm Payrolls (SA)
     category: labor
     frequency: m
+    expected_update_frequency: monthly
     units: Thousands of Persons
     load_type: incremental
     vintage_enabled: true
@@ -48,6 +49,7 @@ series:
     title: Labor Force Participation Rate (SA)
     category: labor
     frequency: m
+    expected_update_frequency: monthly
     units: Percent
     downstream_use_case: macro_dashboard
     priority: 3
@@ -57,6 +59,7 @@ series:
     title: Job Openings, Total Nonfarm (JOLTS, SA)
     category: labor
     frequency: m
+    expected_update_frequency: monthly
     units: Thousands
     downstream_use_case: labor_demand
     priority: 2

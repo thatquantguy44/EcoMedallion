@@ -325,15 +325,34 @@ def _extract_workers_for_source(config: PipelineConfig, source: str) -> int:
 # Minimum time since a series' last successful pull before it counts as "due"
 # again, per publication cadence (spec007 §5). Deliberately looser than the
 # nominal cadence -- a false "not due" wastes a print until next run; a false
-# "due" only costs a wasted pull. Not yet validated against real per-source
-# publish history (spec007 §6 step 1) -- treat these as a starting point.
+# "due" only costs a wasted pull. Validated against real per-source publish
+# calendars 2026-09-13 (spec007 §5/§10 item 5 -- see that doc for sources
+# and the reasoning behind each number below, not just the starting guess):
+# - daily/business_daily: confirmed safe as originally set.
+# - weekly: ICSA's worst real gap (holiday-shifted release) is exactly 6
+#   days -- tightened from 6 to 5 to restore genuine margin.
+# - monthly: the real 2026 CPI calendar's minimum gap is exactly 27 days --
+#   tightened from 27 to 25 for the same reason.
+# - quarterly: NOT once per ~91 days for the series actually tagged this
+#   way (GDP, BEA NIPA, BLS productivity) -- each gets three revisions per
+#   quarter roughly 25-35 days apart (advance/second/third estimates).
+#   85 days would silently skip the second and third revisions entirely.
+#   Tightened to 25 days, the same real cadence as monthly -- "quarterly"
+#   now functionally behaves like "monthly" for these series. That's a
+#   deliberate safety-first choice, not a taxonomy fix: a future revision
+#   could split "quarterly" into single-release vs. multi-revision
+#   sub-cadences if the distinction matters later, but converging on the
+#   safe number now beats leaving a known silent-staleness gap live.
+# - annual: World Bank (the only source using this tag) revises data
+#   outside its nominal annual cycle (a twice-yearly companion dataset,
+#   plus retroactive methodology revisions) -- tightened from 360 to 180.
 _CADENCE_MIN_INTERVAL: dict[str, timedelta] = {
     "daily": timedelta(hours=20),
     "business_daily": timedelta(hours=20),
-    "weekly": timedelta(days=6),
-    "monthly": timedelta(days=27),
-    "quarterly": timedelta(days=85),
-    "annual": timedelta(days=360),
+    "weekly": timedelta(days=5),
+    "monthly": timedelta(days=25),
+    "quarterly": timedelta(days=25),
+    "annual": timedelta(days=180),
 }
 
 

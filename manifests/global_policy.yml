@@ -20,6 +20,7 @@ series:
     title: ECB Deposit Facility Rate
     category: rates
     frequency: d
+    expected_update_frequency: daily
     units: Percent
     active: true
     vintage_enabled: false
@@ -34,6 +35,7 @@ series:
     title: ECB Main Refinancing Operations Rate (fixed rate)
     category: rates
     frequency: d
+    expected_update_frequency: daily
     units: Percent
     active: false
     vintage_enabled: false
@@ -48,6 +50,7 @@ series:
     title: "Interest Rates, Immediate Rates: Central Bank Rates for Japan"
     category: rates
     frequency: m
+    expected_update_frequency: monthly
     units: Percent
     active: false
     vintage_enabled: false
@@ -62,6 +65,7 @@ series:
     title: "Interest Rates, Immediate Rates: Central Bank Rates for Canada"
     category: rates
     frequency: m
+    expected_update_frequency: monthly
     units: Percent
     active: false
     vintage_enabled: false
@@ -76,6 +80,7 @@ series:
     title: "Interest Rates, Immediate Rates: Central Bank Rates for Brazil"
     category: rates
     frequency: m
+    expected_update_frequency: monthly
     units: Percent
     active: false
     vintage_enabled: false
@@ -94,6 +99,7 @@ series:
     title: Bank of England Policy Rate
     category: rates
     frequency: m
+    expected_update_frequency: monthly
     units: Percent per Annum
     active: false
     vintage_enabled: false
@@ -108,6 +114,7 @@ series:
     title: Interest Rates, Discount Rate for Japan
     category: rates
     frequency: m
+    expected_update_frequency: monthly
     units: Percent per Annum
     active: false
     vintage_enabled: false

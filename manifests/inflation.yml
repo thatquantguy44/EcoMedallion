@@ -26,6 +26,7 @@ series:
     title: Consumer Price Index - All Items Less Food and Energy (Core CPI, SA)
     category: inflation
     frequency: m
+    expected_update_frequency: monthly
     units: Index 1982-1984=100
     load_type: incremental
     vintage_enabled: true
@@ -39,6 +40,7 @@ series:
     title: Personal Consumption Expenditures - Price Index (SA)
     category: inflation
     frequency: m
+    expected_update_frequency: monthly
     units: Index 2017=100
     load_type: incremental
     vintage_enabled: true
@@ -52,6 +54,7 @@ series:
     title: PCE Excluding Food and Energy (Core PCE, SA)
     category: inflation
     frequency: m
+    expected_update_frequency: monthly
     units: Index 2017=100
     load_type: incremental
     vintage_enabled: true
@@ -65,6 +68,7 @@ series:
     title: 5-Year Breakeven Inflation Rate
     category: inflation
     frequency: d
+    expected_update_frequency: daily
     units: Percent
     vintage_enabled: false   # daily market-implied series, not revised
     downstream_use_case: market_implied_inflation
@@ -75,6 +79,7 @@ series:
     title: 10-Year Breakeven Inflation Rate
     category: inflation
     frequency: d
+    expected_update_frequency: daily
     units: Percent
     vintage_enabled: false   # daily market-implied series, not revised
     downstream_use_case: market_implied_inflation

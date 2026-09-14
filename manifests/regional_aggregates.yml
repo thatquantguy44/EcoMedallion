@@ -16,6 +16,7 @@ series:
     title: "Unemployment Rate in Midwest Census Region"
     category: state_labor
     frequency: m
+    expected_update_frequency: monthly
     units: "Percent"
     active: true
     vintage_enabled: false
@@ -28,6 +29,7 @@ series:
     title: "Unemployment Rate in Northeast Census Region"
     category: state_labor
     frequency: m
+    expected_update_frequency: monthly
     units: "Percent"
     active: true
     vintage_enabled: false
@@ -40,6 +42,7 @@ series:
     title: "Unemployment Rate in South Census Region"
     category: state_labor
     frequency: m
+    expected_update_frequency: monthly
     units: "Percent"
     active: true
     vintage_enabled: false
@@ -52,6 +55,7 @@ series:
     title: "Unemployment Rate in West Census Region"
     category: state_labor
     frequency: m
+    expected_update_frequency: monthly
     units: "Percent"
     active: true
     vintage_enabled: false
@@ -64,6 +68,7 @@ series:
     title: "Resident Population in the Midwest Census Region"
     category: state_labor
     frequency: a
+    expected_update_frequency: annual
     units: "Thousands of Persons"
     active: true
     vintage_enabled: false
@@ -76,6 +81,7 @@ series:
     title: "Resident Population in the Northeast Census Region"
     category: state_labor
     frequency: a
+    expected_update_frequency: annual
     units: "Thousands of Persons"
     active: true
     vintage_enabled: false
@@ -88,6 +94,7 @@ series:
     title: "Resident Population in the South Census Region"
     category: state_labor
     frequency: a
+    expected_update_frequency: annual
     units: "Thousands of Persons"
     active: true
     vintage_enabled: false
@@ -100,6 +107,7 @@ series:
     title: "Resident Population in the West Census Region"
     category: state_labor
     frequency: a
+    expected_update_frequency: annual
     units: "Thousands of Persons"
     active: true
     vintage_enabled: false
@@ -112,6 +120,7 @@ series:
     title: "Resident Population in the Far West BEA Region"
     category: state_growth
     frequency: a
+    expected_update_frequency: annual
     units: "Thousands of Persons"
     active: true
     vintage_enabled: false
@@ -124,6 +133,7 @@ series:
     title: "Resident Population in the Great Lakes BEA Region"
     category: state_growth
     frequency: a
+    expected_update_frequency: annual
     units: "Thousands of Persons"
     active: true
     vintage_enabled: false
@@ -136,6 +146,7 @@ series:
     title: "Resident Population in the Mideast BEA Region"
     category: state_growth
     frequency: a
+    expected_update_frequency: annual
     units: "Thousands of Persons"
     active: true
     vintage_enabled: false
@@ -148,6 +159,7 @@ series:
     title: "Resident Population in the New England BEA Region"
     category: state_growth
     frequency: a
+    expected_update_frequency: annual
     units: "Thousands of Persons"
     active: true
     vintage_enabled: false
@@ -160,6 +172,7 @@ series:
     title: "Resident Population in the Plains BEA Region"
     category: state_growth
     frequency: a
+    expected_update_frequency: annual
     units: "Thousands of Persons"
     active: true
     vintage_enabled: false
@@ -172,6 +185,7 @@ series:
     title: "Resident Population in the Rocky Mountain BEA Region"
     category: state_growth
     frequency: a
+    expected_update_frequency: annual
     units: "Thousands of Persons"
     active: true
     vintage_enabled: false
@@ -184,6 +198,7 @@ series:
     title: "Resident Population in the Southeast BEA Region"
     category: state_growth
     frequency: a
+    expected_update_frequency: annual
     units: "Thousands of Persons"
     active: true
     vintage_enabled: false
@@ -196,6 +211,7 @@ series:
     title: "Resident Population in the Southwest BEA Region"
     category: state_growth
     frequency: a
+    expected_update_frequency: annual
     units: "Thousands of Persons"
     active: true
     vintage_enabled: false
@@ -208,6 +224,7 @@ series:
     title: "Gross Domestic Product: All Industry Total in the Far West BEA Region"
     category: state_growth
     frequency: q
+    expected_update_frequency: quarterly
     units: "Millions of Dollars"
     active: true
     vintage_enabled: false
@@ -220,6 +237,7 @@ series:
     title: "Gross Domestic Product: All Industry Total in the Great Lakes BEA Region"
     category: state_growth
     frequency: q
+    expected_update_frequency: quarterly
     units: "Millions of Dollars"
     active: true
     vintage_enabled: false
@@ -232,6 +250,7 @@ series:
     title: "Gross Domestic Product: All Industry Total in the Mideast BEA Region"
     category: state_growth
     frequency: q
+    expected_update_frequency: quarterly
     units: "Millions of Dollars"
     active: true
     vintage_enabled: false
@@ -244,6 +263,7 @@ series:
     title: "Gross Domestic Product: All Industry Total in the New England BEA Region"
     category: state_growth
     frequency: q
+    expected_update_frequency: quarterly
     units: "Millions of Dollars"
     active: true
     vintage_enabled: false
@@ -256,6 +276,7 @@ series:
     title: "Gross Domestic Product: All Industry Total in the Plains BEA Region"
     category: state_growth
     frequency: q
+    expected_update_frequency: quarterly
     units: "Millions of Dollars"
     active: true
     vintage_enabled: false
@@ -268,6 +289,7 @@ series:
     title: "Gross Domestic Product: All Industry Total in the Rocky Mountain BEA Region"
     category: state_growth
     frequency: q
+    expected_update_frequency: quarterly
     units: "Millions of Dollars"
     active: true
     vintage_enabled: false
@@ -280,6 +302,7 @@ series:
     title: "Gross Domestic Product: All Industry Total in the Southeast BEA Region"
     category: state_growth
     frequency: q
+    expected_update_frequency: quarterly
     units: "Millions of Dollars"
     active: true
     vintage_enabled: false
@@ -292,6 +315,7 @@ series:
     title: "Gross Domestic Product: All Industry Total in the Southwest BEA Region"
     category: state_growth
     frequency: q
+    expected_update_frequency: quarterly
     units: "Millions of Dollars"
     active: true
     vintage_enabled: false
@@ -304,6 +328,7 @@ series:
     title: "Consumer Price Index for All Urban Consumers: All Items in Northeast"
     category: state_inflation
     frequency: m
+    expected_update_frequency: monthly
     units: "Index 1982-1984=100"
     active: true
     vintage_enabled: false
@@ -316,6 +341,7 @@ series:
     title: "Consumer Price Index for All Urban Consumers: All Items in Midwest"
     category: state_inflation
     frequency: m
+    expected_update_frequency: monthly
     units: "Index 1982-1984=100"
     active: true
     vintage_enabled: false
@@ -328,6 +354,7 @@ series:
     title: "Consumer Price Index for All Urban Consumers: All Items in South"
     category: state_inflation
     frequency: m
+    expected_update_frequency: monthly
     units: "Index 1982-1984=100"
     active: true
     vintage_enabled: false
@@ -340,6 +367,7 @@ series:
     title: "Consumer Price Index for All Urban Consumers: All Items in West"
     category: state_inflation
     frequency: m
+    expected_update_frequency: monthly
     units: "Index 1982-1984=100"
     active: true
     vintage_enabled: false
