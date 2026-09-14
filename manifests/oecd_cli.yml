@@ -16,8 +16,9 @@ description: >
   drawn from that list. This is NOT the usual "assembled from documentation,
   verify before activating" case.
 
-  Ships inactive anyway, per spec006's acceptance criteria (a new source's
-  first manifest is inactive; activation is a separate, deliberate commit).
+  Shipped inactive initially, per spec006's acceptance criteria (a new
+  source's first manifest is inactive; activation is a separate, deliberate
+  commit). Activated 2026-09-14, on request, in that separate commit.
 version: 1
 
 series:
@@ -26,7 +27,7 @@ series:
     category: growth
     frequency: m
     units: Index (100 = trend)
-    active: false
+    active: true
     source: oecd
     load_type: incremental
     expected_update_frequency: monthly
@@ -45,7 +46,7 @@ series:
     category: growth
     frequency: m
     units: Index (100 = trend)
-    active: false
+    active: true
     source: oecd
     load_type: incremental
     expected_update_frequency: monthly
@@ -62,7 +63,7 @@ series:
     category: growth
     frequency: m
     units: Index (100 = trend)
-    active: false
+    active: true
     source: oecd
     load_type: incremental
     expected_update_frequency: monthly
@@ -79,7 +80,7 @@ series:
     category: growth
     frequency: m
     units: Index (100 = trend)
-    active: false
+    active: true
     source: oecd
     load_type: incremental
     expected_update_frequency: monthly
@@ -96,7 +97,7 @@ series:
     category: growth
     frequency: m
     units: Index (100 = trend)
-    active: false
+    active: true
     source: oecd
     load_type: incremental
     expected_update_frequency: monthly
@@ -113,7 +114,7 @@ series:
     category: growth
     frequency: m
     units: Index (100 = trend)
-    active: false
+    active: true
     source: oecd
     load_type: incremental
     expected_update_frequency: monthly
@@ -130,7 +131,7 @@ series:
     category: growth
     frequency: m
     units: Index (100 = trend)
-    active: false
+    active: true
     source: oecd
     load_type: incremental
     expected_update_frequency: monthly
@@ -147,7 +148,7 @@ series:
     category: growth
     frequency: m
     units: Index (100 = trend)
-    active: false
+    active: true
     source: oecd
     load_type: incremental
     expected_update_frequency: monthly
@@ -164,7 +165,7 @@ series:
     category: growth
     frequency: m
     units: Index (100 = trend)
-    active: false
+    active: true
     source: oecd
     load_type: incremental
     expected_update_frequency: monthly
@@ -181,7 +182,7 @@ series:
     category: growth
     frequency: m
     units: Index (100 = trend)
-    active: false
+    active: true
     source: oecd
     load_type: incremental
     expected_update_frequency: monthly

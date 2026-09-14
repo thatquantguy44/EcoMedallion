@@ -1,20 +1,25 @@
 # Spec 006: Free Source Expansion — Evaluating New APIs and Scrapeable Data
 
-Status: evaluation framework + ranked candidate list, **plus one shipped
-implementation slice.** IMF/OECD endpoints **live-verified 2026-09-12**
-(§5.1); **OECD's first source client shipped 2026-09-12** (`sources/oecd.py`,
-`manifests/oecd_cli.yml`, `config/data_licensing.yml`, `docs/catalog/oecd.md`,
-`tests/test_oecd.py`, wired into `pipeline.SOURCE_FACTORIES`) — see §7. It
-ships `active: false` per this spec's own acceptance criteria; **activating
-it is a separate, deliberate decision, not yet made.** Kenneth French
-licensing still unverified (network access to verify it is not available in
-every environment this spec gets worked from — see §7 step 2).
+Status: evaluation framework + ranked candidate list, **plus one shipped and
+activated implementation slice.** IMF/OECD endpoints **live-verified
+2026-09-12** (§5.1); **OECD's first source client shipped 2026-09-12**
+(`sources/oecd.py`, `manifests/oecd_cli.yml`, `config/data_licensing.yml`,
+`docs/catalog/oecd.md`, `tests/test_oecd.py`, wired into
+`pipeline.SOURCE_FACTORIES`) — see §7. It shipped `active: false` per this
+spec's own acceptance criteria, then was **activated 2026-09-14** in a
+separate, deliberate commit as that criteria required — `oecd` now shows up
+in `fred_pipeline validate`'s "Active sources" line, and the
+`--licensing-review` gate still passes (`redistribution_allowed: false`
+clears it, as designed). Kenneth French licensing still unverified (network
+access to verify it is not available in every environment this spec gets
+worked from — see §7 step 2).
 Last verified: 2026-09-14
 Primary owner: TBD
 Target: decide which free sources are worth adding next, and on what evidence
-Recommended first build: **OECD** (`DSD_STES@DF_CLI`) — **done, see §7.**
-Next: Kenneth French (needs a license check) or activating the OECD manifest
-that already shipped.
+Recommended first build: **OECD** (`DSD_STES@DF_CLI`) — **done and active,
+see §7.**
+Next: Kenneth French (needs a license check, blocked on network access) or
+IMF (needs a new SDMX 3.0 structure parser, §5.1).
 
 ## 1. Goal
 
@@ -276,16 +281,21 @@ fixtures rather than live calls.
 open version segment), registered in `pipeline.SOURCE_FACTORIES`, a
 `config/data_licensing.yml` entry (`review_status: provisional`,
 `redistribution_allowed: false` per open decision #3), `manifests/oecd_cli.yml`
-(10 Composite Leading Indicator series, `active: false`, with its own
+(10 Composite Leading Indicator series, shipped `active: false`, with its own
 verification note explaining it deliberately skips the generic
 `⚠️ VERIFY BEFORE ACTIVATING` header — every series was live-verified during
 construction, not assembled from documentation), `docs/catalog/oecd.md`, and
 `tests/test_oecd.py`. `docs/instructions/adding_a_source.md` (the file open
 decision #4 below was about) now documents OECD as the SDMX/composite-id
-worked example. **Not done as part of this slice, and each a separate
-decision:** activating the manifest (`active: true`), and the Kenneth French
-license check (§7 step 2, still blocked on network access in every
-environment this has been worked from since).
+worked example.
+
+**✅ DONE 2026-09-14 — OECD manifest activated** (`active: true` on all 10
+series, a separate, deliberate commit as the acceptance criteria required —
+`oecd` now shows up in `fred_pipeline validate`'s "Active sources" output,
+verified locally with and without `--licensing-review`, both passing). Still
+outstanding, each a separate decision: the Kenneth French license check (§7
+step 2, still blocked on network access in every environment this has been
+worked from since), and building a second source (IMF or Kenneth French).
 
 ## 8. Acceptance Criteria
 
