@@ -1015,13 +1015,28 @@ def test_last_ingested_at_by_series_returns_max_per_series(tmp_path):
     wh.merge_silver(
         [
             _silver_row(
-                "DGS10", "2024-01-01", "", 4.1, 1, ingested_at="2024-01-02T00:00:00+00:00"
+                "DGS10",
+                "2024-01-01",
+                "",
+                4.1,
+                1,
+                ingested_at="2024-01-02T00:00:00+00:00",
             ),
             _silver_row(
-                "DGS10", "2024-01-02", "", 4.2, 1, ingested_at="2024-01-03T00:00:00+00:00"
+                "DGS10",
+                "2024-01-02",
+                "",
+                4.2,
+                1,
+                ingested_at="2024-01-03T00:00:00+00:00",
             ),
             _silver_row(
-                "DGS2", "2024-01-01", "", 4.5, 1, ingested_at="2024-01-01T00:00:00+00:00"
+                "DGS2",
+                "2024-01-01",
+                "",
+                4.5,
+                1,
+                ingested_at="2024-01-01T00:00:00+00:00",
             ),
         ]
     )
@@ -1030,3 +1045,29 @@ def test_last_ingested_at_by_series_returns_max_per_series(tmp_path):
         "DGS2": "2024-01-01T00:00:00+00:00",
     }
     wh.close()
+
+
+# ---- _compute_parallel worker-count override -------------------------------
+
+
+def test_compute_parallel_respects_max_workers_override(monkeypatch):
+    import fred_pipeline.local_store as local_store_module
+
+    tasks = {str(i): (lambda i=i: i) for i in range(6)}
+
+    monkeypatch.setattr(local_store_module, "_MAX_WORKERS_OVERRIDE", None)
+    assert local_store_module._compute_parallel(dict(tasks)) == {
+        str(i): i for i in range(6)
+    }
+
+    # A small explicit cap -- still correct, just fewer concurrent workers.
+    monkeypatch.setattr(local_store_module, "_MAX_WORKERS_OVERRIDE", "2")
+    assert local_store_module._compute_parallel(dict(tasks)) == {
+        str(i): i for i in range(6)
+    }
+
+    # "0" clamps to 1 (a single-worker pool), not zero workers.
+    monkeypatch.setattr(local_store_module, "_MAX_WORKERS_OVERRIDE", "0")
+    assert local_store_module._compute_parallel(dict(tasks)) == {
+        str(i): i for i in range(6)
+    }
