@@ -1,12 +1,20 @@
 # Spec 006: Free Source Expansion — Evaluating New APIs and Scrapeable Data
 
-Status: evaluation framework + ranked candidate list (no implementation).
-IMF/OECD endpoints **live-verified 2026-09-12** (§5.1); Kenneth French
-licensing still unverified.
-Last verified: 2026-09-12
+Status: evaluation framework + ranked candidate list, **plus one shipped
+implementation slice.** IMF/OECD endpoints **live-verified 2026-09-12**
+(§5.1); **OECD's first source client shipped 2026-09-12** (`sources/oecd.py`,
+`manifests/oecd_cli.yml`, `config/data_licensing.yml`, `docs/catalog/oecd.md`,
+`tests/test_oecd.py`, wired into `pipeline.SOURCE_FACTORIES`) — see §7. It
+ships `active: false` per this spec's own acceptance criteria; **activating
+it is a separate, deliberate decision, not yet made.** Kenneth French
+licensing still unverified (network access to verify it is not available in
+every environment this spec gets worked from — see §7 step 2).
+Last verified: 2026-09-14
 Primary owner: TBD
 Target: decide which free sources are worth adding next, and on what evidence
-Recommended first build: **OECD** (`DSD_STES@DF_CLI`) — see §7
+Recommended first build: **OECD** (`DSD_STES@DF_CLI`) — **done, see §7.**
+Next: Kenneth French (needs a license check) or activating the OECD manifest
+that already shipped.
 
 ## 1. Goal
 
@@ -263,6 +271,22 @@ shipping `active: false` with the `⚠️ VERIFY BEFORE ACTIVATING` header, a
 fails CI for an active source with no catalog page), and tests with recorded
 fixtures rather than live calls.
 
+**✅ DONE 2026-09-12 — OECD's first slice shipped:** `src/fred_pipeline/sources/oecd.py`
+(composite `OECD:<agency>:<dataflow>:<key>` series ids, no-vintages handling,
+open version segment), registered in `pipeline.SOURCE_FACTORIES`, a
+`config/data_licensing.yml` entry (`review_status: provisional`,
+`redistribution_allowed: false` per open decision #3), `manifests/oecd_cli.yml`
+(10 Composite Leading Indicator series, `active: false`, with its own
+verification note explaining it deliberately skips the generic
+`⚠️ VERIFY BEFORE ACTIVATING` header — every series was live-verified during
+construction, not assembled from documentation), `docs/catalog/oecd.md`, and
+`tests/test_oecd.py`. `docs/instructions/adding_a_source.md` (the file open
+decision #4 below was about) now documents OECD as the SDMX/composite-id
+worked example. **Not done as part of this slice, and each a separate
+decision:** activating the manifest (`active: true`), and the Kenneth French
+license check (§7 step 2, still blocked on network access in every
+environment this has been worked from since).
+
 ## 8. Acceptance Criteria
 
 - §5/§6 candidate rows carry a verified/assumed marker and a date — no
@@ -316,7 +340,16 @@ point-in-time correctness as a first-class principle and already carries
 explicit monthly vintages is an unusually clean PIT input. Worth a deliberate
 decision rather than a default skip, though **not** in the first build.
 
-**🟡 #4 — Should `docs/adding_a_source.md` exist?** `docs/deployment/deployment_runbook.md`
-references it as the place to look when adding a source, but **the file does
-not exist**. Whichever source is built next is the natural moment to write it
-from the actual steps taken, rather than reconstructing them later.
+**✅ RESOLVED #4 — the doc already existed, just at a different path; now
+updated with OECD.** *Found and fixed 2026-09-14.* The premise was slightly
+wrong: `docs/adding_a_source.md` doesn't exist, but
+`docs/instructions/adding_a_source.md` does — it was relocated during an
+earlier "reorganize docs into subfolders" commit and
+`docs/deployment/deployment_runbook.md`'s reference was never updated to
+follow it, which is what made it look missing. Fixed the reference, and (per
+this decision's original spirit — "whichever source is built next is the
+natural moment") added OECD as this doc's SDMX/composite-series-id worked
+example, since it's the source that actually got built. The doc's per-source
+table still doesn't cover `bis`, `ishares`, `stooq`, or `tiingo` — out of
+scope for this pass; flagged in the doc itself rather than silently
+backfilled.

@@ -8,13 +8,18 @@ silver row schema and never inspect where a row came from. Adding a new source
 pipeline.
 
 FRED has been refactored onto the shared transport, and **BLS**, **EIA**,
-**ECB**, **US Treasury**, **World Bank**, **BEA**, **Census**, and **SEC** (company
-financials) are wired through the orchestrator end-to-end as additional,
-differently-shaped sources. See `src/fred_pipeline/sources/` and each source's
-`tests/test_*_client.py` (each runs its source through `FredPipeline` and
-asserts series are dispatched to the right client). Treasury, World Bank,
-Census, ECB, and SEC are keyless (SEC needs a descriptive User-Agent); EIA and
-BEA require a key.
+**ECB**, **US Treasury**, **World Bank**, **BEA**, **Census**, **SEC** (company
+financials), and **OECD** are wired through the orchestrator end-to-end as
+additional, differently-shaped sources. See `src/fred_pipeline/sources/` and
+each source's `tests/test_*_client.py` (each runs its source through
+`FredPipeline` and asserts series are dispatched to the right client).
+Treasury, World Bank, Census, ECB, OECD, and SEC are keyless (SEC needs a
+descriptive User-Agent); EIA and BEA require a key.
+
+(This doc walks the `HTTPSource`-per-source pattern using OECD as
+`specs/spec006`'s worked example. `bis.py`, `ishares.py`, `stooq.py`, and
+`tiingo.py` aren't covered below — read them directly if extending one of
+those; `bis.py` in particular shares OECD's SDMX-CSV parsing shape.)
 
 SEC is the one that exercises the point-in-time machinery: each filing's `filed`
 date becomes `realtime_start`, so restatements/amendments land as genuine
@@ -42,6 +47,7 @@ src/fred_pipeline/sources/
   bea.py        # BEAClient: UserID auth, table:line series ids, Error-block on 200
   census.py     # CensusClient: key-optional, 2-D array payload, predicate series ids
   sec.py        # SECClient: keyless + User-Agent header, XBRL vintages (filed date)
+  oecd.py       # OECDClient: keyless SDMX 2.1 CSV, agency:dataflow:key series ids, no vintages
 ```
 
 `fred_pipeline.fred_client` remains as a thin back-compat shim re-exporting
@@ -105,8 +111,12 @@ The following are implemented — a series declaring `source: bls` flows through
    existing manifest valid; a BLS series sets `source: bls`. See the shipped
    demo `manifests/bls_labor.yml` (inactive by default).
 2. **Client selection.** `pipeline.SOURCE_FACTORIES` maps `source` → a client
-   factory (`{"fred", "bls", "eia", "treasury", "worldbank", "bea", "census",
-   "sec", "ecb"}`). `FredPipeline._client_for(spec)`
+   factory (currently `{"fred", "bls", "eia", "ecb", "oecd", "treasury",
+   "worldbank", "bis", "bea", "census", "sec", "stooq", "ishares", "tiingo"}`
+   — this doc covers the first nine end-to-end; see "Worked example: OECD"
+   below for the SDMX composite-id case, and `sources/bis.py` /
+   `sources/stooq.py` / `sources/ishares.py` / `sources/tiingo.py` directly
+   for the rest). `FredPipeline._client_for(spec)`
    resolves and caches the right client per series; unknown sources fail that
    one series (per-series isolation) rather than the run. Clients can also be
    injected via the `clients=` constructor arg (used in tests).
@@ -128,6 +138,41 @@ inactive demo `manifests/eia_energy.yml`). The recipe for the next one:
 3. Author a manifest with `source: <name>`.
 
 That's the whole change — nothing in Bronze/Silver/Gold moves.
+
+### Worked example: OECD, a multi-part-id SDMX source (`specs/spec006`)
+
+OECD (`sources/oecd.py`) followed the same recipe but is worth reading as the
+example for a source whose natural id doesn't fit a single string cleanly.
+OECD's REST path needs three coordinates — agency, dataflow, key — so
+`series_id` in the manifest is `OECD:<agency>:<dataflow>:<key>` and
+`parse_oecd_series_id()` splits it on `:` before every request. The agency
+segment exists because it's genuinely **not** always `OECD` — the same public
+catalogue also serves flows owned by `ESTAT` and `IAEG-SDGs`. This is the same
+shape `treasury.py` (`<dataset>:<field>`) and `worldbank.py`
+(`<country>:<indicator>`) already established for sources whose real
+identifier isn't a bare code — a synthetic composite id, not a new mechanism.
+
+Two things worth carrying into the next SDMX source (Eurostat/IMF per
+`specs/spec006` §5.1, or any future OECD-family dataflow):
+
+- **Self-contained parsing, deliberately duplicated.** `oecd.py` doesn't
+  import `ecb.py`'s CSV helpers even though OECD serves the identical SDMX
+  2.1 CSV shape (`TIME_PERIOD`/`OBS_VALUE`) — `bis.py` makes the same choice.
+  Each source client owns its own parsing so one source's fix or bug can't
+  silently change another's output.
+- **No vintages is a real, source-level fact, not a gap to fill in later.**
+  OECD's SDMX CSV carries no `VALID_FROM`/`VALID_TO`, so
+  `realtime_start`/`realtime_end` are always empty and the manifest ships
+  `vintage_enabled: false` — point-in-time queries over OECD data resolve to
+  latest-revised only. Don't invent a vintage timestamp to satisfy the
+  schema; leave it empty and say why, the way `oecd.py`'s module docstring
+  does.
+
+A dedicated `discover-oecd` CLI command doesn't exist and isn't needed:
+`catalogs/ecb_discovery.py`'s structure-XML parser reads OECD's dataflow
+catalogue unmodified (see `docs/catalog/oecd.md` for the one-line usage) —
+another case of reusing existing machinery rather than building a parallel
+discovery path per source.
 
 ### Per-source lineage in the natural key
 

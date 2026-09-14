@@ -284,4 +284,4 @@ Run after the first ingestion in an environment:
 **Not built (optional future work, not required for go-live):** per-source
 metadata reconciliation for BLS/EIA/ECB (reconcile is FRED-only and skips other
 sources); per-frequency EIA incremental windowing; multi-series batching per
-source. See `docs/adding_a_source.md`.
+source. See `docs/instructions/adding_a_source.md`.
