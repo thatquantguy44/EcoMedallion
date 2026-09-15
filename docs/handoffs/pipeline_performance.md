@@ -322,6 +322,8 @@ These resumable compute functions have been created and tested in isolation, but
 
 - **`resume_equity_total_return_index()`** (commit b08f2c3, 2026-09-15) — per-ticker cumulative return index. Entity key: ticker. State: frontier_date, price/total_return indices, prev_close. Ready for integration once the pattern is proven stable on `gold_curve_spread_daily` et al. Touched-ticker detection: which tickers received new Tiingo data since last build.
 
+- **`resume_recession_probability()`** (commit 16a6227, 2026-09-15) — global time-series IRLS logistic regression model with warm-start, expands at each new USREC date. State: frontier_date (last USREC date processed), model_weights_by_horizon (beta coefficients per forecast horizon to warm-start the next IRLS iteration). Returns only new rows for USREC dates past the frontier. Ready for integration. Touched-USREC detection: simple, automatic (single series `USREC` in manifest, dated inputs).
+
 Further entries here as additional resumable functions are created before their integration tasks are scheduled.
 
 ### Phase 3: what's left, and why it's parked (evaluated, not just unstarted)
