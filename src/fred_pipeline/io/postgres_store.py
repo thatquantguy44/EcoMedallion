@@ -12,17 +12,23 @@ import hashlib
 import re
 from collections.abc import Iterable, Mapping, Sequence
 from types import TracebackType
-from typing import Any, Self
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    # typing.Self doesn't exist until Python 3.11 (PEP 673), but this repo
+    # supports >=3.10; TYPE_CHECKING-gated so it never actually executes at
+    # runtime (annotations are lazily-stringified anyway, per the
+    # __future__ import above) while still satisfying static type checkers
+    # and ruff's PYI034 (__enter__ should return Self).
+    from typing import Self
 
 from fred_pipeline.audit import EtlRun, EtlSeriesRun
 from fred_pipeline.config import PipelineConfig
 from fred_pipeline.io.local_store import (
-    LocalWarehouse,
-)
-from fred_pipeline.io.local_store import (
     _SCHEMA as _SQLITE_SCHEMA,
 )
 from fred_pipeline.io.local_store import (
+    LocalWarehouse,
     _encode,
 )
 from fred_pipeline.io.postgres_config import resolve_postgres_settings
