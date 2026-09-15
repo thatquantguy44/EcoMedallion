@@ -161,10 +161,13 @@ class HTTPSource:
         *,
         method: str = "GET",
         as_text: bool = False,
+        as_bytes: bool = False,
     ) -> Any:
         """Fetch with retry + rate limiting. Returns parsed JSON by default; with
         ``as_text=True`` returns the raw response body as a string (for CSV
-        sources like Stooq / ETF-holdings files)."""
+        sources like Stooq / ETF-holdings files); with ``as_bytes=True`` returns
+        the raw response body as bytes (for binary downloads like French's ZIP
+        archives)."""
         if endpoint.startswith(("http://", "https://")):
             url = endpoint
         else:
@@ -183,6 +186,8 @@ class HTTPSource:
 
             status = getattr(resp, "status_code", 200)
             if status == 200:
+                if as_bytes:
+                    return resp.content
                 return resp.text if as_text else resp.json()
             if status in self.retryable_status and attempt < self.max_retries:
                 last_exc = self.error_cls(

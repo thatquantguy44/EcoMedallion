@@ -33,6 +33,7 @@ SOURCE_TO_DOC = {
     "census": "census.md",
     "ecb": "ecb.md",
     "eia": "eia.md",
+    "french": "french.md",
     "ishares": "ishares.md",
     "oecd": "oecd.md",
     "sec": "sec.md",
