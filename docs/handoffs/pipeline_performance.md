@@ -45,16 +45,18 @@ not more due-date-gating work itself.
    change, not just a matching key — a prerequisite for Phase 3 below, not
    optional (see spec003 for why).
 
-**Not yet done: a clean, full-scale timing run against the real
-`fred_local.db`.** Attempted 5 times this session (2026-09-13), all blocked
-by this dev machine running out of memory — every attempt died at the exact
-same point, right after `feature_transforms` finishes and before
-`_compute_parallel` starts (never got a single `pf.*` timing line). This is
-**not a bug in the pipeline** — see the diagnosis below — and it's
-informational at this point, not blocking further Phase 3 work, since the
-root causes are already fixed by direct code inspection and the correctness
-of every fix is proven by the full test suite (including end-to-end
-integration tests against real `build_gold()` runs on small fixtures).
+**✅ DONE: a clean, full-scale timing run against the real
+`fred_local.db`** (see "The first real full-scale timing number" further
+below for the actual numbers). Blocked 5 times earlier in this history
+(2026-09-13) by this dev machine running out of memory — every attempt
+died at the exact same point, right after `feature_transforms` finishes
+and before `_compute_parallel` starts (never got a single `pf.*` timing
+line). This was **not a bug in the pipeline** — see the diagnosis below —
+and wasn't blocking further Phase 3 work even while unresolved, since the
+root causes were already fixed by direct code inspection and the
+correctness of every fix was proven by the full test suite (including
+end-to-end integration tests against real `build_gold()` runs on small
+fixtures).
 
 Diagnosis, in case this recurs: this machine has 24GB RAM and, at the time
 of the attempts, ~19.5GB already committed to other running apps (VS Code
