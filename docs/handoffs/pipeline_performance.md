@@ -316,6 +316,14 @@ value is already computed fresh in Python that build — as
   per-entity append/backfill split. Generally: recompute fully every time,
   cheaply, rather than force-fitting the checkpoint pattern.
 
+### Follow-on integration tasks (resumable functions written, not yet wired in)
+
+These resumable compute functions have been created and tested in isolation, but the full `_build_gold_inner()` integration (checkpoint I/O, touched-entity detection, append logic, checkpoint updates) is deferred pending validation on real builds:
+
+- **`resume_equity_total_return_index()`** (commit b08f2c3, 2026-09-15) — per-ticker cumulative return index. Entity key: ticker. State: frontier_date, price/total_return indices, prev_close. Ready for integration once the pattern is proven stable on `gold_curve_spread_daily` et al. Touched-ticker detection: which tickers received new Tiingo data since last build.
+
+Further entries here as additional resumable functions are created before their integration tasks are scheduled.
+
 ### Phase 3: what's left, and why it's parked (evaluated, not just unstarted)
 
 These aren't "the next tier to do the same way" — each was looked at and
