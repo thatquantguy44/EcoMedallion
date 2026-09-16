@@ -1,6 +1,8 @@
 # FOMC Calendar Scraper — Spec & Plan
 
-**Status:** spec approved, implementation shipped alongside this document
+**Status:** spec approved, implementation shipped alongside this document.
+**The scraper is built but nothing runs it** — see §10 and
+[`specs/spec008`](../../specs/spec008/README.md), which automates that gap.
 **Owner:** pipeline / governance
 **Consumes:** <https://www.federalreserve.gov/monetarypolicy/fomccalendars.htm>
 **Produces:** the `meeting_dates` block of [`config/fomc.yml`](../../config/fomc.yml)
@@ -284,3 +286,53 @@ more.
 
 Suggested cadence: run `--check` from the same place that notices the 120-day
 runway test failing. The two together mean the config cannot expire unnoticed.
+
+## 10. Next: automating all of the above (spec008)
+
+The sentence above is the weak point of this whole design, and it went
+unnoticed until it was written down: *"the same place that notices the
+120-day runway test failing"* **does not exist.** There is no such place.
+The only thing that notices is
+`tests/test_fomc_probability.py::test_fomc_meeting_dates_have_runway`, and
+the only way it notices is by failing `pytest -q` — which
+`.github/workflows/ci.yml` runs on every push to every branch and on every
+pull request.
+
+Measured 2026-09-15: the last configured meeting is `2028-01-26`, leaving
+**498 days** of runway. That test therefore starts failing on
+**2027-09-28**, and when it does it turns *every unrelated pull request in
+this repo red* until someone hand-edits `config/fomc.yml`. The alarm is
+right to exist; routing it through everyone else's CI is not.
+
+Two more gaps of the same kind:
+
+- **The parser has still never seen the real page.** §7's warning stands —
+  `tests/fixtures/fomccalendars.html` is hand-built, and the live
+  acceptance run it calls for has not happened. `config/fomc.yml`'s own
+  provenance comment (2026-07-17) predates the scraper by a month, so even
+  the shipped dates are not scraper-derived.
+- **Nothing can tell "the Fed hasn't published further out yet" from
+  "nobody has checked lately."** The config records provenance in prose
+  comments, which nothing can read.
+
+[`specs/spec008`](../../specs/spec008/README.md) covers all three. Its
+shape, briefly:
+
+| | |
+|---|---|
+| **Where it runs** | a scheduled GitHub Actions workflow — the only place in this toolchain with egress to `federalreserve.gov` at all (see §8: the dev container is blocked), and the only one whose cadence is time-based rather than activity-based |
+| **On new dates** | opens a reviewable PR on a fixed branch with the dates inserted and provenance bumped — preserving §2's "a person reviews the diff" rule while removing the retyping |
+| **On a moved date** | opens an issue, edits nothing — a vanished date must never be auto-removed |
+| **On a structure change** | saves the HTML it actually received as an artifact and opens an issue with both backends' errors, so whoever picks it up has the page *as it broke* |
+| **On shrinking runway** | escalates on its own at 270/120/45/0 days; silent above 270 so it never becomes noise |
+| **The blocking test** | drops to a 45-day floor and stops being the alarm |
+
+Decision 7 there also retires §7's fixture caveat permanently: successful
+runs refresh the committed fixture from real markup, so it stops being a
+hand-built guess.
+
+**Phase 0 gates everything else and needs one command from any machine with
+normal internet** — `python scripts/scrape_fomc_calendar.py --save-html
+tests/fixtures/fomccalendars.html`, then eyeball the dates and commit the
+capture. Automating a parser that has never met its input would just
+industrialize a guess.
