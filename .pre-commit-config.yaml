@@ -25,3 +25,14 @@ repos:
       - id: ruff-check
         args: ["--fix"]
       - id: ruff-format
+
+  - repo: local
+    hooks:
+      - id: check-doc-staleness
+        name: Check for new doc staleness
+        entry: python scripts/check_doc_staleness.py
+        language: system
+        files: ^(src/fred_pipeline/cli\.py|README\.md|docs/dictionary/data_dictionary\.md|docs/handoffs/.*\.md)$
+        pass_filenames: false
+        stages: [commit]
+        types: []

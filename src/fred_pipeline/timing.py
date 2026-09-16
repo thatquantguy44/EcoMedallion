@@ -11,17 +11,26 @@ from __future__ import annotations
 import functools
 import logging
 import time
-from typing import Any, Callable, Optional, TypeVar
+from collections.abc import Callable
+from typing import Any, TypeVar
 
 F = TypeVar("F", bound=Callable[..., Any])
 
 
-def timed(name: Optional[str] = None, *, logger: Optional[logging.Logger] = None) -> Callable[[F], F]:
+def timed(
+    name: str | None = None,
+    *,
+    logger: logging.Logger | None = None,
+    progress_callback: Callable[[str, float], None] | None = None,
+) -> Callable[[F], F]:
     """Log the wrapped callable's elapsed wall-clock time on return or raise.
 
     ``name`` overrides the logged label (defaults to the function's
     ``__qualname__``, e.g. ``FredPipeline.run``). ``logger`` overrides the
     logger used (defaults to one named after the wrapped function's module).
+    ``progress_callback``, if provided, is called with (label, elapsed_seconds)
+    when the wrapped function completes successfully (typically for progress
+    bar updates).
     """
 
     def decorator(func: F) -> F:
@@ -34,9 +43,14 @@ def timed(name: Optional[str] = None, *, logger: Optional[logging.Logger] = None
             try:
                 result = func(*args, **kwargs)
             except Exception:
-                log.exception("%s failed after %.2fs", label, time.perf_counter() - start)
+                log.exception(
+                    "%s failed after %.2fs", label, time.perf_counter() - start
+                )
                 raise
-            log.info("%s finished in %.2fs", label, time.perf_counter() - start)
+            elapsed = time.perf_counter() - start
+            log.info("%s finished in %.2fs", label, elapsed)
+            if progress_callback:
+                progress_callback(label, elapsed)
             return result
 
         return wrapper  # type: ignore[return-value]
