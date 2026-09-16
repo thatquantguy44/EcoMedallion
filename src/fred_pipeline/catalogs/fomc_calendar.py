@@ -39,7 +39,7 @@ from __future__ import annotations
 import re
 import sys
 from collections.abc import Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date
 
 FOMC_CALENDAR_URL = "https://www.federalreserve.gov/monetarypolicy/fomccalendars.htm"
@@ -103,6 +103,12 @@ class FOMCMeeting:
     year: int
     is_projection_meeting: bool = False
     raw_label: str = ""
+    # True when this came from the advance-notice sentence below the last year
+    # panel rather than from a panel row. Worth knowing: that sentence is the
+    # single most fragile input this parser has (it caused one of the two bugs
+    # the first live run found), and it is the ONLY source of the furthest-out
+    # meeting. A caller that cares about the horizon is depending on prose.
+    from_advance_notice: bool = False
 
     @property
     def is_two_day(self) -> bool:
@@ -378,7 +384,7 @@ def parse_fomc_calendar(html: str, *, warn: bool = True) -> list[FOMCMeeting]:
             int(notice.group("year")),
         )
         if meeting is not None and meeting.decision_date not in meetings:
-            meetings[meeting.decision_date] = meeting
+            meetings[meeting.decision_date] = replace(meeting, from_advance_notice=True)
 
     if not meetings:
         raise FOMCScrapeError(
@@ -387,6 +393,27 @@ def parse_fomc_calendar(html: str, *, warn: bool = True) -> list[FOMCMeeting]:
             "docs/handoffs/fomc_calendar_scraper.md §4 and update the parser. "
             "Refusing to return an empty list, which a caller could mistake "
             "for 'no meetings scheduled'."
+        )
+
+    overfull = overfull_years(per_year)
+    if overfull:
+        # Deliberately an exception, not a warning. The two bugs the first live
+        # run found (2026-09-15) both manifested as EXTRA meetings, and the
+        # only structural check at the time fired on too FEW -- so both sailed
+        # through silently. A phantom meeting is strictly worse than a missing
+        # one here: a missing date shortens the modelled path, which the runway
+        # alarm eventually catches, while a phantom date the Fed never
+        # scheduled is chained into the rate path and nothing downstream
+        # questions it. See docs/handoffs/fomc_calendar_scraper.md §11.
+        detail = ", ".join(f"{y}: {per_year[y]} meetings" for y in sorted(overfull))
+        raise FOMCScrapeError(
+            f"parsed MORE than {EXPECTED_MEETINGS_PER_YEAR} scheduled meetings "
+            f"in a year ({detail}). The Fed schedules "
+            f"{EXPECTED_MEETINGS_PER_YEAR}/year, so this means the parser is "
+            f"reading something that is not a meeting row -- prose, a footer, "
+            f"a publication date. Re-read "
+            f"docs/handoffs/fomc_calendar_scraper.md §4.1 and §11. Refusing to "
+            f"return dates that would be chained into the modelled rate path."
         )
 
     if warn:
@@ -405,6 +432,15 @@ def parse_fomc_calendar(html: str, *, warn: bool = True) -> list[FOMCMeeting]:
     return sorted(meetings.values(), key=lambda m: m.decision_date)
 
 
+def overfull_years(per_year: dict[int, int]) -> list[int]:
+    """Years that parsed to more scheduled meetings than the Fed ever holds.
+
+    Split out from :func:`parse_fomc_calendar` so the rule is testable on its
+    own and so a caller can ask the question without re-parsing.
+    """
+    return [y for y, n in per_year.items() if n > EXPECTED_MEETINGS_PER_YEAR]
+
+
 # ---- config diffing ---------------------------------------------------------
 
 
@@ -414,6 +450,12 @@ class CalendarDiff:
 
     missing_from_config: tuple[date, ...]
     absent_upstream: tuple[date, ...]
+    # True when `absent_upstream` is most likely explained by the advance-notice
+    # sentence no longer parsing, rather than by a meeting actually moving.
+    # Without this the two are indistinguishable, and they want opposite
+    # responses: a moved meeting is a calendar question for a human, a
+    # stopped-parsing note is a parser bug.
+    advance_notice_missing: bool = False
 
     @property
     def in_sync(self) -> bool:
@@ -433,12 +475,85 @@ def diff_against_config(
     would report drift on every run.
     """
     today = today or date.today()
+    scraped = list(scraped)
     scraped_future = {m.decision_date for m in scraped if m.decision_date >= today}
     configured_future = {d for d in configured if d >= today}
+    absent_upstream = tuple(sorted(configured_future - scraped_future))
+
+    # The furthest-out meeting comes only from the advance-notice sentence. If
+    # that sentence stops matching, the horizon silently shrinks to the last
+    # panel row -- and the config's furthest date then shows up as "the Fed no
+    # longer lists this", which reads as a MOVED MEETING and sends whoever gets
+    # the alert to the wrong problem entirely. Distinguish the two by their
+    # signature: no advance-notice meeting was parsed at all, yet the config
+    # has dates beyond everything we did parse.
+    saw_advance_notice = any(m.from_advance_notice for m in scraped)
+    furthest_scraped = max(scraped_future, default=None)
+    advance_notice_missing = bool(
+        absent_upstream
+        and not saw_advance_notice
+        and furthest_scraped is not None
+        and all(d > furthest_scraped for d in absent_upstream)
+    )
+
     return CalendarDiff(
         missing_from_config=tuple(sorted(scraped_future - configured_future)),
-        absent_upstream=tuple(sorted(configured_future - scraped_future)),
+        absent_upstream=absent_upstream,
+        advance_notice_missing=advance_notice_missing,
     )
+
+
+# ---- runway / escalation ----------------------------------------------------
+
+# Days of remaining calendar below which each escalation level kicks in.
+# spec008 §5 Decision 4. Ordered most- to least-slack; a level applies when
+# runway is <= its threshold and > the next one down.
+RUNWAY_THRESHOLDS: tuple[tuple[str, int], ...] = (
+    ("due", 270),  # open/refresh a tracking issue
+    ("priority", 120),  # escalate; label it
+    ("urgent", 45),  # last window a normal review cycle still fits in
+    ("expired", 0),  # the Gold tables are already emitting nothing
+)
+
+RUNWAY_OK = "ok"
+
+
+def runway_days(
+    meeting_dates: Iterable[date], *, today: date | None = None
+) -> int | None:
+    """Days until the LAST configured meeting. ``None`` if there are none.
+
+    ``today`` is injectable on purpose: a wall-clock read buried in a helper is
+    how the existing runway check became a test that fails on a fixed future
+    date regardless of the code around it.
+    """
+    dates = list(meeting_dates)
+    if not dates:
+        return None
+    return (max(dates) - (today or date.today())).days
+
+
+def runway_level(
+    meeting_dates: Iterable[date],
+    *,
+    today: date | None = None,
+    thresholds: tuple[tuple[str, int], ...] = RUNWAY_THRESHOLDS,
+) -> str:
+    """Escalation level for the remaining calendar runway.
+
+    Returns ``"ok"`` while there is more slack than the largest threshold, and
+    otherwise the most severe level whose threshold the runway has fallen to or
+    below. An empty calendar is ``"expired"`` -- there is nothing left to run
+    out, which is the same operational state.
+    """
+    remaining = runway_days(meeting_dates, today=today)
+    if remaining is None:
+        return "expired"
+    level = RUNWAY_OK
+    for name, threshold in thresholds:
+        if remaining <= threshold:
+            level = name
+    return level
 
 
 def format_yaml_block(meetings: Iterable[FOMCMeeting]) -> str:

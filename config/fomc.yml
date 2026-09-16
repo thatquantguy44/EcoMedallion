@@ -16,10 +16,24 @@
 # of 2028 is not published yet; add it when the Fed announces it, normally
 # about two years ahead.
 #
-# tests/test_fomc_probability.py fails when fewer than 120 days of runway
+# tests/test_fomc_probability.py fails when fewer than 45 days of runway
 # remain, because compute_fomc_probability filters to `d >= today` — an expired
 # list empties gold.fomc_probability / gold.fomc_meeting_path silently rather
-# than erroring.
+# than erroring. That test is a FLOOR, not the warning: the scheduled refresh
+# job is meant to have opened a PR long before it fires (spec008 §5).
+
+# Machine-readable provenance. The prose above is for humans; this block is so
+# tooling can tell "the Fed has not published further out yet" apart from
+# "nobody has checked lately" — two states that otherwise look identical from
+# inside this repo.
+calendar_provenance:
+  source_url: https://www.federalreserve.gov/monetarypolicy/fomccalendars.htm
+  last_verified: 2026-09-15
+  verified_by: scraper
+  # The Fed's own horizon, not merely our last row. Read off the advance-notice
+  # sentence below the last year panel, which is the only place it appears.
+  published_through: 2028-01-26
+
 meeting_dates:
   - "2026-07-29"
   - "2026-09-16"

@@ -32,8 +32,10 @@ def _config():
 
 def _row(series_id, value, obs_date="2026-07-17"):
     return {
-        "series_id": series_id, "observation_date": obs_date,
-        "value": value, "is_missing": False,
+        "series_id": series_id,
+        "observation_date": obs_date,
+        "value": value,
+        "is_missing": False,
     }
 
 
@@ -44,8 +46,10 @@ CFG = FOMCConfig(
     target_high_series="DFEDTARU",
     effective_rate_series="EFFR",
     tenors=(
-        FOMCTenorDef("DGS1MO", 1), FOMCTenorDef("DGS3MO", 3),
-        FOMCTenorDef("DGS6MO", 6), FOMCTenorDef("DGS1", 12),
+        FOMCTenorDef("DGS1MO", 1),
+        FOMCTenorDef("DGS3MO", 3),
+        FOMCTenorDef("DGS6MO", 6),
+        FOMCTenorDef("DGS1", 12),
     ),
 )
 
@@ -57,7 +61,8 @@ CFG = FOMCConfig(
 
 def test_load_fomc_config(tmp_path):
     p = tmp_path / "fomc.yml"
-    p.write_text(textwrap.dedent("""
+    p.write_text(
+        textwrap.dedent("""
         meeting_dates: ["2026-09-16", "2026-10-28"]
         bucket_step_bps: 25
         target_low_series: DFEDTARL
@@ -66,7 +71,8 @@ def test_load_fomc_config(tmp_path):
         tenors:
           - {series_id: DGS1MO, tenor_months: 1}
           - {series_id: DGS3MO, tenor_months: 3}
-    """))
+    """)
+    )
     cfg = load_fomc_config(str(p))
     assert cfg.meeting_dates == (date(2026, 9, 16), date(2026, 10, 28))
     assert len(cfg.tenors) == 2
@@ -80,8 +86,10 @@ def test_fomc_config_rejects_unsorted_meeting_dates():
     with pytest.raises(FOMCConfigError):
         FOMCConfig(
             meeting_dates=(date(2026, 10, 28), date(2026, 9, 16)),
-            bucket_step_bps=25, target_low_series="DFEDTARL",
-            target_high_series="DFEDTARU", effective_rate_series="EFFR",
+            bucket_step_bps=25,
+            target_low_series="DFEDTARL",
+            target_high_series="DFEDTARU",
+            effective_rate_series="EFFR",
             tenors=(FOMCTenorDef("DGS1MO", 1), FOMCTenorDef("DGS3MO", 3)),
         )
 
@@ -89,9 +97,12 @@ def test_fomc_config_rejects_unsorted_meeting_dates():
 def test_fomc_config_rejects_fewer_than_2_tenors():
     with pytest.raises(FOMCConfigError):
         FOMCConfig(
-            meeting_dates=(date(2026, 9, 16),), bucket_step_bps=25,
-            target_low_series="DFEDTARL", target_high_series="DFEDTARU",
-            effective_rate_series="EFFR", tenors=(FOMCTenorDef("DGS1MO", 1),),
+            meeting_dates=(date(2026, 9, 16),),
+            bucket_step_bps=25,
+            target_low_series="DFEDTARL",
+            target_high_series="DFEDTARU",
+            effective_rate_series="EFFR",
+            tenors=(FOMCTenorDef("DGS1MO", 1),),
         )
 
 
@@ -116,7 +127,9 @@ def test_forward_rate_bootstrap_matches_hand_computation():
     """(1+y1)**t1 * (1+f)**(t2-t1) == (1+y2)**t2 -- verified independently."""
     t1, y1 = 0.25, 4.0
     t2, y2 = 0.5, 4.5
-    expected_f = (((1 + y2 / 100) ** t2 / (1 + y1 / 100) ** t1) ** (1 / (t2 - t1)) - 1) * 100
+    expected_f = (
+        ((1 + y2 / 100) ** t2 / (1 + y1 / 100) ** t1) ** (1 / (t2 - t1)) - 1
+    ) * 100
     assert expected_f == pytest.approx(5.002404, abs=1e-5)
 
     # Reproduce it through compute_fomc_probability's first->second meeting
@@ -126,17 +139,22 @@ def test_forward_rate_bootstrap_matches_hand_computation():
     meeting1 = as_of + timedelta(days=round(t1 * 365))
     meeting2 = as_of + timedelta(days=round(t2 * 365))
     cfg = FOMCConfig(
-        meeting_dates=(meeting1, meeting2), bucket_step_bps=25,
-        target_low_series="DFEDTARL", target_high_series="DFEDTARU",
+        meeting_dates=(meeting1, meeting2),
+        bucket_step_bps=25,
+        target_low_series="DFEDTARL",
+        target_high_series="DFEDTARU",
         effective_rate_series="EFFR",
-        tenors=(FOMCTenorDef("T1", round(t1 * 365 / 30.4375)),
-                FOMCTenorDef("T2", round(t2 * 365 / 30.4375))),
+        tenors=(
+            FOMCTenorDef("T1", round(t1 * 365 / 30.4375)),
+            FOMCTenorDef("T2", round(t2 * 365 / 30.4375)),
+        ),
     )
     latest_rows = [
         _row("EFFR", 4.0, as_of.isoformat()),
         _row("DFEDTARL", 3.75, as_of.isoformat()),
         _row("DFEDTARU", 4.0, as_of.isoformat()),
-        _row("T1", y1, as_of.isoformat()), _row("T2", y2, as_of.isoformat()),
+        _row("T1", y1, as_of.isoformat()),
+        _row("T2", y2, as_of.isoformat()),
     ]
     out = compute_fomc_probability(latest_rows, cfg, as_of=as_of)
     path = {r["meeting_date"]: r for r in out["meeting_path"]}
@@ -153,9 +171,13 @@ def test_forward_rate_bootstrap_matches_hand_computation():
 
 def _easing_curve_rows():
     return [
-        _row("EFFR", 4.33), _row("DFEDTARL", 4.25), _row("DFEDTARU", 4.50),
-        _row("DGS1MO", 4.30), _row("DGS3MO", 4.10),
-        _row("DGS6MO", 3.95), _row("DGS1", 3.70),
+        _row("EFFR", 4.33),
+        _row("DFEDTARL", 4.25),
+        _row("DFEDTARU", 4.50),
+        _row("DGS1MO", 4.30),
+        _row("DGS3MO", 4.10),
+        _row("DGS6MO", 3.95),
+        _row("DGS1", 3.70),
     ]
 
 
@@ -180,7 +202,9 @@ def test_compute_fomc_probability_chains_meetings_forward():
 
 def test_compute_fomc_probability_excludes_past_meetings():
     out = compute_fomc_probability(
-        _easing_curve_rows(), CFG, as_of=date(2026, 11, 1),
+        _easing_curve_rows(),
+        CFG,
+        as_of=date(2026, 11, 1),
     )
     meeting_dates = {r["meeting_date"] for r in out["meeting_path"]}
     assert meeting_dates == {"2026-12-09"}
@@ -196,7 +220,9 @@ def test_compute_fomc_probability_no_config_returns_empty():
 
 def test_compute_fomc_probability_missing_curve_data_returns_empty():
     out = compute_fomc_probability(
-        [_row("EFFR", 4.33)], CFG, as_of=date(2026, 7, 17),
+        [_row("EFFR", 4.33)],
+        CFG,
+        as_of=date(2026, 7, 17),
     )
     assert out == {"probability": [], "meeting_path": []}
 
@@ -241,7 +267,17 @@ def test_local_warehouse_build_gold_populates_fomc_tables(tmp_path, monkeypatch)
 # anywhere. These two tests are deliberately time-dependent: they are the alarm
 # that fires while there is still time to refresh the list.
 
-MIN_RUNWAY_DAYS = 120  # ~2-3 meetings' notice to refresh the calendar
+# A FLOOR, not the alarm. This used to be 120 days, which made it the only
+# thing in the repo that noticed an expiring calendar -- and the way it noticed
+# was by failing `pytest -q`, which CI runs on every push to every branch and
+# every PR. An expiring FOMC config would have turned every unrelated pull
+# request red (2027-09-28, on the calendar as it stood).
+#
+# spec008 moves the warning to a scheduled job that opens a PR, and leaves this
+# as a last-resort gate: below 45 days there is no longer room for a normal
+# review cycle, so blocking a release is proportionate. See
+# specs/spec008/README.md §5 Decision 5.
+MIN_RUNWAY_DAYS = 45
 
 
 def test_fomc_config_has_a_future_meeting():
@@ -266,12 +302,17 @@ def test_fomc_meeting_dates_have_runway():
     last = max(cfg.meeting_dates)
     remaining = (last - date.today()).days
     assert remaining >= MIN_RUNWAY_DAYS, (
-        f"config/fomc.yml runs out in {remaining} days (last meeting {last}). "
-        f"Add the next year's meeting dates from "
-        f"https://www.federalreserve.gov/monetarypolicy/fomccalendars.htm — the "
-        f"Fed publishes roughly two years ahead. Use the DECISION date (the "
-        f"second day of each two-day meeting), keep the list ascending, and "
-        f"update the 'verified against' comment at the top of the file."
+        f"config/fomc.yml runs out in {remaining} days (last meeting {last}), "
+        f"which is past the point where the scheduled refresh job should have "
+        f"handled this.\n"
+        f"FIRST: look for an open PR on the automation/fomc-calendar-refresh "
+        f"branch, and for an open 'FOMC calendar refresh due' issue — the job "
+        f"may already have proposed the fix.\n"
+        f"If neither exists the job itself is broken; check its workflow run. "
+        f"To fix by hand, run `python scripts/scrape_fomc_calendar.py "
+        f"--missing-only` and paste the block into meeting_dates (DECISION "
+        f"dates — the second day of each two-day meeting; keep ascending), "
+        f"then update calendar_provenance at the top of the file."
     )
 
 

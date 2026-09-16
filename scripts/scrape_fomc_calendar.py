@@ -34,6 +34,7 @@ diff -- so this prints and a person pastes.
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from datetime import date
 from pathlib import Path
@@ -51,6 +52,8 @@ from fred_pipeline.catalogs.fomc_calendar import (  # noqa: E402
     fetch_calendar_html,
     format_yaml_block,
     parse_fomc_calendar,
+    runway_days,
+    runway_level,
 )
 
 DEFAULT_CONFIG = REPO_ROOT / "config" / "fomc.yml"
@@ -93,6 +96,14 @@ def _build_parser() -> argparse.ArgumentParser:
         "--check",
         action="store_true",
         help="exit non-zero if the config and the page disagree (CI/cron mode)",
+    )
+    p.add_argument(
+        "--json",
+        action="store_true",
+        help=(
+            "with --check, emit the result as JSON on stdout instead of prose "
+            "(for automation: parse this, never the human output)"
+        ),
     )
     p.add_argument(
         "--missing-only",
@@ -187,6 +198,41 @@ def main(argv: list[str] | None = None) -> int:
     configured = _configured_dates(args.config)
     diff = diff_against_config(meetings, configured)
 
+    if args.check and args.json:
+        configured_all = _configured_dates(args.config)
+        print(
+            json.dumps(
+                {
+                    "schema_version": "1.0",
+                    "in_sync": diff.in_sync,
+                    "missing_from_config": [
+                        d.isoformat() for d in diff.missing_from_config
+                    ],
+                    "absent_upstream": [d.isoformat() for d in diff.absent_upstream],
+                    # A stopped-parsing advance notice masquerades as a moved
+                    # meeting. Automation must branch on this, not on
+                    # absent_upstream alone.
+                    "advance_notice_missing": diff.advance_notice_missing,
+                    "parsed_count": len(meetings),
+                    "parsed_through": (
+                        meetings[-1].decision_date.isoformat() if meetings else None
+                    ),
+                    "configured_through": (
+                        max(configured_all).isoformat() if configured_all else None
+                    ),
+                    "runway_days": runway_days(configured_all),
+                    "runway_level": runway_level(configured_all),
+                    "yaml_to_add": format_yaml_block(
+                        m
+                        for m in meetings
+                        if m.decision_date in diff.missing_from_config
+                    ),
+                },
+                indent=2,
+            )
+        )
+        return 0 if diff.in_sync else 1
+
     if args.check:
         if diff.in_sync:
             print(f"in sync with {args.config} (future meetings only)")
@@ -199,10 +245,22 @@ def main(argv: list[str] | None = None) -> int:
                 )
             )
         if diff.absent_upstream:
-            print(
-                "\nDates in the config the Fed no longer lists "
-                "(a meeting may have moved — verify before removing):"
-            )
+            if diff.advance_notice_missing:
+                print(
+                    "\nDates in the config that are beyond everything parsed, "
+                    "with NO advance-notice sentence found on the page.\n"
+                    "This is most likely a PARSER problem, not a moved meeting: "
+                    "the Fed announces its\nfurthest-out meeting in prose below "
+                    "the last year panel, and if that wording\nchanges the "
+                    "horizon silently shrinks to the last panel row. Check the "
+                    "page for a\n'a two-day meeting is scheduled for ...' "
+                    "sentence before touching the config:"
+                )
+            else:
+                print(
+                    "\nDates in the config the Fed no longer lists "
+                    "(a meeting may have moved — verify before removing):"
+                )
             for d in diff.absent_upstream:
                 print(f"  - {d.isoformat()}")
         return 1

@@ -26,7 +26,7 @@ captured page is two-day, and the synthetic page has no one-day row either.
 from __future__ import annotations
 
 import os
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 
 import pytest
@@ -40,7 +40,10 @@ from fred_pipeline.catalogs.fomc_calendar import (
     fetch_calendar_html,
     fetch_calendar_html_requests,
     format_yaml_block,
+    overfull_years,
     parse_fomc_calendar,
+    runway_days,
+    runway_level,
 )
 
 FIXTURE = Path(__file__).parent / "fixtures" / "fomccalendars.html"
@@ -368,6 +371,145 @@ def test_diff_reports_configured_dates_the_fed_no_longer_lists():
         today=today,
     )
     assert diff.absent_upstream == (date(2026, 11, 4),)
+
+
+# ---- a lost advance notice must not look like a moved meeting ---------------
+
+
+def test_diff_flags_a_lost_advance_notice_rather_than_a_moved_meeting():
+    """The furthest meeting comes only from a prose sentence. If that stops
+    parsing, the config's last date shows up as 'the Fed no longer lists this'
+    -- which reads as a MOVED MEETING and points at entirely the wrong problem.
+    """
+    today = date(2027, 6, 1)
+    # Panels parsed fine; the advance-notice sentence did not match.
+    scraped = [_m(date(2027, 9, 15)), _m(date(2027, 12, 8))]
+    configured = [date(2027, 9, 15), date(2027, 12, 8), date(2028, 1, 26)]
+
+    diff = diff_against_config(scraped, configured, today=today)
+
+    assert diff.absent_upstream == (date(2028, 1, 26),)
+    assert diff.advance_notice_missing
+
+
+def test_a_genuinely_moved_meeting_is_not_blamed_on_the_advance_notice():
+    """The distinguishing signature is that the missing date is beyond
+    everything parsed. A date that vanished from the MIDDLE of the calendar is
+    a real calendar change, not a parsing failure.
+    """
+    today = date(2027, 6, 1)
+    scraped = [_m(date(2027, 9, 15)), _m(date(2027, 12, 8))]
+    configured = [date(2027, 9, 15), date(2027, 10, 27), date(2027, 12, 8)]
+
+    diff = diff_against_config(scraped, configured, today=today)
+
+    assert diff.absent_upstream == (date(2027, 10, 27),)
+    assert not diff.advance_notice_missing
+
+
+def test_a_present_advance_notice_clears_the_flag():
+    today = date(2027, 6, 1)
+    notice = FOMCMeeting(
+        decision_date=date(2028, 1, 26),
+        start_date=date(2028, 1, 25),
+        year=2028,
+        from_advance_notice=True,
+    )
+    diff = diff_against_config(
+        [_m(date(2027, 12, 8)), notice],
+        [date(2027, 12, 8), date(2028, 1, 26), date(2028, 3, 15)],
+        today=today,
+    )
+    # Something else is absent upstream, but the notice DID parse, so this is
+    # not the lost-sentence case.
+    assert diff.absent_upstream == (date(2028, 3, 15),)
+    assert not diff.advance_notice_missing
+
+
+def test_the_real_page_marks_its_advance_notice_meeting(meetings):
+    """On the captured page exactly one meeting comes from the notice."""
+    from_notice = [m for m in meetings if m.from_advance_notice]
+    assert [m.decision_date for m in from_notice] == [date(2028, 1, 26)]
+
+
+# ---- too many meetings is as wrong as too few -------------------------------
+
+
+def test_a_year_with_more_than_eight_meetings_raises():
+    """The blind spot that let both 2026-09-15 bugs through: the only
+    structural check fired on too FEW meetings, so two phantom dates sailed
+    past it. A phantom is worse than a gap -- a gap shortens the modelled path
+    and the runway alarm eventually catches it, while a phantom date the Fed
+    never scheduled gets chained into the rate path unquestioned.
+    """
+    rows = "".join(
+        f'<div class="row"><div>January {d}-{d + 1}</div></div>'
+        for d in range(1, 20, 2)
+    )
+    html = f'<h4>2027 FOMC Meetings</h4><div class="panel-body">{rows}</div>'
+
+    with pytest.raises(FOMCScrapeError, match="MORE than 8"):
+        parse_fomc_calendar(html, warn=False)
+
+
+def test_exactly_eight_meetings_is_fine():
+    """8/year is the Fed's actual cadence -- the guard must not fire on it."""
+    rows = "".join(
+        f'<div class="row"><div>January {d}-{d + 1}</div></div>'
+        for d in range(1, 16, 2)
+    )
+    html = f'<h4>2027 FOMC Meetings</h4><div class="panel-body">{rows}</div>'
+
+    assert len(parse_fomc_calendar(html, warn=False)) == 8
+
+
+@pytest.mark.parametrize(
+    "per_year,expected",
+    [
+        ({2027: 8}, []),
+        ({2027: 9}, [2027]),
+        ({2026: 8, 2027: 12}, [2027]),
+        ({2026: 1}, []),  # a preliminary year is short, not overfull
+    ],
+)
+def test_overfull_years(per_year, expected):
+    assert sorted(overfull_years(per_year)) == expected
+
+
+# ---- runway / escalation ----------------------------------------------------
+
+
+def test_runway_days_uses_the_last_meeting_and_an_injected_clock():
+    dates = [date(2027, 1, 27), date(2027, 12, 8)]
+    assert runway_days(dates, today=date(2027, 1, 1)) == 341
+    assert runway_days([], today=date(2027, 1, 1)) is None
+
+
+@pytest.mark.parametrize(
+    "remaining,expected",
+    [
+        (400, "ok"),
+        (271, "ok"),
+        (270, "due"),  # boundaries are inclusive of the more severe level
+        (121, "due"),
+        (120, "priority"),
+        (46, "priority"),
+        (45, "urgent"),
+        (1, "urgent"),
+        (0, "expired"),
+        (-30, "expired"),
+    ],
+)
+def test_runway_level_at_every_boundary(remaining, expected):
+    """Tested at the exact thresholds with an injected clock -- the wall-clock
+    read is what made the old runway check a time bomb."""
+    today = date(2027, 1, 1)
+    last = today + timedelta(days=remaining)
+    assert runway_level([last], today=today) == expected
+
+
+def test_runway_level_of_an_empty_calendar_is_expired():
+    assert runway_level([], today=date(2027, 1, 1)) == "expired"
 
 
 def test_diff_ignores_past_meetings():
