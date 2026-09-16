@@ -1,0 +1,191 @@
+<!doctype html>
+<!--
+  FIXTURE — SYNTHETIC, hand-built to the structure documented in
+  docs/handoffs/fomc_calendar_scraper.md §4.1. Meeting dates here are invented:
+  they follow the real Tuesday/Wednesday pattern and 8-per-year cadence so the
+  fixture does not teach a wrong shape, but they are not the Fed's dates.
+
+  This was the ONLY fixture until 2026-09-15, because egress to
+  federalreserve.gov was blocked from the environments where the scraper was
+  written. fomccalendars.html is now a real capture of the live page and is
+  the primary fixture.
+
+  KEEP THIS FILE. It is not redundant — it covers one shape the live page
+  does not contain anywhere: "(unscheduled)" emergency-meeting rows. Those
+  are the 2020 inter-meeting cuts, which have since aged off the Fed's
+  published calendar, and skipping them correctly is a real requirement.
+
+  (One-day meetings are a third shape with no real-markup coverage — every
+  meeting on the captured page is two-day — but this file has no one-day row
+  either. That shape is covered by test_label_shapes, which builds its own
+  inline HTML. Do not assume this fixture exercises it.)
+
+  If a future capture grows unscheduled rows back, this file can retire;
+  until then, deleting it silently drops coverage.
+-->
+<html lang="en">
+<head><title>The Fed - Meeting calendars and information</title></head>
+<body>
+<div id="article">
+  <h2>Meeting calendars and information</h2>
+  <p>
+    The Federal Open Market Committee (FOMC) holds eight regularly scheduled
+    meetings during the year and other meetings as needed.
+  </p>
+
+  <div class="panel panel-default">
+    <div class="panel-heading">
+      <h4 class="panel-title">2026 FOMC Meetings</h4>
+    </div>
+    <div class="panel-body">
+
+      <div class="row fomc-meeting">
+        <div class="fomc-meeting__month col-xs-5 col-sm-3"><strong>January</strong></div>
+        <div class="fomc-meeting__date col-xs-4 col-sm-9">27-28</div>
+        <div class="col-xs-3 col-md-2">
+          <p><a href="/newsevents/pressreleases/monetary20260128a.htm">Statement</a></p>
+          <p>Minutes: <a href="#">PDF</a> | <a href="#">HTML</a> (Released February 18, 2026)</p>
+        </div>
+      </div>
+
+      <div class="row fomc-meeting">
+        <div class="fomc-meeting__month col-xs-5 col-sm-3"><strong>March</strong></div>
+        <div class="fomc-meeting__date col-xs-4 col-sm-9">17-18*</div>
+        <div class="col-xs-3 col-md-2">
+          <p><a href="#">Statement</a></p>
+          <p>Projection Materials: <a href="#">PDF</a></p>
+        </div>
+      </div>
+
+      <div class="row fomc-meeting">
+        <div class="fomc-meeting__month col-xs-5 col-sm-3"><strong>April</strong></div>
+        <div class="fomc-meeting__date col-xs-4 col-sm-9">28-29</div>
+        <div class="col-xs-3 col-md-2">
+          <p><a href="#">Statement</a></p>
+        </div>
+      </div>
+
+      <!-- month-boundary meeting: decides on 1 July, not 30 June -->
+      <div class="row fomc-meeting">
+        <div class="fomc-meeting__month col-xs-5 col-sm-3"><strong>June/July</strong></div>
+        <div class="fomc-meeting__date col-xs-4 col-sm-9">30-1*</div>
+      </div>
+
+      <div class="row fomc-meeting">
+        <div class="fomc-meeting__month col-xs-5 col-sm-3"><strong>August</strong></div>
+        <div class="fomc-meeting__date col-xs-4 col-sm-9">18-19</div>
+      </div>
+
+      <div class="row fomc-meeting">
+        <div class="fomc-meeting__month col-xs-5 col-sm-3"><strong>September</strong></div>
+        <div class="fomc-meeting__date col-xs-4 col-sm-9">15-16*</div>
+      </div>
+
+      <div class="row fomc-meeting">
+        <div class="fomc-meeting__month col-xs-5 col-sm-3"><strong>October</strong></div>
+        <div class="fomc-meeting__date col-xs-4 col-sm-9">27-28</div>
+      </div>
+
+      <div class="row fomc-meeting">
+        <div class="fomc-meeting__month col-xs-5 col-sm-3"><strong>December</strong></div>
+        <div class="fomc-meeting__date col-xs-4 col-sm-9">8-9*</div>
+      </div>
+
+    </div>
+  </div>
+
+  <div class="panel panel-default">
+    <div class="panel-heading">
+      <h4 class="panel-title">2027 FOMC Meetings</h4>
+    </div>
+    <div class="panel-body">
+
+      <div class="row fomc-meeting">
+        <div class="fomc-meeting__month col-xs-5 col-sm-3"><strong>January</strong></div>
+        <div class="fomc-meeting__date col-xs-4 col-sm-9">26-27</div>
+      </div>
+
+      <div class="row fomc-meeting">
+        <div class="fomc-meeting__month col-xs-5 col-sm-3"><strong>March</strong></div>
+        <div class="fomc-meeting__date col-xs-4 col-sm-9">16-17*</div>
+      </div>
+
+      <div class="row fomc-meeting">
+        <div class="fomc-meeting__month col-xs-5 col-sm-3"><strong>April</strong></div>
+        <div class="fomc-meeting__date col-xs-4 col-sm-9">27-28</div>
+      </div>
+
+      <div class="row fomc-meeting">
+        <div class="fomc-meeting__month col-xs-5 col-sm-3"><strong>June</strong></div>
+        <div class="fomc-meeting__date col-xs-4 col-sm-9">8-9*</div>
+      </div>
+
+      <div class="row fomc-meeting">
+        <div class="fomc-meeting__month col-xs-5 col-sm-3"><strong>July</strong></div>
+        <div class="fomc-meeting__date col-xs-4 col-sm-9">27-28</div>
+      </div>
+
+      <!-- second month-boundary case, this one with a projections asterisk -->
+      <div class="row fomc-meeting">
+        <div class="fomc-meeting__month col-xs-5 col-sm-3"><strong>August/September</strong></div>
+        <div class="fomc-meeting__date col-xs-4 col-sm-9">31-1*</div>
+      </div>
+
+      <div class="row fomc-meeting">
+        <div class="fomc-meeting__month col-xs-5 col-sm-3"><strong>October</strong></div>
+        <div class="fomc-meeting__date col-xs-4 col-sm-9">26-27</div>
+      </div>
+
+      <div class="row fomc-meeting">
+        <div class="fomc-meeting__month col-xs-5 col-sm-3"><strong>December</strong></div>
+        <div class="fomc-meeting__date col-xs-4 col-sm-9">7-8*</div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- a preliminary year: only the January meeting has been announced -->
+  <div class="panel panel-default">
+    <div class="panel-heading">
+      <h4 class="panel-title">2028 FOMC Meetings</h4>
+    </div>
+    <div class="panel-body">
+      <div class="row fomc-meeting">
+        <div class="fomc-meeting__month col-xs-5 col-sm-3"><strong>January</strong></div>
+        <div class="fomc-meeting__date col-xs-4 col-sm-9">25-26</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- a historical year carrying unscheduled emergency meetings -->
+  <div class="panel panel-default">
+    <div class="panel-heading">
+      <h4 class="panel-title">2020 FOMC Meetings</h4>
+    </div>
+    <div class="panel-body">
+      <div class="row fomc-meeting">
+        <div class="fomc-meeting__month col-xs-5 col-sm-3"><strong>January</strong></div>
+        <div class="fomc-meeting__date col-xs-4 col-sm-9">28-29</div>
+        <div class="col-xs-3 col-md-2">
+          <p>Minutes: <a href="#">PDF</a> (Released February 19, 2020)</p>
+        </div>
+      </div>
+      <div class="row fomc-meeting">
+        <div class="fomc-meeting__month col-xs-5 col-sm-3"><strong>March</strong></div>
+        <div class="fomc-meeting__date col-xs-4 col-sm-9">3 (unscheduled)</div>
+      </div>
+      <div class="row fomc-meeting">
+        <div class="fomc-meeting__month col-xs-5 col-sm-3"><strong>March</strong></div>
+        <div class="fomc-meeting__date col-xs-4 col-sm-9">15 (unscheduled)</div>
+      </div>
+      <div class="row fomc-meeting">
+        <div class="fomc-meeting__month col-xs-5 col-sm-3"><strong>April</strong></div>
+        <div class="fomc-meeting__date col-xs-4 col-sm-9">28-29</div>
+      </div>
+    </div>
+  </div>
+
+  <p class="footnote">* Meeting associated with a Summary of Economic Projections.</p>
+</div>
+</body>
+</html>

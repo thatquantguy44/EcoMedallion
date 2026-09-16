@@ -40,6 +40,33 @@ class FOMCTenorDef:
             )
 
 
+VERIFIED_BY_VALUES = ("manual", "scraper")
+
+
+@dataclass(frozen=True)
+class CalendarProvenance:
+    """Where ``meeting_dates`` came from and how current it is.
+
+    The file has always carried this in prose comments, which nothing can read.
+    That left two very different states looking identical from inside the repo:
+    "the Fed has not published further out yet" and "nobody has checked
+    lately". ``published_through`` is what separates them -- it records the
+    Fed's own horizon, not merely our last row.
+    """
+
+    source_url: str = ""
+    last_verified: date | None = None
+    verified_by: str = ""
+    published_through: date | None = None
+
+    def __post_init__(self) -> None:
+        if self.verified_by and self.verified_by not in VERIFIED_BY_VALUES:
+            raise FOMCConfigError(
+                f"fomc.yml calendar_provenance.verified_by must be one of "
+                f"{list(VERIFIED_BY_VALUES)}, got {self.verified_by!r}"
+            )
+
+
 @dataclass(frozen=True)
 class FOMCConfig:
     meeting_dates: tuple[date, ...]
@@ -48,6 +75,9 @@ class FOMCConfig:
     target_high_series: str
     effective_rate_series: str
     tenors: tuple[FOMCTenorDef, ...]
+    # Optional: configs written before spec008 have no such block, and must
+    # keep loading unchanged.
+    calendar_provenance: CalendarProvenance | None = None
 
     def __post_init__(self) -> None:
         if not self.meeting_dates:
@@ -67,8 +97,13 @@ class FOMCConfig:
 
 def _parse_fomc(raw: dict[str, Any], *, source: str) -> FOMCConfig:
     known = {
-        "meeting_dates", "bucket_step_bps", "target_low_series",
-        "target_high_series", "effective_rate_series", "tenors",
+        "meeting_dates",
+        "bucket_step_bps",
+        "target_low_series",
+        "target_high_series",
+        "effective_rate_series",
+        "tenors",
+        "calendar_provenance",
     }
     unknown = set(raw) - known
     if unknown:
@@ -80,8 +115,7 @@ def _parse_fomc(raw: dict[str, Any], *, source: str) -> FOMCConfig:
     raw_dates = raw.get("meeting_dates") or []
     try:
         meeting_dates = tuple(
-            d if isinstance(d, date) else date.fromisoformat(str(d))
-            for d in raw_dates
+            d if isinstance(d, date) else date.fromisoformat(str(d)) for d in raw_dates
         )
     except ValueError as exc:
         raise FOMCConfigError(f"{source} has an invalid meeting_date: {exc}") from exc
@@ -104,6 +138,45 @@ def _parse_fomc(raw: dict[str, Any], *, source: str) -> FOMCConfig:
         target_high_series=raw.get("target_high_series", ""),
         effective_rate_series=raw.get("effective_rate_series", ""),
         tenors=tenors,
+        calendar_provenance=_parse_provenance(
+            raw.get("calendar_provenance"), source=source
+        ),
+    )
+
+
+def _parse_provenance(raw: Any, *, source: str) -> CalendarProvenance | None:
+    """Parse the optional ``calendar_provenance`` block. Absent -> ``None``."""
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        raise FOMCConfigError(f"{source} 'calendar_provenance' must be a mapping")
+
+    known = {"source_url", "last_verified", "verified_by", "published_through"}
+    unknown = set(raw) - known
+    if unknown:
+        raise FOMCConfigError(
+            f"{source} calendar_provenance has unknown field(s): "
+            f"{sorted(unknown)}. Allowed: {sorted(known)}"
+        )
+
+    def _date(field: str) -> date | None:
+        value = raw.get(field)
+        if value is None:
+            return None
+        if isinstance(value, date):
+            return value
+        try:
+            return date.fromisoformat(str(value))
+        except ValueError as exc:
+            raise FOMCConfigError(
+                f"{source} calendar_provenance.{field} is not a date: {exc}"
+            ) from exc
+
+    return CalendarProvenance(
+        source_url=str(raw.get("source_url", "")),
+        last_verified=_date("last_verified"),
+        verified_by=str(raw.get("verified_by", "")),
+        published_through=_date("published_through"),
     )
 
 

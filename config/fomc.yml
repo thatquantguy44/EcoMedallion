@@ -6,18 +6,34 @@
 #
 # meeting_dates: decision dates only (the *second* day of each 2-day FOMC
 # meeting), verified live against
-# https://www.federalreserve.gov/monetarypolicy/fomccalendars.htm (2026-07-17).
-# Refresh this list as the Fed publishes further-out calendars.
+# https://www.federalreserve.gov/monetarypolicy/fomccalendars.htm (2026-09-15,
+# by `python scripts/scrape_fomc_calendar.py --check`, which reported in sync).
+# Refresh this list as the Fed publishes further-out calendars — the scraper
+# prints a paste-ready block; see docs/handoffs/fomc_calendar_scraper.md.
 #
 # The Fed's preliminary schedule currently runs through JANUARY 2028 only —
 # 2027 is complete (8 meetings) and 2028 has just its January meeting. The rest
 # of 2028 is not published yet; add it when the Fed announces it, normally
 # about two years ahead.
 #
-# tests/test_fomc_probability.py fails when fewer than 120 days of runway
+# tests/test_fomc_probability.py fails when fewer than 45 days of runway
 # remain, because compute_fomc_probability filters to `d >= today` — an expired
 # list empties gold.fomc_probability / gold.fomc_meeting_path silently rather
-# than erroring.
+# than erroring. That test is a FLOOR, not the warning: the scheduled refresh
+# job is meant to have opened a PR long before it fires (spec008 §5).
+
+# Machine-readable provenance. The prose above is for humans; this block is so
+# tooling can tell "the Fed has not published further out yet" apart from
+# "nobody has checked lately" — two states that otherwise look identical from
+# inside this repo.
+calendar_provenance:
+  source_url: https://www.federalreserve.gov/monetarypolicy/fomccalendars.htm
+  last_verified: 2026-09-15
+  verified_by: scraper
+  # The Fed's own horizon, not merely our last row. Read off the advance-notice
+  # sentence below the last year panel, which is the only place it appears.
+  published_through: 2028-01-26
+
 meeting_dates:
   - "2026-07-29"
   - "2026-09-16"
@@ -31,10 +47,11 @@ meeting_dates:
   - "2027-09-15"
   - "2027-10-27"
   - "2027-12-08"
-  # 2028-01-25/26 (Tue/Wed) — from the Fed's preliminary schedule through
-  # January 2028. Taken from secondary reporting of that announcement, not read
-  # off the Fed calendar page directly (egress blocked); confirm on the next
-  # calendar refresh.
+  # 2028-01-25/26 (Tue/Wed). CONFIRMED 2026-09-15 against the Fed calendar
+  # page itself, which announces it only in prose below the last year panel:
+  # "Note: A two-day meeting is scheduled for January 25-26, 2028." (It was
+  # previously taken from secondary reporting, since egress to the Fed was
+  # blocked at the time; that caveat is now discharged.)
   - "2028-01-26"
 
 bucket_step_bps: 25
