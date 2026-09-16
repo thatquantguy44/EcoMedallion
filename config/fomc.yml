@@ -6,8 +6,10 @@
 #
 # meeting_dates: decision dates only (the *second* day of each 2-day FOMC
 # meeting), verified live against
-# https://www.federalreserve.gov/monetarypolicy/fomccalendars.htm (2026-07-17).
-# Refresh this list as the Fed publishes further-out calendars.
+# https://www.federalreserve.gov/monetarypolicy/fomccalendars.htm (2026-09-15,
+# by `python scripts/scrape_fomc_calendar.py --check`, which reported in sync).
+# Refresh this list as the Fed publishes further-out calendars — the scraper
+# prints a paste-ready block; see docs/handoffs/fomc_calendar_scraper.md.
 #
 # The Fed's preliminary schedule currently runs through JANUARY 2028 only —
 # 2027 is complete (8 meetings) and 2028 has just its January meeting. The rest
@@ -31,10 +33,11 @@ meeting_dates:
   - "2027-09-15"
   - "2027-10-27"
   - "2027-12-08"
-  # 2028-01-25/26 (Tue/Wed) — from the Fed's preliminary schedule through
-  # January 2028. Taken from secondary reporting of that announcement, not read
-  # off the Fed calendar page directly (egress blocked); confirm on the next
-  # calendar refresh.
+  # 2028-01-25/26 (Tue/Wed). CONFIRMED 2026-09-15 against the Fed calendar
+  # page itself, which announces it only in prose below the last year panel:
+  # "Note: A two-day meeting is scheduled for January 25-26, 2028." (It was
+  # previously taken from secondary reporting, since egress to the Fed was
+  # blocked at the time; that caveat is now discharged.)
   - "2028-01-26"
 
 bucket_step_bps: 25

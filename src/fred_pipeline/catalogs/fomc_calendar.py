@@ -38,13 +38,11 @@ from __future__ import annotations
 
 import re
 import sys
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import date
-from typing import Iterable, Optional
 
-FOMC_CALENDAR_URL = (
-    "https://www.federalreserve.gov/monetarypolicy/fomccalendars.htm"
-)
+FOMC_CALENDAR_URL = "https://www.federalreserve.gov/monetarypolicy/fomccalendars.htm"
 
 # The Fed holds 8 scheduled meetings a year. A parsed year with fewer is not
 # necessarily wrong (the current year is partly in the past, the final year is
@@ -53,11 +51,30 @@ EXPECTED_MEETINGS_PER_YEAR = 8
 _PARTIAL_YEAR_WARN_THRESHOLD = 6
 
 _MONTHS = {
-    "january": 1, "february": 2, "march": 3, "april": 4, "may": 5, "june": 6,
-    "july": 7, "august": 8, "september": 9, "october": 10, "november": 11,
+    "january": 1,
+    "february": 2,
+    "march": 3,
+    "april": 4,
+    "may": 5,
+    "june": 6,
+    "july": 7,
+    "august": 8,
+    "september": 9,
+    "october": 10,
+    "november": 11,
     "december": 12,
-    "jan": 1, "feb": 2, "mar": 3, "apr": 4, "jun": 6, "jul": 7, "aug": 8,
-    "sep": 9, "sept": 9, "oct": 10, "nov": 11, "dec": 12,
+    "jan": 1,
+    "feb": 2,
+    "mar": 3,
+    "apr": 4,
+    "jun": 6,
+    "jul": 7,
+    "aug": 8,
+    "sep": 9,
+    "sept": 9,
+    "oct": 10,
+    "nov": 11,
+    "dec": 12,
 }
 
 # Rows that exist on the page but are not scheduled rate decisions.
@@ -82,7 +99,7 @@ class FOMCMeeting:
     """
 
     decision_date: date
-    start_date: Optional[date]
+    start_date: date | None
     year: int
     is_projection_meeting: bool = False
     raw_label: str = ""
@@ -105,15 +122,15 @@ def _strip_tags(fragment: str) -> str:
     text = (
         text.replace("&nbsp;", " ")
         .replace("&amp;", "&")
-        .replace("&#8211;", "-")   # en dash
+        .replace("&#8211;", "-")  # en dash
         .replace("&ndash;", "-")
-        .replace("–", "-")    # en dash, literal
-        .replace("—", "-")    # em dash
+        .replace("–", "-")  # en dash, literal
+        .replace("—", "-")  # em dash
     )
     return _WS_RE.sub(" ", text).strip()
 
 
-def _month_number(name: str) -> Optional[int]:
+def _month_number(name: str) -> int | None:
     return _MONTHS.get(name.strip().lower().rstrip("."))
 
 
@@ -125,8 +142,33 @@ _MEETING_RE = re.compile(
     r"(?P<days>\d{1,2}(?:\s*-\s*\d{1,2})?)\s*(?P<star>\*)?",
 )
 
+# The same shape, anchored to the WHOLE line. A meeting row is a bare label
+# ("January 28-29"), never a sentence -- and the live page's footer is full of
+# sentences that contain a month and a number. Matching _MEETING_RE anywhere in
+# a line turned "Last Update: August 19, 2026" into an August 2027 meeting that
+# does not exist. Found by the first live run; see
+# docs/handoffs/fomc_calendar_scraper.md §11 (and §4.1 for the row contract).
+_MEETING_LINE_RE = re.compile(
+    r"^(?:[A-Za-z]+(?:\s*/\s*[A-Za-z]+)?)\s+"
+    r"(?:\d{1,2}(?:\s*-\s*\d{1,2})?)\s*\*?\s*$",
+)
 
-def _parse_meeting_label(label: str, year: int) -> Optional[FOMCMeeting]:
+# The Fed announces its furthest-out meeting in prose BELOW the last year
+# panel, not as a row inside one:
+#   "Note: A two-day meeting is scheduled for January 25-26, 2028."
+# It is the only place that date appears, so it is parsed deliberately rather
+# than left to the row scanner -- but only in this exact shape, and only with
+# an EXPLICIT year, which is what keeps it from re-admitting arbitrary prose.
+_ADVANCE_NOTICE_RE = re.compile(
+    r"meeting\s+is\s+scheduled\s+for\s+"
+    r"(?P<months>[A-Za-z]+(?:\s*/\s*[A-Za-z]+)?)\s+"
+    r"(?P<days>\d{1,2}(?:\s*-\s*\d{1,2})?)\s*,?\s*"
+    r"(?P<year>(?:19|20)\d{2})",
+    re.IGNORECASE,
+)
+
+
+def _parse_meeting_label(label: str, year: int) -> FOMCMeeting | None:
     """Parse one meeting row's visible text into a meeting, or None to skip.
 
     Returns None for rows that are not scheduled rate decisions and for rows
@@ -185,14 +227,23 @@ def _parse_meeting_label(label: str, year: int) -> Optional[FOMCMeeting]:
 # Year panels. The live page heads each with "2027 FOMC Meetings"; the bare
 # <h4>2027</h4> form is a fallback in case that wording changes.
 _YEAR_HEADING_RE = re.compile(r"((?:19|20)\d{2})\s*FOMC\s+Meetings", re.IGNORECASE)
-_YEAR_TAG_RE = re.compile(r"<h[1-6][^>]*>\s*((?:19|20)\d{2})\s*</h[1-6]>", re.IGNORECASE)
+_YEAR_TAG_RE = re.compile(
+    r"<h[1-6][^>]*>\s*((?:19|20)\d{2})\s*</h[1-6]>", re.IGNORECASE
+)
 
 # Lines that are publication metadata rather than a meeting. Past-year rows
 # carry "Minutes: PDF | HTML (Released April 9, 2025)", whose "April 9" would
 # otherwise read as a one-day meeting.
 _PUBLICATION_MARKERS = (
-    "released", "minutes", "statement", "transcript", "pdf", "html",
-    "projection materials", "press conference", "implementation note",
+    "released",
+    "minutes",
+    "statement",
+    "transcript",
+    "pdf",
+    "html",
+    "projection materials",
+    "press conference",
+    "implementation note",
 )
 
 # Block-level boundaries become line breaks, so a meeting's month and day-range
@@ -202,9 +253,7 @@ _BLOCK_END_RE = re.compile(
 )
 
 # A line that is only a month, or only a month pair ("April/May").
-_MONTH_ONLY_RE = re.compile(
-    r"^(?P<months>[A-Za-z]+(?:\s*/\s*[A-Za-z]+)?)\s*$"
-)
+_MONTH_ONLY_RE = re.compile(r"^(?P<months>[A-Za-z]+(?:\s*/\s*[A-Za-z]+)?)\s*$")
 # A line that is only a day range ("27-28", "17-18*", "3").
 _DAYS_ONLY_RE = re.compile(r"^(?P<days>\d{1,2}(?:\s*-\s*\d{1,2})?)\s*(?P<star>\*)?\s*$")
 
@@ -270,7 +319,7 @@ def parse_fomc_calendar(html: str, *, warn: bool = True) -> list[FOMCMeeting]:
     skipped: list[str] = []
 
     for year, fragment in _year_segments(html):
-        pending_month: Optional[str] = None
+        pending_month: str | None = None
 
         for line in _text_lines(fragment):
             lowered = line.lower()
@@ -298,7 +347,11 @@ def parse_fomc_calendar(html: str, *, warn: bool = True) -> list[FOMCMeeting]:
                     days_only.group("star") or ""
                 )
                 pending_month = None
-            elif not _MEETING_RE.search(line):
+            elif not _MEETING_LINE_RE.match(line):
+                # Anchored: a bare "January 28-29" row is a meeting, a sentence
+                # that merely mentions a month is not. The page's own footer
+                # ("Last Update: August 19, 2026") is the reason this is not a
+                # substring search.
                 continue
 
             meeting = _parse_meeting_label(line, year)
@@ -310,6 +363,22 @@ def parse_fomc_calendar(html: str, *, warn: bool = True) -> list[FOMCMeeting]:
             if meeting.decision_date not in meetings:
                 meetings[meeting.decision_date] = meeting
                 per_year[year] = per_year.get(year, 0) + 1
+
+    # The furthest-out meeting is announced in prose below the last panel, so
+    # it has no year panel of its own and the row scanner above cannot see it.
+    # Deliberately NOT counted in per_year: that warning measures how well each
+    # PANEL parsed, and a one-meeting advance notice would trip it on every
+    # single run, which is how a useful warning becomes background noise.
+    for line in _text_lines(html):
+        notice = _ADVANCE_NOTICE_RE.search(line)
+        if not notice:
+            continue
+        meeting = _parse_meeting_label(
+            f"{notice.group('months')} {notice.group('days')}",
+            int(notice.group("year")),
+        )
+        if meeting is not None and meeting.decision_date not in meetings:
+            meetings[meeting.decision_date] = meeting
 
     if not meetings:
         raise FOMCScrapeError(
@@ -355,7 +424,7 @@ def diff_against_config(
     scraped: Iterable[FOMCMeeting],
     configured: Iterable[date],
     *,
-    today: Optional[date] = None,
+    today: date | None = None,
 ) -> CalendarDiff:
     """Compare scraped meetings with the configured list.
 
@@ -404,8 +473,8 @@ def fetch_calendar_html(
     *,
     backend: str = "auto",
     headless: bool = True,
-    chromedriver_path: Optional[str] = None,
-    chrome_binary: Optional[str] = None,
+    chromedriver_path: str | None = None,
+    chrome_binary: str | None = None,
     timeout_seconds: int = 30,
     user_agent: str = DEFAULT_USER_AGENT,
 ) -> str:
@@ -512,8 +581,8 @@ def fetch_calendar_html_selenium(
     url: str = FOMC_CALENDAR_URL,
     *,
     headless: bool = True,
-    chromedriver_path: Optional[str] = None,
-    chrome_binary: Optional[str] = None,
+    chromedriver_path: str | None = None,
+    chrome_binary: str | None = None,
     timeout_seconds: int = 30,
 ) -> str:
     """Fetch the calendar page with Selenium and return its rendered HTML.

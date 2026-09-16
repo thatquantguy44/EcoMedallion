@@ -1,6 +1,10 @@
 # Spec 008: Productionalizing the FOMC Meeting Calendar
 
-Status: **proposed — ready for review**
+Status: **proposed — ready for review. Phase 0 is DONE (2026-09-15)** and it
+justified itself: the first live run found two real parser bugs, both now
+fixed, and the fixture is a real capture. See §2.4 and
+[`docs/handoffs/fomc_calendar_scraper.md`](../../docs/handoffs/fomc_calendar_scraper.md) §11.
+Phases 1-4 remain unstarted.
 
 Last verified: 2026-09-15
 
@@ -114,7 +118,22 @@ different handling — `missing_from_config` (the Fed published more; safe to
 propose) and `absent_upstream` (a configured date vanished; a meeting may
 have *moved*, needs a human).
 
-### 2.4 The parser has never seen the real page
+### 2.4 The parser had never seen the real page — resolved 2026-09-15
+
+> **✅ This section is now history, and it earned its place.** Phase 0 ran on
+> 2026-09-15 from a machine with egress. The parser produced **two meetings
+> that do not exist** — `2027-01-26` (from the Jan-2028 advance-notice
+> sentence, read with the wrong year) and `2027-08-19` (from the page footer's
+> `Last Update: August 19, 2026` stamp). Both are fixed; the fixture is now a
+> real capture; `--check` reports in sync against the live page. Full
+> write-up in `docs/handoffs/fomc_calendar_scraper.md` §11.
+>
+> The original text is kept below because it is the argument for why Phase 0
+> gates everything, and that argument was vindicated: had the automation in
+> this spec shipped first, its first act would have been opening a PR
+> injecting two fabricated meetings into a rate-path model.
+
+The original problem statement:
 
 `tests/fixtures/fomccalendars.html` is hand-built, and says so in its own
 header comment:
@@ -365,8 +384,8 @@ string-in/string-out — testable without network, browser, or GitHub.
 
 | ID | Given / When / Then | Evidence |
 |---|---|---|
-| AC-001 | Given the live Fed calendar page, when the scraper runs against it for the first time, then the parsed dates match the page read by a human, and the saved HTML replaces the hand-built fixture. | live run output + fixture diff |
-| AC-002 | Given the refreshed real-markup fixture, when the existing parser suite runs, then it passes — or the parser is corrected and the correction is covered by a test. | `pytest tests/test_fomc_calendar_scraper.py` |
+| AC-001 | ✅ **MET 2026-09-15.** Given the live Fed calendar page, when the scraper runs against it for the first time, then the parsed dates match the page read by a human, and the saved HTML replaces the hand-built fixture. | live run + `tests/fixtures/fomccalendars.html` |
+| AC-002 | ✅ **MET 2026-09-15.** Given the refreshed real-markup fixture, when the existing parser suite runs, then it passes — or the parser is corrected and the correction is covered by a test. **Two bugs found and fixed**, each with a named regression test (`test_advance_notice_meeting_is_parsed_with_its_stated_year`, `test_page_footer_is_not_mistaken_for_a_meeting`). | `pytest tests/test_fomc_calendar_scraper.py` |
 | AC-003 | Given a page listing meetings the config lacks, when the workflow runs, then it opens exactly one PR on `automation/fomc-calendar-refresh` inserting those dates in ascending order with provenance updated and all existing comments intact. | workflow run + PR diff |
 | AC-004 | Given a second run while that PR is open, when drift is unchanged, then the existing PR is updated in place and no second PR is opened. | workflow run log |
 | AC-005 | Given a configured date absent from the live page, when the workflow runs, then it opens an issue and makes **no** edit to `config/fomc.yml`. | workflow run + unchanged config |
@@ -380,7 +399,15 @@ string-in/string-out — testable without network, browser, or GitHub.
 
 ## 8. Phased Implementation Plan
 
-### Phase 0 — Live validation (blocks everything else)
+### Phase 0 — Live validation (blocks everything else) — ✅ DONE 2026-09-15
+
+> Ran on 2026-09-15. Found and fixed two parser bugs, replaced the fixture
+> with a real capture, kept the hand-built page as
+> `fomccalendars_synthetic.html` for `(unscheduled)` rows the live calendar
+> no longer carries, and confirmed `config/fomc.yml` was already correct —
+> including the `2028-01-26` entry that had been flagged as unverified.
+> `--check` against the live page now exits 0. Details in §2.4 and the
+> handoff's §11.
 
 Nothing in this spec is trustworthy until the parser has met the real page.
 Run from a machine with egress to `federalreserve.gov`:
@@ -468,9 +495,16 @@ will have discharged.
    that a release-blocking test for a data-freshness problem is a category
    error. Recommend keeping it at 45 for one full refresh cycle, then
    revisiting with evidence.
-5. **`published_through` maintenance.** Populated by the scraper from the
-   page's furthest panel. Confirm the page states its own horizon
-   unambiguously — resolvable only during Phase 0.
+5. ✅ **RESOLVED (2026-09-15, Phase 0) — `published_through` cannot be read
+   from a panel; the page does not state its horizon as structured data.**
+   The furthest meeting is announced only in prose below the last year panel
+   ("Note: A two-day meeting is scheduled for January 25-26, 2028."), which
+   is the *same sentence* that produced one of Phase 0's two parser bugs. It
+   is now parsed deliberately via `_ADVANCE_NOTICE_RE`, requiring an explicit
+   year. So `published_through` is populatable, but it inherits that
+   sentence's fragility: if the Fed rewords the note, the horizon silently
+   reverts to the last panel row rather than erroring. Decide during Phase 1
+   whether that degradation should be loud.
 6. **Fixture auto-refresh.** Decision 7 proposes it ride the refresh PR.
    Alternative: a separate PR so parser-affecting markup changes are never
    bundled with date additions. Cleaner, noisier.

@@ -190,16 +190,17 @@ Covered:
   Selenium; `auto` falls back and reports both failures; explicit
   `--backend requests` never falls back; an unknown backend is rejected
 
-> ⚠️ **The committed fixture is hand-built to the structure documented in §4.1,
-> not a capture of the live page.** It could not be captured from the authoring
-> environment, where egress to `federalreserve.gov` is blocked by network
-> policy. It exercises the parser's logic honestly, but it is **not** evidence
-> that the parser matches today's real markup.
+> ✅ **The acceptance test has been run (2026-09-15).** This section used to
+> carry a warning that the fixture was hand-built and the parser had never met
+> the real page. That is discharged: `tests/fixtures/fomccalendars.html` is now
+> a real capture, and the first live run found two genuine parser bugs, both
+> fixed. See §11.
 >
-> **First live run is the acceptance test.** Run with `--save-html`, eyeball the
-> parsed dates against the page, then commit the saved HTML over the hand-built
-> fixture. Until that happens, treat a successful test run as "the logic is
-> right", not "the scraper works".
+> Two fixtures now, deliberately — `fomccalendars.html` (real capture, carries
+> the main assertions) and `fomccalendars_synthetic.html` (the old hand-built
+> page, kept solely for `(unscheduled)` rows, which have aged off the live
+> calendar). Neither contains a one-day meeting; `test_label_shapes` covers
+> that shape with its own inline HTML.
 
 ## 8. Operational requirements
 
@@ -336,3 +337,55 @@ normal internet** — `python scripts/scrape_fomc_calendar.py --save-html
 tests/fixtures/fomccalendars.html`, then eyeball the dates and commit the
 capture. Automating a parser that has never met its input would just
 industrialize a guess.
+
+> ✅ **Phase 0 is done as of 2026-09-15.** See §11 — it found two real bugs,
+> which is the entire argument for having gated on it.
+
+## 11. The first live run (2026-09-15) — what it found
+
+Run from a machine with egress to `federalreserve.gov`, which is what had
+been missing. The parser worked on real markup, and produced **two meetings
+that do not exist**:
+
+| Parsed | Real source text | Why |
+|---|---|---|
+| `2027-01-26` | *"Note: A two-day meeting is scheduled for January 25-26, **2028**."* | right day-range, wrong year — the explicit `2028` in the sentence was ignored and the enclosing 2027 panel's year used instead |
+| `2027-08-19` | *"Last Update: **August 19, 2026**"* (page footer) | a footer timestamp read as a meeting |
+
+**Root cause, shared:** the last year panel runs to end-of-document, so it
+swallowed the page's footer and notes; and the meeting regex was matched as
+a *substring* of any line, so any prose sentence containing a month and a
+number became a meeting.
+
+`2027-08-19` is the more dangerous of the two. The Fed does not meet in
+August, but nothing would have caught it — the per-year sanity check only
+fires on *too few* meetings, never too many. Had spec008's automation
+shipped before this run, its first action would have been opening a PR
+injecting two fabricated meetings into a rate-path model.
+
+**The fix** (`catalogs/fomc_calendar.py`), two parts:
+
+1. `_MEETING_LINE_RE` — the inline-label fallback is now anchored to the
+   whole line. A meeting row is a bare label (`January 28-29`); a sentence
+   that merely mentions a month is not. This alone kills both phantoms.
+2. `_ADVANCE_NOTICE_RE` — but anchoring also drops the Jan 2028 meeting,
+   which appears *only* in that note and nowhere as a panel row. So the
+   note is now parsed deliberately, in one narrow shape
+   (`"...meeting is scheduled for <Month> <d>-<d>, <YYYY>"`), and **only**
+   with an explicit year, which is what stops it re-admitting prose.
+
+**What the run confirmed about the config:** `config/fomc.yml` was already
+exactly right — all 12 future meetings match the page. That includes
+`2028-01-26`, which the config had flagged as *"taken from secondary
+reporting... confirm on the next calendar refresh"*. Confirmed now, against
+the Fed's own note. `--check` reports in sync, exit 0.
+
+**Two notes for whoever refreshes this next:**
+
+- The 8-meetings-per-year assumption in `_PARTIAL_YEAR_WARN_THRESHOLD` held
+  on every complete year 2021-2027.
+- `published_through` (spec008 open decision #5) is now answerable: **the
+  page does not state its horizon as a structured field.** The furthest
+  meeting lives in that prose note, so anything reading the horizon depends
+  on the same fragile sentence that produced one of these two bugs. Treat it
+  accordingly.
