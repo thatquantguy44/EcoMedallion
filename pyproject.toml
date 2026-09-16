@@ -39,6 +39,23 @@ fred-pipeline = "fred_pipeline.cli:main"
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.ruff.lint]
+# Pin the rule set to ruff's historical default (pycodestyle errors + pyflakes).
+#
+# .pre-commit-config.yaml states the intent plainly: ruff-check runs with --fix
+# but "no opt-in strict rule sets, so it won't surface a wall of pre-existing
+# violations" on a mature codebase that has never been linted. That held while
+# ruff's default was E4/E7/E9/F -- but ruff's defaults have since widened, and
+# with them the hook started reporting 318 violations across src/ (UP045, UP035,
+# I001, BLE001, DTZ011, ...), which blocked commits to any .py file and
+# auto-rewrote unrelated lines in every file it touched.
+#
+# Pinning restores the documented intent rather than silently inheriting
+# whatever a future ruff release decides to enable. Widening this list is a
+# deliberate choice to make, ideally one rule family at a time with the
+# resulting cleanup in its own commit -- not something to acquire by upgrading.
+select = ["E4", "E7", "E9", "F"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
