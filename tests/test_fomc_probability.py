@@ -13,6 +13,7 @@ import pytest
 
 from fred_pipeline.config import Environment, PipelineConfig
 from fred_pipeline.gold_config.fomc_config import (
+    CalendarProvenance,
     FOMCConfig,
     FOMCConfigError,
     FOMCTenorDef,
@@ -80,6 +81,147 @@ def test_load_fomc_config(tmp_path):
 
 def test_load_fomc_config_missing_file_returns_none():
     assert load_fomc_config("/nonexistent/fomc.yml") is None
+
+
+# ---------------------------------------------------------------------------
+# calendar_provenance (spec008 §5 Decision 6)
+# ---------------------------------------------------------------------------
+
+_BASE_CONFIG = """
+meeting_dates: ["2026-09-16", "2026-10-28"]
+bucket_step_bps: 25
+target_low_series: DFEDTARL
+target_high_series: DFEDTARU
+effective_rate_series: EFFR
+tenors:
+  - {series_id: DGS1MO, tenor_months: 1}
+  - {series_id: DGS3MO, tenor_months: 3}
+"""
+
+
+def _write_config(tmp_path, provenance_yaml: str = ""):
+    p = tmp_path / "fomc.yml"
+    p.write_text(_BASE_CONFIG + textwrap.dedent(provenance_yaml))
+    return str(p)
+
+
+def test_config_without_provenance_block_still_loads(tmp_path):
+    """Every config written before spec008 lacks the block and must keep
+    loading exactly as before -- the Gold tables do not need provenance."""
+    cfg = load_fomc_config(_write_config(tmp_path))
+    assert cfg.calendar_provenance is None
+    assert cfg.meeting_dates == (date(2026, 9, 16), date(2026, 10, 28))
+
+
+def test_provenance_block_is_parsed(tmp_path):
+    cfg = load_fomc_config(
+        _write_config(
+            tmp_path,
+            """
+            calendar_provenance:
+              source_url: https://www.federalreserve.gov/monetarypolicy/fomccalendars.htm
+              last_verified: 2026-09-15
+              verified_by: scraper
+              published_through: "2028-01-26"
+            """,
+        )
+    )
+    prov = cfg.calendar_provenance
+    assert prov == CalendarProvenance(
+        source_url="https://www.federalreserve.gov/monetarypolicy/fomccalendars.htm",
+        # YAML gives a bare date as a date and a quoted one as a string; both
+        # must end up as datetime.date.
+        last_verified=date(2026, 9, 15),
+        verified_by="scraper",
+        published_through=date(2028, 1, 26),
+    )
+
+
+def test_provenance_fields_are_individually_optional(tmp_path):
+    cfg = load_fomc_config(
+        _write_config(
+            tmp_path,
+            """
+            calendar_provenance:
+              verified_by: manual
+            """,
+        )
+    )
+    assert cfg.calendar_provenance == CalendarProvenance(verified_by="manual")
+
+
+@pytest.mark.parametrize(
+    "block,match",
+    [
+        (
+            """
+            calendar_provenance:
+              verified_by: someone
+            """,
+            "verified_by must be one of",
+        ),
+        (
+            """
+            calendar_provenance:
+              last_verified: "last tuesday"
+            """,
+            "last_verified is not a date",
+        ),
+        (
+            """
+            calendar_provenance:
+              published_through: "2028-13-01"
+            """,
+            "published_through is not a date",
+        ),
+        (
+            """
+            calendar_provenance:
+              verified_on: 2026-09-15
+            """,
+            "unknown field",
+        ),
+        (
+            """
+            calendar_provenance: 2026-09-15
+            """,
+            "must be a mapping",
+        ),
+    ],
+    ids=[
+        "bad-verified_by",
+        "bad-last_verified",
+        "bad-published_through",
+        "unknown-field",
+        "not-a-mapping",
+    ],
+)
+def test_malformed_provenance_raises(tmp_path, block, match):
+    """A typo here must fail loudly: the whole point of the block is that
+    tooling trusts it, and a silently-ignored field defeats that."""
+    with pytest.raises(FOMCConfigError, match=match):
+        load_fomc_config(_write_config(tmp_path, block))
+
+
+def test_repo_config_provenance_is_present_and_consistent():
+    """The real config must carry the block, and it must not claim more than
+    the Fed has published: a meeting date beyond published_through would be a
+    date nobody could have read off the calendar.
+
+    Deliberately no "last_verified is recent" check -- that would read the
+    wall clock and become exactly the kind of time bomb spec008 is removing.
+    Staleness is the scheduled job's call.
+    """
+    cfg = load_fomc_config("config/fomc.yml")
+    prov = cfg.calendar_provenance
+    assert prov is not None, "config/fomc.yml is missing calendar_provenance"
+    assert prov.verified_by in ("manual", "scraper")
+    assert prov.last_verified is not None
+    assert prov.published_through is not None
+    assert max(cfg.meeting_dates) <= prov.published_through, (
+        f"config/fomc.yml lists {max(cfg.meeting_dates)}, beyond the Fed's "
+        f"published horizon {prov.published_through}"
+    )
 
 
 def test_fomc_config_rejects_unsorted_meeting_dates():

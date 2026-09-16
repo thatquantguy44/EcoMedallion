@@ -525,8 +525,9 @@ def test_diff_ignores_past_meetings():
 
 
 def test_diff_against_the_repo_config(meetings):
-    """Sanity check that the two halves fit together; the fixture is synthetic,
-    so this asserts the shape of the result, not its contents."""
+    """Sanity check that the two halves fit together: with an empty config,
+    every future meeting on the page is reported missing. Shape only -- the
+    CLI tests below check real contents against the real config."""
     diff = diff_against_config(meetings, [], today=date(2026, 8, 13))
     assert all(d >= date(2026, 8, 13) for d in diff.missing_from_config)
 
@@ -553,3 +554,142 @@ def test_format_yaml_block_parses_back_as_yaml():
     block = format_yaml_block([FOMCMeeting(date(2028, 1, 26), None, 2028)])
     loaded = yaml.safe_load("meeting_dates:\n" + block)
     assert loaded["meeting_dates"] == ["2028-01-26"]
+
+
+# ---- CLI: --check and --check --json ----------------------------------------
+#
+# These call the script's main() directly against the captured page. The
+# script compares against today's date, so "today" is pinned to the capture
+# date by wrapping its date-dependent helpers with a fixed `today`. Only the
+# clock is fixed; the real diff and runway logic still runs. Without this,
+# these tests would change meaning once 2028-01-26 passes.
+
+CAPTURE_DATE = date(2026, 9, 15)
+SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "scrape_fomc_calendar.py"
+NOTICE_SENTENCE = "A two-day meeting is scheduled for January 25-26, 2028."
+
+
+@pytest.fixture
+def cli(monkeypatch):
+    import functools
+    import importlib.util
+
+    from fred_pipeline.catalogs import fomc_calendar as fc
+
+    spec = importlib.util.spec_from_file_location("scrape_fomc_calendar", SCRIPT)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    monkeypatch.setattr(
+        module,
+        "diff_against_config",
+        functools.partial(fc.diff_against_config, today=CAPTURE_DATE),
+    )
+    monkeypatch.setattr(
+        module, "runway_days", functools.partial(fc.runway_days, today=CAPTURE_DATE)
+    )
+    monkeypatch.setattr(
+        module, "runway_level", functools.partial(fc.runway_level, today=CAPTURE_DATE)
+    )
+    return module
+
+
+def _config_with(tmp_path, dates):
+    p = tmp_path / "fomc.yml"
+    p.write_text("meeting_dates:\n" + "".join(f'  - "{d}"\n' for d in dates))
+    return p
+
+
+# The real config's future meetings as of the capture date.
+_FUTURE = [
+    "2026-09-16", "2026-10-28", "2026-12-09",
+    "2027-01-27", "2027-03-17", "2027-04-28", "2027-06-09",
+    "2027-07-28", "2027-09-15", "2027-10-27", "2027-12-08",
+    "2028-01-26",
+]  # fmt: skip
+
+
+def _run_json(cli, capsys, html_file, config):
+    import json
+
+    code = cli.main(
+        ["--html-file", str(html_file), "--config", str(config), "--check", "--json"]
+    )
+    return code, json.loads(capsys.readouterr().out)
+
+
+def test_json_check_in_sync_against_the_real_page(cli, capsys, tmp_path):
+    code, out = _run_json(cli, capsys, FIXTURE, _config_with(tmp_path, _FUTURE))
+
+    assert code == 0
+    assert out == {
+        "schema_version": "1.0",
+        "in_sync": True,
+        "missing_from_config": [],
+        "absent_upstream": [],
+        "advance_notice_missing": False,
+        "parsed_count": 57,
+        "parsed_through": "2028-01-26",
+        "configured_through": "2028-01-26",
+        "runway_days": 498,
+        "runway_level": "ok",
+        "yaml_to_add": "",
+    }
+
+
+def test_json_check_reports_a_missing_meeting_with_paste_ready_yaml(
+    cli, capsys, tmp_path
+):
+    config = _config_with(tmp_path, [d for d in _FUTURE if d != "2027-12-08"])
+    code, out = _run_json(cli, capsys, FIXTURE, config)
+
+    assert code == 1
+    assert out["in_sync"] is False
+    assert out["missing_from_config"] == ["2027-12-08"]
+    assert out["absent_upstream"] == []
+    assert out["advance_notice_missing"] is False
+    assert out["yaml_to_add"] == '  - "2027-12-08"  # SEP / projections'
+
+
+def test_json_check_flags_a_lost_advance_notice(cli, capsys, tmp_path):
+    """The real page with only the advance-notice sentence removed: the Jan
+    2028 meeting disappears from the parse, and the output must say the note
+    was lost rather than leave it looking like a moved meeting."""
+    html = FIXTURE.read_text(encoding="utf-8")
+    assert html.count(NOTICE_SENTENCE) == 1
+    page = tmp_path / "no_notice.html"
+    page.write_text(html.replace(NOTICE_SENTENCE, ""), encoding="utf-8")
+
+    code, out = _run_json(cli, capsys, page, _config_with(tmp_path, _FUTURE))
+
+    assert code == 1
+    assert out["absent_upstream"] == ["2028-01-26"]
+    assert out["advance_notice_missing"] is True
+    assert out["parsed_through"] == "2027-12-08"
+
+
+def test_prose_check_blames_the_parser_for_a_lost_advance_notice(cli, capsys, tmp_path):
+    html = FIXTURE.read_text(encoding="utf-8")
+    page = tmp_path / "no_notice.html"
+    page.write_text(html.replace(NOTICE_SENTENCE, ""), encoding="utf-8")
+
+    code = cli.main(
+        ["--html-file", str(page), "--config", str(_config_with(tmp_path, _FUTURE)),
+         "--check"]
+    )  # fmt: skip
+    out = capsys.readouterr().out
+
+    assert code == 1
+    assert "PARSER problem" in out
+    assert "a meeting may have moved" not in out
+
+
+def test_prose_check_still_calls_a_mid_calendar_gap_a_moved_meeting(
+    cli, capsys, tmp_path
+):
+    config = _config_with(tmp_path, _FUTURE + ["2027-11-10"])
+    code = cli.main(["--html-file", str(FIXTURE), "--config", str(config), "--check"])
+    out = capsys.readouterr().out
+
+    assert code == 1
+    assert "a meeting may have moved" in out
+    assert "PARSER problem" not in out
