@@ -1,12 +1,25 @@
 # Spec 006: Free Source Expansion — Evaluating New APIs and Scrapeable Data
 
-Status: evaluation framework + ranked candidate list (no implementation).
-IMF/OECD endpoints **live-verified 2026-09-12** (§5.1); Kenneth French
-licensing still unverified.
-Last verified: 2026-09-12
+Status: evaluation framework + ranked candidate list, **plus one shipped and
+activated implementation slice.** IMF/OECD endpoints **live-verified
+2026-09-12** (§5.1); **OECD's first source client shipped 2026-09-12**
+(`sources/oecd.py`, `manifests/oecd_cli.yml`, `config/data_licensing.yml`,
+`docs/catalog/oecd.md`, `tests/test_oecd.py`, wired into
+`pipeline.SOURCE_FACTORIES`) — see §7. It shipped `active: false` per this
+spec's own acceptance criteria, then was **activated 2026-09-14** in a
+separate, deliberate commit as that criteria required — `oecd` now shows up
+in `fred_pipeline validate`'s "Active sources" line, and the
+`--licensing-review` gate still passes (`redistribution_allowed: false`
+clears it, as designed). Kenneth French licensing still unverified (network
+access to verify it is not available in every environment this spec gets
+worked from — see §7 step 2).
+Last verified: 2026-09-14
 Primary owner: TBD
 Target: decide which free sources are worth adding next, and on what evidence
-Recommended first build: **OECD** (`DSD_STES@DF_CLI`) — see §7
+Recommended first build: **OECD** (`DSD_STES@DF_CLI`) — **done and active,
+see §7.**
+Next: Kenneth French (needs a license check, blocked on network access) or
+IMF (needs a new SDMX 3.0 structure parser, §5.1).
 
 ## 1. Goal
 
@@ -263,6 +276,69 @@ shipping `active: false` with the `⚠️ VERIFY BEFORE ACTIVATING` header, a
 fails CI for an active source with no catalog page), and tests with recorded
 fixtures rather than live calls.
 
+**✅ DONE 2026-09-12 — OECD's first slice shipped:** `src/fred_pipeline/sources/oecd.py`
+(composite `OECD:<agency>:<dataflow>:<key>` series ids, no-vintages handling,
+open version segment), registered in `pipeline.SOURCE_FACTORIES`, a
+`config/data_licensing.yml` entry (`review_status: provisional`,
+`redistribution_allowed: false` per open decision #3), `manifests/oecd_cli.yml`
+(10 Composite Leading Indicator series, shipped `active: false`, with its own
+verification note explaining it deliberately skips the generic
+`⚠️ VERIFY BEFORE ACTIVATING` header — every series was live-verified during
+construction, not assembled from documentation), `docs/catalog/oecd.md`, and
+`tests/test_oecd.py`. `docs/instructions/adding_a_source.md` (the file open
+decision #4 below was about) now documents OECD as the SDMX/composite-id
+worked example.
+
+**✅ DONE 2026-09-14 — OECD manifest activated** (`active: true` on all 10
+series, a separate, deliberate commit as the acceptance criteria required —
+`oecd` now shows up in `fred_pipeline validate`'s "Active sources" output,
+verified locally with and without `--licensing-review`, both passing). Still
+outstanding, each a separate decision: the Kenneth French license check (§7
+step 2, still blocked on network access in every environment this has been
+worked from since), and building a second source (IMF or Kenneth French).
+
+### 7.1 Prep work for IMF and CFTC, done blocked on network (2026-09-14)
+
+Both IMF (§5.1) and CFTC (§5.2) are the two most-scoped unbuilt candidates,
+and both need a live probe before any client code — exactly the discipline
+this spec's verification caveat asks for. **Network access to every relevant
+host (`api.imf.org`, `api.us.socrata.com`, `www.cftc.gov`) was blocked in
+this environment** (proxy returned 403 on the CONNECT tunnel for each, the
+same failure mode as FRED/OECD/Dartmouth earlier), so neither could be
+probed for real here. What shipped instead is the probe tooling itself, so
+the next session with access can run one command rather than write this
+from scratch:
+
+- **`scripts/probe_imf_dataflows.py`** — hits IMF's SDMX 3.0 dataflow-list
+  structure endpoint, classifies each dataflow as stable vs. vintage-rotating
+  (by id suffix and by the `VINTAGE`-annotation text §5.1 already found), and
+  checks the result against the 2026-09-12 baseline (191 total / 77 stable /
+  114 vintage) — a mismatch means either the catalogue changed or the
+  classification logic needs adjusting, and the script says so rather than
+  silently trusting either count. This is also directly reusable as the
+  eventual `sources/imf.py`'s stable-dataflow input list once run for real
+  (open decision #5's "ignore" branch needs exactly this list; the "exploit"
+  branch's two open verification questions — do old vintage flows stay
+  queryable, and do they cover different data than the 77 stable flows — are
+  a separate, harder probe, not attempted here).
+- **`scripts/probe_cftc_format.py`** — tries CFTC's Socrata open-data catalog
+  search API (`publicreporting.cftc.gov`) alongside a couple of lower-
+  confidence legacy bulk-file URL guesses, and reports which one (if any)
+  actually works. This matters because §5.2's own assumption — "fixed-width/
+  CSV bulk files, `ishares.py`-shaped" — was never checked against what CFTC
+  actually serves today; if the Socrata REST API works, that's a materially
+  better structural fit (real documented fields, a stable dataset id) than
+  scraping bulk text files, and open decision #2's "COT should follow
+  `ishares.py`'s shape" conclusion would be worth revisiting before, not
+  after, building it that way.
+
+Both scripts were run in this environment and confirmed to fail cleanly
+(exit 1, proxy 403 on every candidate URL) rather than crash or fabricate
+output — that's the honest result of this pass, not a placeholder for one.
+Neither the IMF stable-dataflow list nor CFTC's real file format is known
+yet; don't write either into this spec or into code until one of these
+scripts has actually been run somewhere with access.
+
 ## 8. Acceptance Criteria
 
 - §5/§6 candidate rows carry a verified/assumed marker and a date — no
@@ -316,7 +392,16 @@ point-in-time correctness as a first-class principle and already carries
 explicit monthly vintages is an unusually clean PIT input. Worth a deliberate
 decision rather than a default skip, though **not** in the first build.
 
-**🟡 #4 — Should `docs/adding_a_source.md` exist?** `docs/deployment/deployment_runbook.md`
-references it as the place to look when adding a source, but **the file does
-not exist**. Whichever source is built next is the natural moment to write it
-from the actual steps taken, rather than reconstructing them later.
+**✅ RESOLVED #4 — the doc already existed, just at a different path; now
+updated with OECD.** *Found and fixed 2026-09-14.* The premise was slightly
+wrong: `docs/adding_a_source.md` doesn't exist, but
+`docs/instructions/adding_a_source.md` does — it was relocated during an
+earlier "reorganize docs into subfolders" commit and
+`docs/deployment/deployment_runbook.md`'s reference was never updated to
+follow it, which is what made it look missing. Fixed the reference, and (per
+this decision's original spirit — "whichever source is built next is the
+natural moment") added OECD as this doc's SDMX/composite-series-id worked
+example, since it's the source that actually got built. The doc's per-source
+table still doesn't cover `bis`, `ishares`, `stooq`, or `tiingo` — out of
+scope for this pass; flagged in the doc itself rather than silently
+backfilled.

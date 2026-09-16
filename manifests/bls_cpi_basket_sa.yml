@@ -6,13 +6,16 @@ description: >
   publishes SA only for the aggregates and items with an identifiable seasonal
   pattern — NOT the full stratum set (that's why bls_cpi_basket.yml, NSA, is the
   complete basket). This file covers the SA-published aggregates, the 8 major
-  groups, and the common SA sub-items. Shipped inactive (active: true).
+  groups, and the common SA sub-items.
 
-  ⚠️ VERIFY BEFORE ACTIVATING: SA availability is narrower than NSA and these ids
-  were assembled from the documented CPI structure, not checked live here. Some
-  detailed strata may be NSA-only — a missing SA id fails only that one series
-  (per-series isolation), so verify at https://data.bls.gov/toppicks?survey=cr
-  and prune any that BLS doesn't publish seasonally adjusted.
+  ⚠️ ACTIVE BUT NOT YET VERIFIED (flagged docs/handoffs/INTEGRATION_READY.md,
+  2026-09-14): SA availability is narrower than NSA and these ids were
+  assembled from the documented CPI structure, not checked live here, before
+  `active: true` shipped. Some detailed strata may be NSA-only — a missing SA
+  id fails only that one series (per-series isolation), so this is a silent
+  data-quality risk, not a crash risk. Verify at
+  https://data.bls.gov/toppicks?survey=cr and prune any that BLS doesn't
+  publish seasonally adjusted.
 version: 1
 
 series:

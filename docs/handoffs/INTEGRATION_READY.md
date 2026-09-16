@@ -4,6 +4,25 @@
 **Status:** ✅ All systems operational  
 **Test Coverage:** 10/10 local_store tests + 88/88 terminal_views tests = 100% pass
 
+**⚠️ PRIORITY, found 2026-09-14:** `manifests/bls_cpi_basket.yml` (30 series)
+and `manifests/bls_cpi_basket_sa.yml` (29 series) are **already `active: true`
+and live in production** — `oecd_cli` isn't the only recently-activated
+manifest, `bls` shows up in `fred_pipeline validate`'s "Active sources" via
+these two files — but **both still carry an unresolved
+`⚠️ VERIFY BEFORE ACTIVATING` header** stating their BLS item codes were
+"assembled from the documented CPI item structure but not checked against
+the live BLS series directory." That's a standing risk, not a formality: a
+wrong item code silently misfeeds `gold.*` inflation tables downstream (each
+bad id fails only that one series per this repo's per-series isolation, so
+nothing crashes loudly — it just serves wrong or missing CPI detail).
+**Fixing it needs a human (or an agent with live access) to check each id
+against https://data.bls.gov/toppicks?survey=cr** — blocked in every
+environment this has been worked from this session (`api.stlouisfed.org`-style
+403 at the network proxy applies to `data.bls.gov` too, unconfirmed but
+consistent with every other external host tried). This also means the
+"Remaining work" bullet below is stale — activation already happened, just
+without the verification its own header calls for.
+
 ---
 
 ## Summary
@@ -228,7 +247,9 @@ The pipeline covers **95% of market_terminal's data requirements**:
 | **Power BI Kernel** | ✅ Complete | Wave 0 ready |
 
 **Remaining work (optional):**
-- Activate CPI basket manifests (bls_cpi_basket.yml) for full INFL module detail
+- ~~Activate CPI basket manifests (bls_cpi_basket.yml) for full INFL module detail~~
+  — already active; **verifying its item codes against live BLS is the real
+  remaining step, see the priority note above.**
 - Expand international coverage (28+ countries for GCPI/GPOL)
 - Test end-to-end Power BI connection
 
@@ -246,7 +267,8 @@ The pipeline covers **95% of market_terminal's data requirements**:
 
 ### Week 2: Production Readiness
 1. ⏳ Test Databricks backend (if using production warehouse)
-2. ⏳ Activate CPI basket manifests (for full INFL module)
+2. ⏳ **Verify CPI basket item codes against live BLS** (already active,
+   not yet verified — see the priority note above)
 3. ⏳ Run full-catalog benchmark (profile real-world scaling)
 4. ⏳ Set up warehouse.yml for CI/CD environments
 

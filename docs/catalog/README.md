@@ -23,6 +23,7 @@ This folder is the human-readable catalog companion to `manifests/*.yml` and
 | EIA | [eia.md](eia.md) | populated |
 | FRED | [fred.md](fred.md) | populated starter (too large for full per-series enumeration — see manifests/*.yml) |
 | iShares | [ishares.md](ishares.md) | populated |
+| OECD | [oecd.md](oecd.md) | populated |
 | SEC | [sec.md](sec.md) | populated |
 | Stooq | [stooq.md](stooq.md) | populated |
 | Tiingo | [tiingo.md](tiingo.md) | populated |

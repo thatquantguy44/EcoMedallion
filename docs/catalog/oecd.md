@@ -20,11 +20,12 @@ catalogue serves flows owned by `ESTAT`, `IAEG-SDGs`, and per-directorate
 agencies like `OECD.SDD.STES`. Keys use dots, so the colon split is
 unambiguous.
 
-## Current Series (0 active)
+## Current Series (10 active)
 
 Manifest: `manifests/oecd_cli.yml` — 10 Composite Leading Indicator series
-(G7, G20, US, China, Germany, Japan, UK, France, India, Brazil), **shipped
-inactive**. Activation is a separate, deliberate commit per `specs/spec006`.
+(G7, G20, US, China, Germany, Japan, UK, France, India, Brazil). Shipped
+inactive 2026-09-12 per `specs/spec006`'s acceptance criteria, then activated
+2026-09-14 in a separate, deliberate commit as that spec required.
 
 CLI is amplitude-adjusted and normalised so **100 = long-run trend** — above
 100 signals above-trend momentum, below 100 below-trend. It's genuinely
