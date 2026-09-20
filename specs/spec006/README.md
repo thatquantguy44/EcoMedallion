@@ -1,8 +1,8 @@
 # Spec 006: Free Source Expansion — Evaluating New APIs and Scrapeable Data
 
-Status: evaluation framework + ranked candidate list, **plus one shipped and
-activated implementation slice.** IMF/OECD endpoints **live-verified
-2026-09-12** (§5.1); **OECD's first source client shipped 2026-09-12**
+Status: evaluation framework + ranked candidate list, **plus two shipped
+implementation slices.** IMF/OECD endpoints **live-verified 2026-09-12**
+(§5.1); **OECD's first source client shipped 2026-09-12**
 (`sources/oecd.py`, `manifests/oecd_cli.yml`, `config/data_licensing.yml`,
 `docs/catalog/oecd.md`, `tests/test_oecd.py`, wired into
 `pipeline.SOURCE_FACTORIES`) — see §7. It shipped `active: false` per this
@@ -10,16 +10,24 @@ spec's own acceptance criteria, then was **activated 2026-09-14** in a
 separate, deliberate commit as that criteria required — `oecd` now shows up
 in `fred_pipeline validate`'s "Active sources" line, and the
 `--licensing-review` gate still passes (`redistribution_allowed: false`
-clears it, as designed). Kenneth French licensing still unverified (network
-access to verify it is not available in every environment this spec gets
-worked from — see §7 step 2).
-Last verified: 2026-09-14
+clears it, as designed). **Kenneth French (second build, §9 decision #1)
+client + manifest shipped 2026-09-15** (`src/fred_pipeline/sources/french.py`,
+`manifests/french_factors.yml`, `docs/catalog/french.md`) — **but licensing
+is still unverified** (§7 step 2 remains outstanding): that build's
+environment blocked egress to `mba.tuck.dartmouth.edu`, so
+`config/data_licensing.yml`'s `french` entry is a best-informed guess, not a
+primary terms read, and the manifest's parser has not been checked against a
+real downloaded file. It ships `active: false` for that reason. CFTC COT
+(§9 decision #2) is next, unstarted.
+Last verified: 2026-09-15
 Primary owner: TBD
 Target: decide which free sources are worth adding next, and on what evidence
 Recommended first build: **OECD** (`DSD_STES@DF_CLI`) — **done and active,
 see §7.**
-Next: Kenneth French (needs a license check, blocked on network access) or
-IMF (needs a new SDMX 3.0 structure parser, §5.1).
+Next: a human with unblocked network access needs to verify Kenneth
+French's license terms and confirm its parser against a real downloaded
+file before activating it; after that, CFTC COT (§9 decision #2) or IMF
+(needs a new SDMX 3.0 structure parser, §5.1).
 
 ## 1. Goal
 
@@ -245,7 +253,17 @@ worked for ECB this session:
    endpoints; both legacy endpoints are dead. The probe *changed the
    recommendation* (below).
 2. Pull one **Kenneth French** file and confirm its current license terms.
-   *(Still outstanding.)*
+   **🟡 STILL BLOCKED as of 2026-09-15** — this build's environment blocks
+   egress to `mba.tuck.dartmouth.edu` the same way earlier sessions found
+   FRED/BLS/BEA/bis.org blocked (§4.2's "egress reality" caveat, made
+   concrete again). The client and manifest (`sources/french.py`,
+   `manifests/french_factors.yml`) were built against the library's
+   long-documented, decades-stable CSV layout rather than a live response,
+   and `config/data_licensing.yml`'s `french` entry says so plainly in its
+   `source_of_truth`. Both ship `active: false` for exactly this reason —
+   whoever next has unblocked egress to that host should (a) confirm the
+   parser against a real downloaded ZIP and (b) read the actual terms page
+   before either is flipped on.
 3. ~~Record findings in this spec.~~ **✅ DONE for IMF/OECD** (§5.1).
 
 **Recommended first build — now evidence-backed: OECD, specifically.** The
@@ -292,10 +310,18 @@ worked example.
 **✅ DONE 2026-09-14 — OECD manifest activated** (`active: true` on all 10
 series, a separate, deliberate commit as the acceptance criteria required —
 `oecd` now shows up in `fred_pipeline validate`'s "Active sources" output,
-verified locally with and without `--licensing-review`, both passing). Still
-outstanding, each a separate decision: the Kenneth French license check (§7
-step 2, still blocked on network access in every environment this has been
-worked from since), and building a second source (IMF or Kenneth French).
+verified locally with and without `--licensing-review`, both passing).
+
+**✅ DONE 2026-09-15 — Kenneth French's client + manifest shipped** (see the
+step 2 update above): `src/fred_pipeline/sources/french.py` (three monthly
+datasets — `F-F_Research_Data_Factors`, `F-F_Research_Data_5_Factors_2x3`,
+`F-F_Momentum_Factor` — each fetch exploding into per-factor Silver series,
+same shape as Tiingo's bare-ticker convention), registered in
+`pipeline.SOURCE_FACTORIES`, `manifests/french_factors.yml` (shipped
+`active: false`), `docs/catalog/french.md`, `tests/test_french_client.py`.
+Still outstanding, each a separate decision: the license check itself (§7
+step 2, blocked on network access in every environment this has been worked
+from so far) and building a third source (IMF or CFTC — see §7.1).
 
 ### 7.1 Prep work for IMF and CFTC, done blocked on network (2026-09-14)
 

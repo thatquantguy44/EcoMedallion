@@ -1,0 +1,91 @@
+name: french_factors
+description: >
+  Fama-French factor returns (source: french) — specs/spec006's second
+  recommended build ("OECD first, Kenneth French second", §9 decision #1).
+  Genuinely additive: gold.equity_factor_attribution and
+  gold.equity_factor_implied_return exist today with no authoritative factor
+  input (spec006 §2) — this is that input.
+
+  Three datasets, monthly, from the Kenneth French Data Library
+  (mba.tuck.dartmouth.edu/pages/faculty/ken.french). A manifest series_id is
+  the bare dataset name (e.g. F-F_Research_Data_Factors) — same "fetch key,
+  not the output series id" shape as manifests/equity_tiingo.yml's bare
+  ticker: one fetch downloads that dataset's ZIP once and
+  fred_pipeline.sources.french explodes it into one scalar Silver series per
+  factor column, series_id shape <dataset>:<factor>
+  (e.g. F-F_Research_Data_Factors:Mkt-RF, ...:SMB, ...:HML, ...:RF). The
+  5-factor dataset's own Mkt-RF/SMB/HML are a different (2x3-sort,
+  1963-onward) construction than the 3-factor dataset's, not duplicates, so
+  both datasets are kept.
+
+  Values are percentages as published (e.g. 2.96 means +2.96%), not decimal
+  fractions — matches this pipeline's existing convention of storing raw
+  source units. No vintages: realtime_start/realtime_end are always empty,
+  same as OECD/BIS/World Bank. min_value/max_value are set loosely across
+  every exploded factor in a dataset (including RF, whose real monthly range
+  is far narrower) — the same imprecision manifests/equity_tiingo.yml
+  already accepts for its own exploded fields.
+
+  ⚠️ VERIFY BEFORE ACTIVATING. Unlike oecd_cli.yml's Composite Leading
+  Indicator set, this manifest was NOT live-verified against the real
+  upstream: this session's environment blocks egress to
+  mba.tuck.dartmouth.edu (recorded in config/data_licensing.yml's french
+  entry), so neither the exact CSV layout this client parses nor these
+  series' current values have been confirmed against a live fetch. A human
+  must (1) confirm config/data_licensing.yml's french entry against a
+  primary terms read, (2) run this manifest against the live source and
+  confirm the parser handles the real file, before flipping any series here
+  to active: true.
+version: 1
+
+series:
+  - series_id: "F-F_Research_Data_Factors"
+    title: Fama-French 3-Factor Monthly Returns (Mkt-RF, SMB, HML, RF)
+    category: equity
+    frequency: m
+    units: Percent
+    active: false
+    source: french
+    load_type: full
+    expected_update_frequency: monthly
+    vintage_enabled: false
+    validation_profile: lenient
+    downstream_use_case: equity_factor_attribution
+    priority: 3
+    min_value: -40
+    max_value: 40
+    tags: [equity, factor, fama-french, french]
+
+  - series_id: "F-F_Research_Data_5_Factors_2x3"
+    title: Fama-French 5-Factor Monthly Returns (Mkt-RF, SMB, HML, RMW, CMA, RF)
+    category: equity
+    frequency: m
+    units: Percent
+    active: false
+    source: french
+    load_type: full
+    expected_update_frequency: monthly
+    vintage_enabled: false
+    validation_profile: lenient
+    downstream_use_case: equity_factor_attribution
+    priority: 3
+    min_value: -40
+    max_value: 40
+    tags: [equity, factor, fama-french, french]
+
+  - series_id: "F-F_Momentum_Factor"
+    title: Fama-French Momentum Factor Monthly Returns (Mom)
+    category: equity
+    frequency: m
+    units: Percent
+    active: false
+    source: french
+    load_type: full
+    expected_update_frequency: monthly
+    vintage_enabled: false
+    validation_profile: lenient
+    downstream_use_case: equity_factor_attribution
+    priority: 3
+    min_value: -40
+    max_value: 40
+    tags: [equity, factor, fama-french, french, momentum]

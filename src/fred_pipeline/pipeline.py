@@ -31,6 +31,7 @@ from fred_pipeline.sources.census import CensusClient
 from fred_pipeline.sources.ecb import ECBClient
 from fred_pipeline.sources.eia import EIAClient
 from fred_pipeline.sources.fred import FredClient
+from fred_pipeline.sources.french import FrenchClient
 from fred_pipeline.sources.ishares import ISharesClient
 from fred_pipeline.sources.oecd import OECDClient
 from fred_pipeline.sources.sec import SECClient
@@ -173,6 +174,15 @@ def _make_ishares(config: PipelineConfig) -> SourceClient:
     )
 
 
+def _make_french(config: PipelineConfig) -> SourceClient:
+    # Keyless Fama-French factor-return ZIP/CSV (Kenneth French Data Library).
+    return FrenchClient(
+        timeout=config.request_timeout_seconds,
+        max_retries=config.max_retries,
+        rate_limit_per_minute=_rate_limit_for_source(config, "french"),
+    )
+
+
 def _normalize_tiingo_keys(value: Any) -> list[str]:
     """``tiingo_api_key`` may be a single string (the common case) or a list
     of several account keys to rotate through when one's hourly quota is
@@ -215,6 +225,7 @@ SOURCE_FACTORIES = {
     "stooq": _make_stooq,
     "ishares": _make_ishares,
     "tiingo": _make_tiingo,
+    "french": _make_french,
 }
 
 # Sources that require an API key to call, mapped to the PipelineConfig
@@ -296,6 +307,7 @@ def _rate_limit_for_source(config: PipelineConfig, source: str) -> int:
         "stooq": 20,
         "ishares": 30,
         "tiingo": 10,
+        "french": 20,
     }
     return defaults.get(source, 60)
 

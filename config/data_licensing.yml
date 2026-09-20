@@ -272,3 +272,41 @@ sources:
       data with no good free API" -- the public daily holdings CSV is a
       defensible workaround, not a cleared license for reuse/
       redistribution. Conservative defaults until reviewed.
+
+  - source: french
+    license_type: attribution-noncommercial
+    review_status: provisional
+    source_of_truth: >
+      Not a primary read. The Kenneth French Data Library
+      (mba.tuck.dartmouth.edu) is a long-standing, freely-downloadable
+      academic dataset with no click-through license; this entry's
+      license_type is a best-informed guess (freely reusable for research
+      with attribution, commercial redistribution unclear) rather than a
+      terms page read. The primary page could NOT be fetched when this entry
+      was written: egress to mba.tuck.dartmouth.edu is blocked by the
+      authoring environment's network policy (the same class of block
+      recorded on the bis entry above for bis.org). A human must read
+      terms_url from an unblocked environment and set review_status:
+      verified with their name in reviewed_by before anything
+      French-derived is redistributed outside the organisation or claimed
+      as commercially usable.
+    redistribution_allowed: false
+    commercial_use_allowed: false
+    attribution_required: true
+    terms_url: https://mba.tuck.dartmouth.edu/pages/faculty/ken.french/data_library.html
+    last_reviewed_date: "2026-09-15"
+    notes: >
+      Added with specs/spec006's second recommended build (Fama-French
+      factor returns, spec006 §9 resolved decision #1: "OECD first, Kenneth
+      French second"). redistribution_allowed/commercial_use_allowed are
+      false by the same internal-use-only project posture as oecd's entry
+      above (spec006 decision #3), independent of whatever French's real
+      terms turn out to say -- that keeps `validate --licensing-review`
+      green without a primary terms read. Practical effect here: the new
+      manifests/french_factors.yml ships entirely `active: false`; nothing
+      downstream (gold.equity_factor_attribution /
+      gold.equity_factor_implied_return, the Gold tables spec006 §2 named as
+      having no authoritative factor input today) consumes this source yet.
+      Revisit this entry -- primary terms read, real review_status, a named
+      reviewed_by -- before either activating any series or wiring Gold to
+      consume them.
