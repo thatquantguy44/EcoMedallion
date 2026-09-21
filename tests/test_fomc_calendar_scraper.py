@@ -36,6 +36,7 @@ from fred_pipeline.catalogs.fomc_calendar import (
     FOMC_CALENDAR_URL,
     FOMCMeeting,
     FOMCScrapeError,
+    apply_calendar_refresh,
     diff_against_config,
     fetch_calendar_html,
     fetch_calendar_html_requests,
@@ -48,6 +49,7 @@ from fred_pipeline.catalogs.fomc_calendar import (
 
 FIXTURE = Path(__file__).parent / "fixtures" / "fomccalendars.html"
 SYNTHETIC_FIXTURE = Path(__file__).parent / "fixtures" / "fomccalendars_synthetic.html"
+REPO_FOMC_CONFIG = Path(__file__).parent.parent / "config" / "fomc.yml"
 
 
 @pytest.fixture(scope="module")
@@ -693,3 +695,248 @@ def test_prose_check_still_calls_a_mid_calendar_gap_a_moved_meeting(
     assert code == 1
     assert "a meeting may have moved" in out
     assert "PARSER problem" not in out
+
+
+# ---- config editing (spec008 §5 Decision 2 / §8 Phase 2) --------------------
+#
+# apply_calendar_refresh is pure string-in/string-out, so these run against
+# both a small synthetic fixture (precise, easy-to-read expected output) and
+# the real committed config/fomc.yml (the golden test spec008 §8 Phase 2
+# explicitly asks for: "a config edited by the tool differs from a hand-edit
+# only in the dates added").
+
+_SYNTHETIC_CONFIG = """\
+# header comment
+calendar_provenance:
+  source_url: https://example.gov/calendar
+  last_verified: 2026-01-01
+  verified_by: manual
+  # the Fed's own horizon
+  published_through: 2026-06-10
+
+meeting_dates:
+  - "2026-01-15"
+  - "2026-03-18"
+  # a comment explaining the last one
+  - "2026-06-10"
+
+bucket_step_bps: 25
+"""
+
+
+def test_apply_calendar_refresh_inserts_into_the_middle():
+    updated = apply_calendar_refresh(
+        _SYNTHETIC_CONFIG,
+        [FOMCMeeting(date(2026, 2, 1), date(2026, 1, 31), 2026)],
+        last_verified=date(2026, 2, 2),
+    )
+    lines = updated.splitlines()
+    idx = lines.index('  - "2026-03-18"')
+    assert lines[idx - 1] == '  - "2026-02-01"'
+
+
+def test_apply_calendar_refresh_appends_at_the_end():
+    updated = apply_calendar_refresh(
+        _SYNTHETIC_CONFIG,
+        [FOMCMeeting(date(2026, 8, 12), date(2026, 8, 11), 2026)],
+        last_verified=date(2026, 2, 2),
+    )
+    lines = updated.splitlines()
+    md_idx = lines.index("meeting_dates:")
+    item_lines = [
+        line for line in lines[md_idx + 1:] if line.strip().startswith('- "')
+    ]
+    assert item_lines[-1] == '  - "2026-08-12"'
+
+
+def test_apply_calendar_refresh_is_a_true_noop_when_already_present():
+    already_there = FOMCMeeting(date(2026, 3, 18), date(2026, 3, 17), 2026)
+    updated = apply_calendar_refresh(
+        _SYNTHETIC_CONFIG, [already_there], last_verified=date(2026, 2, 2)
+    )
+    assert updated == _SYNTHETIC_CONFIG  # byte-identical: no bump either
+
+
+def test_apply_calendar_refresh_skips_present_dates_but_keeps_new_ones():
+    updated = apply_calendar_refresh(
+        _SYNTHETIC_CONFIG,
+        [
+            FOMCMeeting(date(2026, 3, 18), date(2026, 3, 17), 2026),  # already there
+            FOMCMeeting(date(2026, 2, 1), date(2026, 1, 31), 2026),  # new
+        ],
+        last_verified=date(2026, 2, 2),
+    )
+    item_lines = [
+        line.split("#")[0].strip()
+        for line in updated.splitlines()
+        if line.strip().startswith('- "')
+    ]
+    assert item_lines == ['- "2026-01-15"', '- "2026-02-01"', '- "2026-03-18"', '- "2026-06-10"']
+
+
+def test_apply_calendar_refresh_preserves_the_leading_comment_on_reorder():
+    """The comment above 2026-06-10 must stay attached to it, not get
+    stranded above whatever now sorts immediately before it."""
+    updated = apply_calendar_refresh(
+        _SYNTHETIC_CONFIG,
+        [FOMCMeeting(date(2026, 5, 1), date(2026, 4, 30), 2026)],
+        last_verified=date(2026, 2, 2),
+    )
+    lines = updated.splitlines()
+    idx = lines.index("  # a comment explaining the last one")
+    assert lines[idx + 1] == '  - "2026-06-10"'
+    assert lines[idx - 1] == '  - "2026-05-01"'
+
+
+def test_apply_calendar_refresh_renders_projection_suffix():
+    updated = apply_calendar_refresh(
+        _SYNTHETIC_CONFIG,
+        [FOMCMeeting(date(2026, 2, 1), date(2026, 1, 31), 2026, is_projection_meeting=True)],
+        last_verified=date(2026, 2, 2),
+    )
+    assert '  - "2026-02-01"  # SEP / projections' in updated.splitlines()
+
+
+def test_apply_calendar_refresh_sorts_unsorted_input():
+    updated = apply_calendar_refresh(
+        _SYNTHETIC_CONFIG,
+        [
+            FOMCMeeting(date(2026, 5, 1), date(2026, 4, 30), 2026),
+            FOMCMeeting(date(2026, 2, 1), date(2026, 1, 31), 2026),
+        ],
+        last_verified=date(2026, 2, 2),
+    )
+    item_lines = [
+        line.split("#")[0].strip()
+        for line in updated.splitlines()
+        if line.strip().startswith('- "')
+    ]
+    assert item_lines == [
+        '- "2026-01-15"', '- "2026-02-01"', '- "2026-03-18"',
+        '- "2026-05-01"', '- "2026-06-10"',
+    ]  # fmt: skip
+
+
+def test_apply_calendar_refresh_bumps_last_verified_and_verified_by():
+    updated = apply_calendar_refresh(
+        _SYNTHETIC_CONFIG,
+        [FOMCMeeting(date(2026, 2, 1), date(2026, 1, 31), 2026)],
+        verified_by="scraper",
+        last_verified=date(2026, 2, 2),
+    )
+    assert "  last_verified: 2026-02-02" in updated.splitlines()
+    assert "  verified_by: scraper" in updated.splitlines()
+    # untouched: the field, its own comment, and everything else in the block
+    assert "  source_url: https://example.gov/calendar" in updated.splitlines()
+    assert "  # the Fed's own horizon" in updated.splitlines()
+    assert "  published_through: 2026-06-10" in updated.splitlines()
+
+
+def test_apply_calendar_refresh_bumps_published_through_when_given():
+    updated = apply_calendar_refresh(
+        _SYNTHETIC_CONFIG,
+        [FOMCMeeting(date(2026, 2, 1), date(2026, 1, 31), 2026)],
+        last_verified=date(2026, 2, 2),
+        published_through=date(2026, 9, 1),
+    )
+    assert "  published_through: 2026-09-01" in updated.splitlines()
+
+
+def test_apply_calendar_refresh_defaults_last_verified_to_today(monkeypatch):
+    import fred_pipeline.catalogs.fomc_calendar as fc
+
+    class _FixedDate(date):
+        @classmethod
+        def today(cls):
+            return date(2030, 1, 1)
+
+    monkeypatch.setattr(fc, "date", _FixedDate)
+    updated = fc.apply_calendar_refresh(
+        _SYNTHETIC_CONFIG, [FOMCMeeting(date(2026, 2, 1), date(2026, 1, 31), 2026)]
+    )
+    assert "  last_verified: 2030-01-01" in updated.splitlines()
+
+
+def test_apply_calendar_refresh_tolerates_missing_provenance_block():
+    """A pre-spec008 config with no calendar_provenance block must keep
+    working (AC-009) -- the editor just skips the bump, it doesn't crash."""
+    config = 'meeting_dates:\n  - "2026-01-15"\n\nbucket_step_bps: 25\n'
+    updated = apply_calendar_refresh(
+        config, [FOMCMeeting(date(2026, 2, 1), date(2026, 1, 31), 2026)]
+    )
+    assert '  - "2026-02-01"' in updated.splitlines()
+    assert "calendar_provenance" not in updated
+
+
+def test_apply_calendar_refresh_rejects_config_with_no_meeting_dates_key():
+    with pytest.raises(FOMCScrapeError):
+        apply_calendar_refresh("bucket_step_bps: 25\n", [])
+
+
+def test_apply_calendar_refresh_preserves_trailing_newline_state():
+    no_trailing = _SYNTHETIC_CONFIG.rstrip("\n")
+    updated = apply_calendar_refresh(
+        no_trailing,
+        [FOMCMeeting(date(2026, 2, 1), date(2026, 1, 31), 2026)],
+        last_verified=date(2026, 2, 2),
+    )
+    assert not updated.endswith("\n")
+
+    with_trailing = _SYNTHETIC_CONFIG
+    updated2 = apply_calendar_refresh(
+        with_trailing,
+        [FOMCMeeting(date(2026, 2, 1), date(2026, 1, 31), 2026)],
+        last_verified=date(2026, 2, 2),
+    )
+    assert updated2.endswith("\n")
+
+
+def test_apply_calendar_refresh_output_still_parses_as_yaml():
+    import yaml
+
+    updated = apply_calendar_refresh(
+        _SYNTHETIC_CONFIG,
+        [FOMCMeeting(date(2026, 2, 1), date(2026, 1, 31), 2026, is_projection_meeting=True)],
+        last_verified=date(2026, 2, 2),
+    )
+    parsed = yaml.safe_load(updated)
+    assert parsed["meeting_dates"] == [
+        "2026-01-15", "2026-02-01", "2026-03-18", "2026-06-10",
+    ]  # fmt: skip
+    assert parsed["calendar_provenance"]["last_verified"] == date(2026, 2, 2)
+
+
+# ---- golden test against the real committed config --------------------------
+#
+# spec008 §8 Phase 2 exit gate, verbatim: "a config edited by the tool differs
+# from a hand-edit only in the dates added." This diffs the tool's output
+# against the actual config/fomc.yml on disk and asserts the only lines that
+# differ are the inserted meeting and the bumped last_verified line -- every
+# comment, every other field, survives untouched.
+
+
+def test_apply_calendar_refresh_golden_against_the_real_config():
+    original = REPO_FOMC_CONFIG.read_text(encoding="utf-8")
+    orig_lines = original.splitlines()
+    old_last_verified_line = next(
+        line for line in orig_lines if line.strip().startswith("last_verified:")
+    )
+
+    new_meeting = FOMCMeeting(date(2028, 3, 14), date(2028, 3, 13), 2028)
+    updated = apply_calendar_refresh(
+        original, [new_meeting], last_verified=date(2026, 9, 22)
+    )
+    new_lines = updated.splitlines()
+
+    added = [line for line in new_lines if line not in orig_lines]
+    removed = [line for line in orig_lines if line not in new_lines]
+
+    assert sorted(added) == sorted(['  - "2028-03-14"', "  last_verified: 2026-09-22"])
+    assert removed == [old_last_verified_line]
+
+    # and it still has to actually load
+    import yaml
+
+    parsed = yaml.safe_load(updated)
+    assert "2028-03-14" in parsed["meeting_dates"]
+    assert parsed["meeting_dates"] == sorted(parsed["meeting_dates"])
