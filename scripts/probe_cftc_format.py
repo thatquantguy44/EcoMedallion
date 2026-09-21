@@ -46,7 +46,6 @@ URL is stale -- both are useful outcomes to know).
 from __future__ import annotations
 
 import argparse
-import sys
 from dataclasses import dataclass
 from pathlib import Path
 

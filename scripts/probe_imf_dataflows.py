@@ -21,6 +21,23 @@ shape spec006 describes, and falls back to dumping raw top-level JSON keys
 if that shape doesn't match, so a human can adapt it quickly rather than the
 script failing silently or asserting something false.
 
+**Also probes one actual data query** (default dataflow: COFER), because
+spec006 §5.1 records "Data query verified (COFER 2024 -> real reserve
+values)" from the 2026-09-12 live session, but nobody saved the response --
+so that verification isn't reproducible or reviewable, only asserted. SDMX
+3.0's REST addressing is `/data/dataflow/{agency}/{id}/{version}/{key}`, and
+the agency that actually maintains a given flow isn't always `IMF` (the same
+"agency isn't always the obvious one" trap spec006 §5.1 already documents
+for OECD's catalogue), so this tries a small set of plausible agency ids
+rather than assuming one. This half is even more exploratory than the
+dataflow-list probe above: it exists to CAPTURE a real response for the
+first time, not to parse one confidently -- unlike ``sources/french.py``'s
+CSV format (decades-stable, extremely well-documented), IMF's exact
+SDMX-JSON dialect (dimension-index key encoding, attribute array shape) has
+real known variation across providers and SDMX-JSON schema versions, so
+building `sources/imf.py`'s real ``normalize()`` before this actually
+returns something would be encoding a guess as if it were verified.
+
 Never writes to config/ or manifests/ -- prints a summary and (optionally)
 saves the raw response + the stable/vintage split to JSON files for later
 use as a real fixture and as the input list for building sources/imf.py.
@@ -36,9 +53,16 @@ Usage:
     # it already moved once, off dataservices.imf.org, per spec006 §5.1)
     python scripts/probe_imf_dataflows.py --base-url https://api.imf.org/external/sdmx/3.0
 
-Exit codes: 0 = fetched and parsed (even if the split looks odd -- check the
-printed summary), 1 = request failed, 2 = response didn't parse as JSON or
-didn't match any known shape (raw keys are printed either way).
+    # try a different sample dataflow for the data-query half, or skip it
+    python scripts/probe_imf_dataflows.py --sample-dataflow BOP
+    python scripts/probe_imf_dataflows.py --skip-data-query
+
+Exit codes: 0 = the dataflow-list probe fetched and parsed (even if the
+split looks odd -- check the printed summary), 1 = that request failed, 2 =
+that response didn't parse as JSON or didn't match any known shape (raw keys
+are printed either way). The data-query half's outcome is reported
+separately and does not change the exit code -- it is a bonus capture
+attempt, not this script's primary contract.
 """
 
 from __future__ import annotations
@@ -78,6 +102,66 @@ USER_AGENT = (
     "(https://github.com/thatquantguy44/EcoMedallion; research probe, not "
     "a production client -- contact repo owner)"
 )
+
+# SDMX 3.0 data queries also serve JSON in more than one dialect; same
+# negotiate-and-take-the-first-that-parses approach as the structure probe.
+DATA_ACCEPT_HEADERS = (
+    "application/vnd.sdmx.data+json;version=2.0.0",
+    "application/vnd.sdmx.data+json;version=1.0.0",
+    "application/vnd.sdmx.data+json",
+    "application/json",
+)
+
+# Agencies known to maintain IMF-published dataflows. Not exhaustive --
+# IMF's real maintaining-agency list isn't known without a live structure
+# probe (same "the obvious agency isn't always right" trap as OECD's
+# catalogue, spec006 §5.1) -- but these are the plausible candidates from
+# public documentation, tried in order.
+CANDIDATE_AGENCIES = ("IMF.STA", "IMF", "IMF.RES")
+
+
+def _fetch_sample_data(
+    base_url: str, dataflow_id: str, timeout: int
+) -> tuple[dict[str, Any], str, str]:
+    """Try a handful of (agency, Accept-header) combinations against the
+    SDMX 3.0 REST data endpoint for one dataflow, wildcarding version and key
+    so the query matches whatever is actually published. Returns
+    ``(payload, agency_used, accept_used)``. Raises on total failure.
+    """
+    last_err: Exception | None = None
+    for agency in CANDIDATE_AGENCIES:
+        url = f"{base_url.rstrip('/')}/data/dataflow/{agency}/{dataflow_id}/+/all"
+        for accept in DATA_ACCEPT_HEADERS:
+            try:
+                resp = requests.get(
+                    url,
+                    headers={"Accept": accept, "User-Agent": USER_AGENT},
+                    timeout=timeout,
+                )
+            except requests.RequestException as exc:
+                last_err = exc
+                continue
+            print(
+                f"  data query agency={agency!r} Accept={accept!r} -> "
+                f"HTTP {resp.status_code}, "
+                f"content-type={resp.headers.get('content-type')!r}",
+                file=sys.stderr,
+            )
+            if resp.status_code != 200:
+                last_err = RuntimeError(
+                    f"HTTP {resp.status_code} for agency={agency!r} "
+                    f"Accept={accept!r}: {resp.text[:500]!r}"
+                )
+                continue
+            try:
+                return resp.json(), agency, accept
+            except ValueError as exc:
+                last_err = exc
+                continue
+    raise RuntimeError(
+        f"no (agency, Accept) combination returned parseable JSON for "
+        f"dataflow {dataflow_id!r}"
+    ) from last_err
 
 
 def _fetch_dataflows(base_url: str, timeout: int) -> tuple[dict[str, Any], str]:
@@ -158,6 +242,44 @@ def _is_vintage(record: dict[str, Any]) -> bool:
     return False
 
 
+def _probe_sample_data_query(args: argparse.Namespace) -> None:
+    """Best-effort capture of one real data query. Never raises past this
+    function and never affects the script's exit code -- see the module
+    docstring for why this is a capture attempt, not a parser to trust yet.
+    """
+    if args.skip_data_query:
+        return
+    print(
+        f"\nProbing a data query for dataflow {args.sample_dataflow!r} "
+        f"(agencies tried: {list(CANDIDATE_AGENCIES)}) ...",
+        file=sys.stderr,
+    )
+    try:
+        payload, agency_used, accept_used = _fetch_sample_data(
+            args.base_url, args.sample_dataflow, args.timeout
+        )
+    except Exception as exc:  # noqa: BLE001 -- bonus probe, report and move on
+        print(f"Data query FAILED: {exc}", file=sys.stderr)
+        return
+
+    print(
+        f"Data query fetched OK: agency={agency_used!r}, Accept={accept_used!r}. "
+        f"Top-level keys: {list(payload.keys())}",
+        file=sys.stderr,
+    )
+    if args.out_dir:
+        args.out_dir.mkdir(parents=True, exist_ok=True)
+        out_path = args.out_dir / f"imf_{args.sample_dataflow.lower()}_data_probe_raw.json"
+        out_path.write_text(json.dumps(payload, indent=2))
+        print(
+            f"Saved raw data-query response to {out_path} -- this is the "
+            f"real fixture the module docstring says is missing; use it to "
+            f"write sources/imf.py's normalize() against reality instead of "
+            f"the general SDMX-JSON spec.",
+            file=sys.stderr,
+        )
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--base-url", default=DEFAULT_BASE_URL)
@@ -166,9 +288,19 @@ def main() -> int:
         "--out-dir", type=Path, default=None,
         help="save the raw response and classified split as JSON here",
     )
+    parser.add_argument(
+        "--sample-dataflow", default="COFER",
+        help="dataflow id to attempt a real data query against (default: COFER)",
+    )
+    parser.add_argument(
+        "--skip-data-query", action="store_true",
+        help="only run the dataflow-list probe, skip the data-query capture attempt",
+    )
     args = parser.parse_args()
 
-    print(f"Probing {args.base_url} ...", file=sys.stderr)
+    _probe_sample_data_query(args)
+
+    print(f"\nProbing {args.base_url} ...", file=sys.stderr)
     try:
         payload, accept_used = _fetch_dataflows(args.base_url, args.timeout)
     except Exception as exc:  # noqa: BLE001 -- top-level probe, report and exit
@@ -201,12 +333,24 @@ def main() -> int:
 
     stable = []
     vintage = []
+    missing_id = 0
     for rec in records:
-        (vintage if _is_vintage(rec) else stable).append(rec.get("id"))
+        flow_id = rec.get("id")
+        if not flow_id:
+            missing_id += 1
+            continue
+        (vintage if _is_vintage(rec) else stable).append(flow_id)
 
     print(f"\nTotal dataflows:   {len(records)}")
     print(f"Stable ids:        {len(stable)}")
     print(f"Vintage-rotating:  {len(vintage)}")
+    if missing_id:
+        print(
+            f"Missing 'id':      {missing_id} (excluded from both lists -- "
+            f"a record with no id means _iter_dataflow_records's assumed "
+            f"shape is only a partial match; inspect the raw payload)",
+            file=sys.stderr,
+        )
     print(
         f"\n2026-09-12 baseline was {BASELINE_TOTAL} total / "
         f"{BASELINE_STABLE} stable / {BASELINE_VINTAGE} vintage."
