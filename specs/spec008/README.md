@@ -1,6 +1,6 @@
 # Spec 008: Productionalizing the FOMC Meeting Calendar
 
-Status: **proposed — ready for review. Phases 0-2 are DONE.** Phase 0
+Status: **proposed — ready for review. Phases 0-3 are DONE.** Phase 0
 (2026-09-15) justified itself: the first live run found two real parser
 bugs, both now fixed, and the fixture is a real capture. See §2.4 and
 [`docs/handoffs/fomc_calendar_scraper.md`](../../docs/handoffs/fomc_calendar_scraper.md) §11.
@@ -12,13 +12,18 @@ with tests. Phase 2 (2026-09-21): `apply_calendar_refresh()` in
 `meeting_dates` plus the provenance bump, pure string-in/string-out, with a
 golden test against the real committed `config/fomc.yml` proving the only
 lines that change are the inserted date and the bumped `last_verified`.
-**Phases 3-4 remain unstarted** — `.github/workflows/` has only `ci.yml`;
-no scheduled job exists yet, so nothing actually calls `apply_calendar_refresh`
-or opens a PR/issue. `scripts/scrape_fomc_calendar.py --check` still has to
-be run by a human (or `ci.yml`'s ordinary `pytest -q`, indirectly, via the
-runway unit test) until Phase 3 ships.
+Phase 3 (2026-09-23): `scripts/fomc_calendar_automation.py` plus
+`.github/workflows/fomc-calendar.yml` — the weekly job that actually calls
+`apply_calendar_refresh` and opens the PR/issue. **This ships with one
+honest gap against AC-006, recorded in §8's Phase 3 write-up: the automated
+path never runs a live workflow-dispatch against this repo's real GitHub
+remote (this sandbox cannot reach `federalreserve.gov` or push to GitHub),
+so "validated by dispatch against a pinned fixture" is unmet — only the pure
+decision logic and the command construction are proven, via 26 tests
+covering `plan_actions` and an injected-runner `execute_plan`.** Phase 4
+(closing the loop end to end, AC-011) remains unstarted.
 
-Last verified: 2026-09-21
+Last verified: 2026-09-23
 
 Primary owner: TBD
 
@@ -477,16 +482,79 @@ every other field is byte-identical.
 that wiring (deciding *when* to call it, and what to do with the result: a
 committed branch, a PR) is Phase 3.
 
-### Phase 3 — The workflow
+### Phase 3 — The workflow — ✅ DONE 2026-09-23 (with one gap — see below)
 
-`.github/workflows/fomc-calendar.yml`: weekly cron, `workflow_dispatch`,
-the four-way branch of §6, PR creation/update, issue creation with
-deduplication, artifact upload, least-privilege permissions.
+`scripts/fomc_calendar_automation.py` is the driver: `plan_actions()` is a
+pure function from `(parsed meetings, configured dates, today)` to an
+`AutomationPlan` — a frozen dataclass recording which of the four
+independent branches apply (propose a refresh PR, open a moved-meeting
+issue, open a parser-problem issue, open a runway issue) and with what
+content. `execute_plan()` walks that plan and, for each branch that
+applies, calls `apply_calendar_refresh` + shells out to `git`/`gh` through
+an injectable `Runner` — the same injectable-subprocess pattern already
+used elsewhere in this repo for testable orchestration. `.github/workflows/fomc-calendar.yml`
+wires it up: weekly cron (Monday 13:00 UTC) plus `workflow_dispatch`, a
+`concurrency` group so overlapping runs queue rather than race,
+least-privilege `permissions` (`contents`/`pull-requests`/`issues: write`,
+nothing else), the default `github.token` (no custom secret), the fetched
+HTML uploaded as an artifact on every run via `actions/upload-artifact@v4`
+(`if: always()`), and no `pull_request` trigger at all — satisfying
+AC-010's fork restriction the simplest possible way: that event doesn't
+exist on this file.
 
-Validate by `workflow_dispatch` against a pinned fixture served locally
-before pointing it at the Fed.
+PR creation/update is deduplicated on the fixed branch name
+(`automation/fomc-calendar-refresh`) via `gh pr list --json number`; issue
+creation is deduplicated per-kind on a fixed title via `gh issue list
+--json number`. A parse failure (fetch error or zero meetings parsed) is
+routed to one "parser problem" issue and, independently of that issue,
+makes `main()` return exit code 1 — this is the AC-006 fix: the job goes
+red on its own, it does not rely on the issue being read.
 
-**Exit gate:** AC-003 through AC-006, AC-010, AC-012.
+**Tested (26 tests, `tests/test_fomc_calendar_automation.py`):** every
+`plan_actions` branch in isolation and in combination (quiet/in-sync,
+new-meetings-found, moved-meeting, parser-problem, each runway threshold);
+command construction via a recording/canning fake runner (PR create vs.
+edit dedup, issue create vs. edit dedup, dry-run never touching the
+filesystem); and the real CLI's exit-code contract via actual subprocess
+invocation (`test_main_exits_nonzero_when_the_page_fails_to_parse`).
+
+**Not validated — the gap this exit gate does not fully close.** The spec's
+own instruction above ("validate by `workflow_dispatch` against a pinned
+fixture served locally before pointing it at the Fed") did not happen: this
+sandbox has no egress to `federalreserve.gov` and no push access to run a
+real GitHub Actions dispatch, so the `git`/`gh` commands `execute_plan`
+constructs have been proven correct by inspection and by a fake runner
+recording their argv, never by actually running against a live repo. Phase
+4's "merge a real refresh PR end to end" is the first point this gets
+proven for real; until then, treat the workflow as reviewed-but-unflown.
+
+**Deliberate simplifications, not oversights:**
+- The interactive CLI (`scrape_fomc_calendar.py`) retries with the Selenium
+  backend when the `requests` backend parses zero meetings; the automated
+  path does not carry that retry. A zero-meetings parse goes straight to
+  the parser-problem issue and a red exit rather than trying a second
+  backend first. This means AC-006's phrase "naming both backends'
+  failures" is **not literally met** — the issue names only the one
+  backend's failure (`requests`, the only one the automated path uses).
+  Adding the Selenium retry would mean a headless-browser dependency in the
+  Actions runner for a backend that exists mainly as this repo's fallback
+  for interactive/local use; deferred rather than built speculatively.
+- Fetch failure (network/DNS/5xx, AC-012) and parse failure (page reachable
+  but zero meetings, R-01/AC-006) are **not split into separate issues** —
+  both land in the same "parser problem" path with the underlying error
+  message included, and both make the job exit 1. AC-012 also asks that the
+  `requests` cause be reported first, which the shared error message
+  satisfies without a separate code path.
+- Decision 7 (fixture auto-refresh riding the drift PR) is **not
+  implemented in this slice** — the refresh PR only ever touches
+  `config/fomc.yml`, never `tests/fixtures/fomccalendars.html`. Open
+  Decision 6 above is accordingly still open.
+
+**Exit gate:** AC-003, AC-004, AC-005, AC-010 met by test and by workflow
+review. AC-006 met on the exit-code half, not on the "both backends" phrase
+(see above). AC-012 met on the error-ordering half; not yet proven against
+a real network failure. All of it unflown against a live repo per the gap
+noted above.
 
 ### Phase 4 — Close the loop and document
 

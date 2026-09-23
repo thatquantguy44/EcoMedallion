@@ -1,0 +1,62 @@
+name: FOMC calendar refresh
+
+# spec008 Phase 3 — the scheduled job that closes the loop
+# scripts/fomc_calendar_automation.py's own docstring describes.
+#
+# Deliberately NOT a `pull_request` trigger at all (satisfies AC-010's
+# "never runs on pull_request from a fork" the simplest possible way: the
+# event this workflow reacts to doesn't exist on this file). Weekly cadence
+# per spec008 Decision 1 — the Fed extends its published calendar about once
+# a year, so this is cheap insurance, not high-frequency polling.
+#
+# GitHub-hosted runners have normal outbound internet access, unlike this
+# repo's authoring/dev sandbox (docs/handoffs/fomc_calendar_scraper.md §8),
+# so this can actually reach federalreserve.gov.
+
+on:
+  schedule:
+    - cron: "0 13 * * 1" # Mondays 13:00 UTC
+  workflow_dispatch: {}
+
+concurrency:
+  group: fomc-calendar-refresh
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      # Only this script's own dependencies -- no need for the full dev
+      # requirements just to fetch + diff + edit + open a PR/issue.
+      - run: pip install requests PyYAML
+      - name: Configure git identity for the automated commit
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+      - name: Run the FOMC calendar refresh
+        id: refresh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python scripts/fomc_calendar_automation.py --live \
+            --save-html /tmp/fomc-calendar-latest.html
+      # Evidence trail on every run, not just failures -- cheap, and it's
+      # exactly what a parser-problem issue links to (spec008 Decision 3).
+      - name: Upload the fetched page as an artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fomc-calendar-latest-html
+          path: /tmp/fomc-calendar-latest.html
+          if-no-files-found: ignore
+          retention-days: 90
