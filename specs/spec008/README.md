@@ -1,12 +1,24 @@
 # Spec 008: Productionalizing the FOMC Meeting Calendar
 
-Status: **proposed — ready for review. Phase 0 is DONE (2026-09-15)** and it
-justified itself: the first live run found two real parser bugs, both now
-fixed, and the fixture is a real capture. See §2.4 and
+Status: **proposed — ready for review. Phases 0-2 are DONE.** Phase 0
+(2026-09-15) justified itself: the first live run found two real parser
+bugs, both now fixed, and the fixture is a real capture. See §2.4 and
 [`docs/handoffs/fomc_calendar_scraper.md`](../../docs/handoffs/fomc_calendar_scraper.md) §11.
-Phases 1-4 remain unstarted.
+Phase 1 (2026-09-15, undocumented here until now — this status line had gone
+stale): `--check --json`, `calendar_provenance` parsing
+(`gold_config/fomc_config.py`), and `runway_days`/`runway_level` all shipped
+with tests. Phase 2 (2026-09-21): `apply_calendar_refresh()` in
+`catalogs/fomc_calendar.py` — comment-preserving insertion into
+`meeting_dates` plus the provenance bump, pure string-in/string-out, with a
+golden test against the real committed `config/fomc.yml` proving the only
+lines that change are the inserted date and the bumped `last_verified`.
+**Phases 3-4 remain unstarted** — `.github/workflows/` has only `ci.yml`;
+no scheduled job exists yet, so nothing actually calls `apply_calendar_refresh`
+or opens a PR/issue. `scripts/scrape_fomc_calendar.py --check` still has to
+be run by a human (or `ci.yml`'s ordinary `pytest -q`, indirectly, via the
+runway unit test) until Phase 3 ships.
 
-Last verified: 2026-09-15
+Last verified: 2026-09-21
 
 Primary owner: TBD
 
@@ -371,7 +383,7 @@ backends and exit codes all exist. What this spec adds:
 | Piece | Where | Roughly |
 |---|---|---|
 | `--json` output mode for `--check` | `scripts/scrape_fomc_calendar.py` | small — serialize `CalendarDiff` + runway so the workflow reads structured data instead of scraping stdout |
-| Config editing (insert dates, bump provenance) | new `catalogs/fomc_calendar.py` function | moderate — must preserve comments; insert into the list, never rewrite the file |
+| Config editing (insert dates, bump provenance) | `catalogs/fomc_calendar.py::apply_calendar_refresh` | ✅ done (Phase 2, 2026-09-21) |
 | `calendar_provenance` parsing | `gold_config/fomc_config.py` | small |
 | The workflow | `.github/workflows/fomc-calendar.yml` | moderate |
 | Runway/escalation helper | `catalogs/fomc_calendar.py` | small, pure, fully testable |
@@ -436,15 +448,34 @@ threshold change (Decision 5).
 
 **Exit gate:** AC-007, AC-008, AC-009. All offline, all deterministic.
 
-### Phase 2 — The config editor
+### Phase 2 — The config editor — ✅ DONE 2026-09-21
 
-Comment-preserving insertion into `meeting_dates` plus provenance bump.
-Pure function, tested against the real committed config as a fixture,
-including: insertion into the middle, append at the end, no-op when already
-present, and a golden test proving every comment survives.
+`apply_calendar_refresh()` in `catalogs/fomc_calendar.py`: comment-preserving
+insertion into `meeting_dates` plus the `calendar_provenance` bump
+(`last_verified`, `verified_by`, and `published_through` when the caller
+supplies it). Pure string-in/string-out — groups the block into one chunk
+per item so any comment immediately above a date (e.g. the note above
+`2028-01-26`) travels with it through re-sorting, then inserts new chunks by
+date; touches nothing else in the file. A date already present is skipped
+rather than duplicated, so calling it with nothing genuinely new returns the
+input unchanged, byte-for-byte, including no provenance bump. Missing a
+`calendar_provenance` block is tolerated (AC-009 back-compat) — the bump is
+just skipped, not an error.
 
-**Exit gate:** a config edited by the tool differs from a hand-edit only in
-the dates added.
+Tested per the exit gate's own list — insertion into the middle, append at
+the end, no-op when already present, unsorted input, the SEP-suffix
+rendering, the missing-provenance-block path, a malformed-input rejection —
+plus the golden test against the real committed `config/fomc.yml`.
+`tests/test_fomc_calendar_scraper.py`.
+
+**Exit gate — met:** the golden test diffs the tool's output against
+`config/fomc.yml` on disk and asserts the only two lines that differ are the
+inserted meeting item and the bumped `last_verified` line; every comment and
+every other field is byte-identical.
+
+**Not done in this slice:** nothing calls this function yet outside tests —
+that wiring (deciding *when* to call it, and what to do with the result: a
+committed branch, a PR) is Phase 3.
 
 ### Phase 3 — The workflow
 

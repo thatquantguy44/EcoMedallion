@@ -556,6 +556,11 @@ def runway_level(
     return level
 
 
+def _render_meeting_item(meeting: FOMCMeeting) -> str:
+    suffix = "  # SEP / projections" if meeting.is_projection_meeting else ""
+    return f'  - "{meeting.decision_date.isoformat()}"{suffix}'
+
+
 def format_yaml_block(meetings: Iterable[FOMCMeeting]) -> str:
     """Render meetings as the ``meeting_dates`` lines of ``config/fomc.yml``.
 
@@ -563,11 +568,198 @@ def format_yaml_block(meetings: Iterable[FOMCMeeting]) -> str:
     carries hand-written provenance comments that a generated rewrite would
     destroy, so a human pastes this in and keeps the surrounding commentary.
     """
-    lines = []
-    for meeting in sorted(meetings, key=lambda m: m.decision_date):
-        suffix = "  # SEP / projections" if meeting.is_projection_meeting else ""
-        lines.append(f'  - "{meeting.decision_date.isoformat()}"{suffix}')
-    return "\n".join(lines)
+    return "\n".join(
+        _render_meeting_item(m) for m in sorted(meetings, key=lambda m: m.decision_date)
+    )
+
+
+# ---- config editing (spec008 §5 Decision 2 / §8 Phase 2) --------------------
+#
+# ``apply_calendar_refresh`` is the automated half of "machine proposes, human
+# merges": it edits config/fomc.yml well enough to open a reviewable PR from,
+# without ever doing a full-file rewrite that would destroy the hand-written
+# provenance comments format_yaml_block's own docstring protects. It only
+# touches (a) the meeting_dates list items -- inserting new ones, never
+# reformatting existing ones -- and (b) the specific calendar_provenance
+# fields a refresh actually changes. Every other byte of the file, including
+# every comment, is untouched line-for-line.
+
+_MEETING_ITEM_RE = re.compile(r'^\s*-\s*"(\d{4}-\d{2}-\d{2})"')
+
+
+def _find_top_level_key(lines: list[str], key: str) -> int | None:
+    """Index of the line that is exactly ``"<key>:"`` at column 0, or ``None``."""
+    target = f"{key}:"
+    for i, line in enumerate(lines):
+        if line.rstrip() == target:
+            return i
+    return None
+
+
+def _indented_block_end(lines: list[str], start: int) -> int:
+    """Index (exclusive) of the end of the blank-or-indented block starting at
+    ``start`` -- the first line that begins with a non-whitespace character,
+    i.e. the next top-level key. Blank lines count as part of the block."""
+    i = start
+    while i < len(lines) and (lines[i] == "" or lines[i][:1].isspace()):
+        i += 1
+    return i
+
+
+def _split_meeting_chunks(
+    block_lines: list[str],
+) -> tuple[list[tuple[list[str], str, date]], list[str]]:
+    """Group ``meeting_dates`` block lines into one chunk per list item.
+
+    A chunk is ``(leading_lines, item_line, item_date)`` — any comment/blank
+    lines immediately before an item travel with it (e.g. the four-line note
+    above the 2028-01-26 entry), so re-sorting or inserting chunks can never
+    separate a date from the commentary that explains it. Lines after the
+    last item (normally just the blank line before the next top-level key)
+    are returned separately as ``trailing``.
+    """
+    chunks: list[tuple[list[str], str, date]] = []
+    pending: list[str] = []
+    for line in block_lines:
+        m = _MEETING_ITEM_RE.match(line)
+        if m:
+            chunks.append((pending, line, date.fromisoformat(m.group(1))))
+            pending = []
+        else:
+            pending.append(line)
+    return chunks, pending
+
+
+def _merge_new_meetings(
+    chunks: list[tuple[list[str], str, date]],
+    trailing: list[str],
+    new_meetings: Iterable[FOMCMeeting],
+) -> list[str] | None:
+    """Insert genuinely-new meetings into existing chunks, ascending by date.
+
+    Returns the rebuilt block's lines, or ``None`` if every meeting in
+    ``new_meetings`` already has a chunk (a true no-op — the caller returns
+    the input text unchanged rather than reconstruct a byte-identical block).
+    """
+    existing_dates = {d for _, _, d in chunks}
+    by_date = {m.decision_date: m for m in new_meetings}
+    to_add = sorted(
+        (m for d, m in by_date.items() if d not in existing_dates),
+        key=lambda m: m.decision_date,
+    )
+    if not to_add:
+        return None
+
+    merged = list(chunks)
+    for meeting in to_add:
+        insert_at = len(merged)
+        for i, (_, _, existing_date) in enumerate(merged):
+            if existing_date > meeting.decision_date:
+                insert_at = i
+                break
+        merged.insert(insert_at, ([], _render_meeting_item(meeting), meeting.decision_date))
+
+    new_block_lines: list[str] = []
+    for leading, item_line, _ in merged:
+        new_block_lines.extend(leading)
+        new_block_lines.append(item_line)
+    new_block_lines.extend(trailing)
+    return new_block_lines
+
+
+_PROVENANCE_FIELD_RE = {
+    "last_verified": re.compile(r"^(\s*last_verified:\s*)\S+"),
+    "verified_by": re.compile(r"^(\s*verified_by:\s*)\S+"),
+    "published_through": re.compile(r"^(\s*published_through:\s*)\S+"),
+}
+
+
+def _bump_provenance_lines(
+    lines: list[str],
+    *,
+    verified_by: str,
+    last_verified: date,
+    published_through: date | None,
+) -> None:
+    """Mutate ``lines`` in place, updating only the named ``calendar_provenance``
+    fields present. Missing the block entirely is fine and does nothing —
+    a pre-spec008 config without one must keep working (AC-009)."""
+    cp_key_idx = _find_top_level_key(lines, "calendar_provenance")
+    if cp_key_idx is None:
+        return
+    block_start = cp_key_idx + 1
+    block_end = _indented_block_end(lines, block_start)
+    values = {
+        "last_verified": last_verified.isoformat(),
+        "verified_by": verified_by,
+        "published_through": published_through.isoformat() if published_through else None,
+    }
+    for i in range(block_start, block_end):
+        for field, pattern in _PROVENANCE_FIELD_RE.items():
+            value = values[field]
+            if value is None:
+                continue
+            m = pattern.match(lines[i])
+            if m:
+                lines[i] = f"{m.group(1)}{value}"
+                break
+
+
+def apply_calendar_refresh(
+    config_text: str,
+    new_meetings: Iterable[FOMCMeeting],
+    *,
+    verified_by: str = "scraper",
+    last_verified: date | None = None,
+    published_through: date | None = None,
+) -> str:
+    """Insert newly-published FOMC meeting dates and bump provenance.
+
+    The automated half of spec008 Decision 2 ("machine proposes, human
+    merges"): this is what the scheduled workflow runs to produce the diff a
+    human then reviews on a PR, never something that commits itself.
+
+    ``new_meetings`` is typically ``CalendarDiff.missing_from_config``'s
+    dates paired back to their ``FOMCMeeting`` objects (to preserve the SEP
+    suffix) — a date already present in ``meeting_dates`` is skipped rather
+    than duplicated, so calling this with nothing genuinely new is a true
+    no-op: the returned text is the input, unchanged, including no
+    provenance bump. ``published_through`` is left alone unless the caller
+    passes it explicitly (typically ``max(m.decision_date for m in all
+    scraped meetings)``, not just the new ones) — this function has no way to
+    know the Fed's real horizon from ``new_meetings`` alone.
+
+    Raises :class:`FOMCScrapeError` if ``config_text`` has no top-level
+    ``meeting_dates:`` line — a malformed-input failure should be loud, not a
+    silent pass-through that looks like "nothing to do".
+    """
+    lines = config_text.splitlines()
+
+    md_key_idx = _find_top_level_key(lines, "meeting_dates")
+    if md_key_idx is None:
+        raise FOMCScrapeError(
+            "apply_calendar_refresh: no top-level 'meeting_dates:' line found"
+        )
+    block_start = md_key_idx + 1
+    block_end = _indented_block_end(lines, block_start)
+    chunks, trailing = _split_meeting_chunks(lines[block_start:block_end])
+
+    merged_block = _merge_new_meetings(chunks, trailing, new_meetings)
+    if merged_block is None:
+        return config_text
+
+    lines = lines[:block_start] + merged_block + lines[block_end:]
+    _bump_provenance_lines(
+        lines,
+        verified_by=verified_by,
+        last_verified=last_verified or date.today(),
+        published_through=published_through,
+    )
+
+    text = "\n".join(lines)
+    if config_text.endswith("\n"):
+        text += "\n"
+    return text
 
 
 # ---- fetching (the only I/O in this module) ---------------------------------
