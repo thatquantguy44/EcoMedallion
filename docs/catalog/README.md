@@ -23,6 +23,7 @@ This folder is the human-readable catalog companion to `manifests/*.yml` and
 | EIA | [eia.md](eia.md) | populated |
 | FRED | [fred.md](fred.md) | populated starter (too large for full per-series enumeration — see manifests/*.yml) |
 | Kenneth French Data Library | [french.md](french.md) | populated, shipped inactive (specs/spec006) |
+| IMF | [imf.md](imf.md) | client built, UNVERIFIED against a live response, no manifest yet (specs/spec006) |
 | iShares | [ishares.md](ishares.md) | populated |
 | OECD | [oecd.md](oecd.md) | populated |
 | SEC | [sec.md](sec.md) | populated |
