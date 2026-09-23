@@ -1,14 +1,14 @@
 # Spec 006: Free Source Expansion — Evaluating New APIs and Scrapeable Data
 
-Status: evaluation framework + ranked candidate list, **plus two shipped
-implementation slices.** IMF/OECD endpoints **live-verified 2026-09-12**
-(§5.1); **OECD's first source client shipped 2026-09-12**
-(`sources/oecd.py`, `manifests/oecd_cli.yml`, `config/data_licensing.yml`,
-`docs/catalog/oecd.md`, `tests/test_oecd.py`, wired into
-`pipeline.SOURCE_FACTORIES`) — see §7. It shipped `active: false` per this
-spec's own acceptance criteria, then was **activated 2026-09-14** in a
-separate, deliberate commit as that criteria required — `oecd` now shows up
-in `fred_pipeline validate`'s "Active sources" line, and the
+Status: evaluation framework + ranked candidate list, **plus three shipped
+implementation slices, of varying confidence.** IMF/OECD endpoints
+**live-verified 2026-09-12** (§5.1); **OECD's first source client shipped
+2026-09-12** (`sources/oecd.py`, `manifests/oecd_cli.yml`,
+`config/data_licensing.yml`, `docs/catalog/oecd.md`, `tests/test_oecd.py`,
+wired into `pipeline.SOURCE_FACTORIES`) — see §7. It shipped `active: false`
+per this spec's own acceptance criteria, then was **activated 2026-09-14**
+in a separate, deliberate commit as that criteria required — `oecd` now
+shows up in `fred_pipeline validate`'s "Active sources" line, and the
 `--licensing-review` gate still passes (`redistribution_allowed: false`
 clears it, as designed). **Kenneth French (second build, §9 decision #1)
 client + manifest shipped 2026-09-15** (`src/fred_pipeline/sources/french.py`,
@@ -17,17 +17,29 @@ is still unverified** (§7 step 2 remains outstanding): that build's
 environment blocked egress to `mba.tuck.dartmouth.edu`, so
 `config/data_licensing.yml`'s `french` entry is a best-informed guess, not a
 primary terms read, and the manifest's parser has not been checked against a
-real downloaded file. It ships `active: false` for that reason. CFTC COT
-(§9 decision #2) is next, unstarted.
-Last verified: 2026-09-15
+real downloaded file. It ships `active: false` for that reason.
+**IMF client shipped 2026-09-23** (`sources/imf.py`,
+`docs/catalog/imf.md`, `config/data_licensing.yml`, `tests/test_imf_client.py`,
+wired into `pipeline.SOURCE_FACTORIES`) — **the lowest-confidence slice of
+the three.** Built against the public SDMX-JSON 2.0.0 data-message spec, not
+a captured real response (`api.imf.org` blocked in every environment this
+has been worked from); **no manifest ships at all**, inactive or otherwise
+— see §7.2. `scripts/probe_imf_dataflows.py` was extended the same session
+to attempt a real data-query capture, still blocked. CFTC COT (§9 decision
+#2) remains unstarted.
+Last verified: 2026-09-23
 Primary owner: TBD
 Target: decide which free sources are worth adding next, and on what evidence
 Recommended first build: **OECD** (`DSD_STES@DF_CLI`) — **done and active,
 see §7.**
-Next: a human with unblocked network access needs to verify Kenneth
-French's license terms and confirm its parser against a real downloaded
-file before activating it; after that, CFTC COT (§9 decision #2) or IMF
-(needs a new SDMX 3.0 structure parser, §5.1).
+Next: a human with unblocked network access needs to, in roughly this
+order of value: (1) run `scripts/probe_imf_dataflows.py` for real and check
+`sources/imf.py`'s SDMX-JSON decoding against what actually comes back —
+this is the one open item most likely to surface a real bug rather than
+just confirm a guess; (2) verify Kenneth French's license terms and confirm
+its parser against a real downloaded file before activating it; (3) CFTC
+COT (§9 decision #2), whose own probe script (`scripts/probe_cftc_format.py`)
+is reviewed and ready to run.
 
 ## 1. Goal
 
@@ -364,6 +376,50 @@ output — that's the honest result of this pass, not a placeholder for one.
 Neither the IMF stable-dataflow list nor CFTC's real file format is known
 yet; don't write either into this spec or into code until one of these
 scripts has actually been run somewhere with access.
+
+**Note on §7.2 below, which does exactly what the paragraph above says not
+to do.** `sources/imf.py` was written anyway, on explicit request, after
+this paragraph's caution was raised and acknowledged. The resolution: build
+it against the *public SDMX-JSON spec* (a real, versioned, external
+document IMF is reasonably likely to follow, not invented from nothing),
+flag the client, its tests, its catalog page, and its licensing entry as
+unverified at every layer, and — the one place this still holds the line —
+ship **no manifest at all**. That last part is this spec's actual acceptance
+criterion (§8) doing its job: a manifest with real series ids is where a
+guess would become indistinguishable from a verified fact, and that step
+did not happen.
+
+### 7.2 IMF source client, unverified (2026-09-23)
+
+`src/fred_pipeline/sources/imf.py` (`IMFClient`), `docs/catalog/imf.md`,
+`config/data_licensing.yml`'s `imf` entry, `tests/test_imf_client.py`, wired
+into `pipeline.SOURCE_FACTORIES`. Series id convention mirrors OECD's own
+multi-part precedent: `IMF:<agency>:<dataflow>:<key>`.
+
+Decodes the public SDMX-JSON 2.0.0 data-message shape: `data.structures[0]`
+(tolerating the older singular `data.structure` too) for the observation
+dimension's ordered `TIME_PERIOD` values, `data.dataSets[0].series` for the
+actual observations, indexed positionally into that values list. Raises
+loudly (`IMFAPIError`) rather than guessing on any shape it doesn't
+recognize — more than one observation-level dimension, more than one series
+in a response meant to resolve to exactly one, a missing `structures`/
+`structure` block entirely.
+
+`scripts/probe_imf_dataflows.py` was extended the same session (see its own
+module docstring) to attempt a real data-query capture against a sample
+dataflow (default `COFER`) — closing the exact gap that made this client's
+decoding logic unverifiable before: a live "data query verified" claim
+existed in this spec (§5.1) but no response was ever saved. Still blocked
+here; the capture attempt itself is what a future session with access
+should run first.
+
+**What's genuinely different from OECD/French here, worth restating:**
+OECD's SDMX 2.1 XML parser transferred from `ecb_discovery.py` with zero
+code changes — about as strong a structural-fit signal as this repo has
+seen. French's CSV format is decades-stable and extremely well-documented.
+Neither is true for IMF's SDMX-JSON dialect specifically. Treat every line
+of `normalize_imf_observations` as a hypothesis until §7.2's own advice
+(run the probe, compare, fix) has actually happened.
 
 ## 8. Acceptance Criteria
 

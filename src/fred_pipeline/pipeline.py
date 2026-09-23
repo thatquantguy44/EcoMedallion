@@ -32,6 +32,7 @@ from fred_pipeline.sources.ecb import ECBClient
 from fred_pipeline.sources.eia import EIAClient
 from fred_pipeline.sources.fred import FredClient
 from fred_pipeline.sources.french import FrenchClient
+from fred_pipeline.sources.imf import IMFClient
 from fred_pipeline.sources.ishares import ISharesClient
 from fred_pipeline.sources.oecd import OECDClient
 from fred_pipeline.sources.sec import SECClient
@@ -94,6 +95,17 @@ def _make_oecd(config: PipelineConfig) -> SourceClient:
         timeout=config.request_timeout_seconds,
         max_retries=config.max_retries,
         rate_limit_per_minute=_rate_limit_for_source(config, "oecd"),
+    )
+
+
+def _make_imf(config: PipelineConfig) -> SourceClient:
+    # Keyless (unconfirmed -- see sources/imf.py's module docstring). No
+    # manifest ships with this yet; wiring the factory is what "adding a
+    # source" means in this codebase, independent of activation.
+    return IMFClient(
+        timeout=config.request_timeout_seconds,
+        max_retries=config.max_retries,
+        rate_limit_per_minute=_rate_limit_for_source(config, "imf"),
     )
 
 
@@ -216,6 +228,7 @@ SOURCE_FACTORIES = {
     "eia": _make_eia,
     "ecb": _make_ecb,
     "oecd": _make_oecd,
+    "imf": _make_imf,
     "treasury": _make_treasury,
     "worldbank": _make_worldbank,
     "bis": _make_bis,
@@ -298,6 +311,7 @@ def _rate_limit_for_source(config: PipelineConfig, source: str) -> int:
         "eia": 60,
         "ecb": 60,
         "oecd": 30,
+        "imf": 30,
         "treasury": 120,
         "worldbank": 60,
         "bis": 30,

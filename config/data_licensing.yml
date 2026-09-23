@@ -310,3 +310,39 @@ sources:
       Revisit this entry -- primary terms read, real review_status, a named
       reviewed_by -- before either activating any series or wiring Gold to
       consume them.
+
+  - source: imf
+    license_type: requires-agreement
+    review_status: provisional
+    source_of_truth: >
+      Not a primary read. IMF publishes most of its statistical data openly,
+      but -- the same structural concern already recorded for oecd's entry
+      above -- its catalogue is not entirely IMF-owned data served through
+      one gate; different maintaining agencies and dataflows can carry
+      different terms, so a blanket "IMF is open data" assumption would be
+      the same mistake oecd's entry already flags for its own catalogue.
+      The primary terms page could NOT be fetched when this entry was
+      written: egress to api.imf.org is blocked by the authoring
+      environment's network policy (the same class of block recorded above
+      for bis.org and mba.tuck.dartmouth.edu).
+    redistribution_allowed: false
+    commercial_use_allowed: false
+    attribution_required: true
+    terms_url: https://www.imf.org/external/terms.htm
+    last_reviewed_date: "2026-09-23"
+    notes: >
+      Added alongside sources/imf.py, the third specs/spec006 build
+      candidate (after OECD and Kenneth French). Unlike those two,
+      sources/imf.py itself is UNVERIFIED against a live response -- built
+      against the public SDMX-JSON 2.0.0 spec, not a captured real payload
+      (see the client's own module docstring and
+      scripts/probe_imf_dataflows.py). No manifest ships with this source
+      at all yet, inactive or otherwise: fabricating even an inactive
+      example series_id here would look vetted when the underlying format
+      itself hasn't been confirmed. redistribution_allowed/
+      commercial_use_allowed are false by the same internal-use-only
+      project posture as oecd's and french's entries above (spec006
+      decision #3). Revisit this entry -- primary terms read, real
+      review_status, a named reviewed_by -- only after (a) the client's
+      parsing has been confirmed against a real IMF response and (b) a
+      manifest with real series ids actually exists to activate.

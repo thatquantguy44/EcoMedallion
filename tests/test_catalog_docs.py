@@ -34,6 +34,7 @@ SOURCE_TO_DOC = {
     "ecb": "ecb.md",
     "eia": "eia.md",
     "french": "french.md",
+    "imf": "imf.md",
     "ishares": "ishares.md",
     "oecd": "oecd.md",
     "sec": "sec.md",
