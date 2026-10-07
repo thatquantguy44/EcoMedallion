@@ -508,6 +508,7 @@ def _cmd_backfill(args: argparse.Namespace) -> int:
 
 
 def _cmd_replay(args: argparse.Namespace) -> int:
+    from fred_pipeline.io.warehouse_factory import WarehouseInitError
     from fred_pipeline.replay import replay_from_bronze
 
     config = PipelineConfig.resolve(
@@ -515,7 +516,19 @@ def _cmd_replay(args: argparse.Namespace) -> int:
     )
     manifests = load_manifests(args.manifests)
     series = _parse_series(args.series)
-    warehouse = _open_warehouse(config, args)
+    try:
+        warehouse = _open_warehouse(config, args)
+    except WarehouseInitError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 2
+    if warehouse is None:
+        # replay reads Bronze from the warehouse and rewrites Silver/Gold, so
+        # there is nothing it can do in-memory.
+        print(
+            "ERROR: replay needs a durable warehouse backend; got in-memory only.",
+            file=sys.stderr,
+        )
+        return 2
     try:
         result = replay_from_bronze(
             config,
@@ -747,6 +760,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
         from fred_pipeline.io.warehouse_factory import (
             WarehouseConfig,
             WarehouseFactory,
+            WarehouseInitError,
             load_warehouse_config,
         )
 
@@ -760,7 +774,13 @@ def _cmd_run(args: argparse.Namespace) -> int:
             )
 
         factory = WarehouseFactory(config, warehouse_config)
-        warehouse = factory.build(force_dry_run=False)
+        try:
+            warehouse = factory.build(force_dry_run=False)
+        except WarehouseInitError as exc:
+            # Fatal on purpose: continuing would extract against live APIs and
+            # persist nothing. Fail before the first request, not after 2,895.
+            print(f"ERROR: {exc}", file=sys.stderr)
+            return 2
 
         if warehouse is not None:
             print(f"Using warehouse: {warehouse.__class__.__name__}")
