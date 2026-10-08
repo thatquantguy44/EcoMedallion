@@ -61,6 +61,12 @@ class StageSpec:
 EXPECTED_STAGES: tuple[StageSpec, ...] = (
     StageSpec("plan", "Resolve each series' load window against the warehouse"),
     StageSpec("extract", "Fetch from source APIs; write Bronze, Silver and DQ"),
+    StageSpec(
+        "fomc_calendar",
+        "Check config/fomc.yml has enough runway for the FOMC Gold tables "
+        "(and, with --refresh-fomc-calendar, add newly published meetings)",
+        required=False,
+    ),
     StageSpec("gold", "Rebuild the Gold analytical layer"),
     StageSpec(
         "release_calendar",
@@ -126,9 +132,7 @@ class RunStageTracker:
 
     @contextmanager
     def stage(self, name: str, *, swallow: bool = False) -> Iterator[StageRecord]:
-        record = StageRecord(
-            name=name, status=StageStatus.SUCCEEDED, started_at=_now()
-        )
+        record = StageRecord(name=name, status=StageStatus.SUCCEEDED, started_at=_now())
         self._records[name] = record
         started = time.monotonic()
         try:

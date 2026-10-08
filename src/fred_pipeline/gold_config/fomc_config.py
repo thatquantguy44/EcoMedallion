@@ -180,14 +180,26 @@ def _parse_provenance(raw: Any, *, source: str) -> CalendarProvenance | None:
     )
 
 
+def resolve_fomc_config_path(path: Optional[str] = None) -> str:
+    """Which file :func:`load_fomc_config` will read.
+
+    Explicit ``path``, else ``FRED_FOMC_CONFIG_FILE``, else ``config/fomc.yml``.
+    The default is **relative to the current working directory**, so running
+    the pipeline from anywhere but the repo root resolves to a file that does
+    not exist -- and a missing file yields empty FOMC tables with no error.
+    Anything that wants to say *which* file was meant (the pre-Gold calendar
+    check does) should call this rather than re-deriving the order.
+    """
+    return path or os.environ.get("FRED_FOMC_CONFIG_FILE") or DEFAULT_FOMC_PATH
+
+
 def load_fomc_config(path: Optional[str] = None) -> Optional[FOMCConfig]:
     """Load the FOMC config from YAML.
 
-    Resolution: explicit ``path``, else ``FRED_FOMC_CONFIG_FILE`` env var,
-    else ``config/fomc.yml``. A missing file returns ``None`` (the FOMC
-    tables are then simply empty); a malformed file raises.
+    Resolution: see :func:`resolve_fomc_config_path`. A missing file returns
+    ``None`` (the FOMC tables are then simply empty); a malformed file raises.
     """
-    resolved = path or os.environ.get("FRED_FOMC_CONFIG_FILE") or DEFAULT_FOMC_PATH
+    resolved = resolve_fomc_config_path(path)
     if not resolved or not os.path.isfile(resolved):
         return None
     with open(resolved, "r", encoding="utf-8") as fh:

@@ -803,6 +803,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
             exclude_sources=_parse_series(args.exclude_source),
             force_full=args.full,
             skip_not_due=args.skip_not_due,
+            refresh_fomc_calendar=args.refresh_fomc_calendar,
         )
     finally:
         if warehouse is not None:
@@ -1053,6 +1054,18 @@ def build_parser() -> argparse.ArgumentParser:
             "a sample, concentrated in monthly/quarterly/annual series). "
             "Pass --no-skip-not-due to attempt every series regardless of "
             "due-date. --full always bypasses this."
+        ),
+    )
+    r.add_argument(
+        "--refresh-fomc-calendar",
+        action="store_true",
+        help=(
+            "before Gold, fetch the Fed's FOMC calendar and add newly "
+            "published meetings to config/fomc.yml (spec008). Opt-in: it adds "
+            "a federalreserve.gov dependency to the run. Any failure is "
+            "logged and the calendar already on disk is used unchanged; "
+            "additions are written to the file but NOT committed. The "
+            "calendar health check itself always runs and needs no flag."
         ),
     )
     r.add_argument(
