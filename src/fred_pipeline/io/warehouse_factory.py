@@ -102,10 +102,28 @@ def load_warehouse_config(
     )
 
 
+class WarehouseInitError(RuntimeError):
+    """Every configured warehouse backend failed to initialize.
+
+    Deliberately fatal rather than a silent downgrade to in-memory. A run that
+    extracts thousands of series against live APIs and then persists nothing
+    looks almost exactly like a successful run -- the only difference is two
+    WARNING lines that scroll away -- while burning real API quota and leaving
+    every downstream table stale. If the config asks for a durable backend and
+    it cannot be had, the run should stop before the first HTTP request.
+
+    In-memory is still reachable, but only when it was actually asked for:
+    ``--dry-run`` (``force_dry_run``), or ``none`` listed among the configured
+    backends (see config/warehouse.yml's ``fallback_backends`` comment).
+    """
+
+
 class WarehouseFactory:
     """Instantiate warehouse backends based on configuration.
 
-    Tries primary backend, then fallbacks, then in-memory dry-run.
+    Tries the primary backend, then each fallback. Raises
+    :class:`WarehouseInitError` if they all fail and in-memory was not
+    explicitly requested.
     """
 
     def __init__(self, config: PipelineConfig, warehouse_config: WarehouseConfig):
@@ -124,7 +142,17 @@ class WarehouseFactory:
         -------
         Warehouse or None
             A warehouse instance, or None for in-memory dry-run.
+
+        Raises
+        ------
+        WarehouseInitError
+            If every configured backend failed and in-memory was not
+            explicitly requested.
         """
+        import logging
+
+        log = logging.getLogger("fred_pipeline")
+
         if force_dry_run:
             return None
 
@@ -132,6 +160,14 @@ class WarehouseFactory:
         if self.warehouse_config.fallback_backends:
             backends_to_try.extend(self.warehouse_config.fallback_backends)
 
+        # "none" is config/warehouse.yml's documented opt-in to in-memory. If
+        # it is present, running without a warehouse is a deliberate choice and
+        # not a failure -- so a backend error before it is recoverable.
+        in_memory_allowed = any(
+            (not name) or name == "none" for name in backends_to_try
+        )
+
+        failures: list[str] = []
         for backend_name in backends_to_try:
             try:
                 warehouse = self._build_backend(backend_name)
@@ -140,20 +176,29 @@ class WarehouseFactory:
             except Exception as e:  # noqa: BLE001 -- must survive any backend's
                 # own exception type (Delta, psycopg, sqlite3, ...) to fall
                 # through to the next backend rather than aborting the run.
-                import logging
-
-                log = logging.getLogger("fred_pipeline")
+                failures.append(f"{backend_name}: {e}")
                 log.warning(
                     f"Failed to initialize {backend_name} backend: {e}. "
                     f"Trying next fallback..."
                 )
 
-        # No backend succeeded; fall back to in-memory dry-run
-        import logging
+        if in_memory_allowed:
+            log.warning(
+                "No durable warehouse backend available; running in-memory "
+                "only, as 'none' is among the configured backends."
+            )
+            return None
 
-        log = logging.getLogger("fred_pipeline")
-        log.warning("All warehouse backends failed. Falling back to in-memory dry-run.")
-        return None
+        detail = "; ".join(failures) if failures else "no backend produced a warehouse"
+        raise WarehouseInitError(
+            f"Every configured warehouse backend failed, so this run would "
+            f"extract data and persist nothing. Refusing to start.\n"
+            f"  configured: {' -> '.join(str(b) for b in backends_to_try)}\n"
+            f"  failures:   {detail}\n"
+            f"Fix the backend, or add 'none' to fallback_backends in "
+            f"config/warehouse.yml (or pass --dry-run) if running without "
+            f"persistence is actually what you want."
+        )
 
     def _build_backend(self, backend_name: str) -> Warehouse | None:
         """Build a single backend by name."""
