@@ -169,7 +169,7 @@ selected in `config/warehouse.yml` (`primary_backend: postgres` under
 docker compose up -d postgres   # fred:fred@localhost:55432/macro_medallion
 export FRED_API_KEY=your_key_here
 export FRED_POSTGRES_LOCAL_DSN=postgresql://fred:fred@localhost:55432/macro_medallion
-# then set primary_backend: postgres in config/warehouse.yml (default or your --env section)
+# primary_backend: postgres is already the default in config/warehouse.yml
 PYTHONPATH=src python -m fred_pipeline run --env dev
 ```
 
@@ -276,6 +276,7 @@ gets committed):
 cp config/config.example.yaml config/config.yaml
 # edit config/config.yaml — set fred_api_key and any HTTP knobs
 PYTHONPATH=src python -m fred_pipeline run --local   # auto-reads config/config.yaml
+python -m fred_pipeline run --env dev                # uses config/warehouse.yml's backend (Postgres by default)
 ```
 
 `config/config.yaml` is picked up automatically. Point elsewhere with
