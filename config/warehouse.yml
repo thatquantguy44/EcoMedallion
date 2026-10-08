@@ -3,7 +3,8 @@
 # This file controls where Gold layer tables are written.
 #
 # Backends:
-#   - local       : SQLite file on disk (development, default)
+#   - local       : SQLite file on disk (selected by --local, or the built-in
+#                   fallback when this file is missing)
 #   - databricks  : Delta Lake on Databricks (production)
 #   - postgres    : PostgreSQL (write/read backend; local or service target)
 #   - duckdb      : DuckDB file (future, experimental)
@@ -19,7 +20,7 @@
 
 default:
   # Primary backend for all environments. Override per-environment below.
-  primary_backend: local
+  primary_backend: postgres
 
   # Fallback chain if primary fails. Leave empty for no fallbacks.
   fallback_backends: []
@@ -93,7 +94,8 @@ default:
 # --- ENVIRONMENT-SPECIFIC OVERRIDES ---
 
 environments:
-  # dev: (inherits from default: local SQLite at ./fred.db)
+  # dev: (inherits from default: postgres -- start it with
+  #       `docker compose up -d postgres`; pass --local for SQLite instead)
 
   test:
     # test environment can use either local SQLite or Databricks
@@ -121,11 +123,12 @@ environments:
 
 # --- HOW TO USE ---
 #
-# 1. LOCAL DEVELOPMENT (default, no config needed):
-#    FRED_API_KEY=... python -m fred_pipeline run --env dev
-#    → Writes to ./fred.db automatically
+# 1. LOCAL DEVELOPMENT (default: Postgres; needs `docker compose up -d postgres`):
+#    python -m fred_pipeline run --env dev
+#    → Writes to the postgres backend configured above. If it cannot be
+#      reached the run stops with exit code 2 before extracting anything.
 #
-# 2. LOCAL WITH EXPLICIT PATH:
+# 2. LOCAL SQLITE WITH EXPLICIT PATH:
 #    python -m fred_pipeline run --env dev --local --db-path /path/to/fred.db
 #    → CLI flag overrides config file (highest precedence)
 #
