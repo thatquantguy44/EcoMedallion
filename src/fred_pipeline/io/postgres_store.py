@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import datetime as _dt
 import hashlib
+import logging
 import re
 from collections.abc import Iterable, Mapping, Sequence
 from types import TracebackType
@@ -38,6 +39,38 @@ from fred_pipeline.quality import QualityReport
 from fred_pipeline.warehouse import dq_rows
 
 _MEDALLION_SCHEMAS = ("meta", "audit", "bronze", "silver", "gold")
+
+log = logging.getLogger("fred_pipeline")
+
+# The tables this backend upserts into, and the columns each ON CONFLICT
+# targets. Postgres only accepts ON CONFLICT (cols) when a unique index on
+# exactly those columns exists, so this is both what the call sites use and
+# what _ensure_upsert_keys() makes sure is true at startup.
+#
+# Why that check exists: scripts/copy_sqlite_to_postgres.py creates tables from
+# column names alone, with no primary keys, and the CREATE TABLE IF NOT EXISTS
+# in _bootstrap_schema (which does declare them) is then a no-op on tables that
+# already exist. A database seeded by the copy script therefore cannot run the
+# pipeline: the first upsert fails with "there is no unique or exclusion
+# constraint matching the ON CONFLICT specification".
+_UPSERT_KEYS: dict[str, tuple[str, ...]] = {
+    "meta_fred_series": ("series_id",),
+    "meta_fred_manifest": ("manifest_name",),
+    "meta_fred_series_manifest_map": ("series_id", "manifest_name"),
+    "silver_fred_observation": (
+        "source",
+        "series_id",
+        "observation_date",
+        "realtime_start",
+    ),
+    "audit_etl_run": ("run_id",),
+}
+
+
+class PostgresSchemaError(RuntimeError):
+    """The existing Postgres schema cannot support the pipeline as-is."""
+
+
 _TABLE_RE = re.compile(
     r"CREATE TABLE IF NOT EXISTS\s+([A-Za-z0-9_]+)\s*\((.*?)\);",
     re.IGNORECASE | re.DOTALL,
@@ -69,7 +102,11 @@ class _PostgresConnAdapter:
     def execute(self, sql: str, params: Sequence[Any] | Mapping[str, Any] = ()):
         sql, params = self._warehouse._adapt_sql(sql, params)
         cur = self._warehouse._pg_conn.cursor()
-        cur.execute(sql, params or None)
+        try:
+            cur.execute(sql, params or None)
+        except Exception:
+            self._warehouse._rollback_unless_deferred()
+            raise
         return _CursorResult(cur)
 
     def executemany(
@@ -79,7 +116,11 @@ class _PostgresConnAdapter:
             return
         sql, _ = self._warehouse._adapt_sql(sql, params_seq[0])
         cur = self._warehouse._pg_conn.cursor()
-        cur.executemany(sql, list(params_seq))
+        try:
+            cur.executemany(sql, list(params_seq))
+        except Exception:
+            self._warehouse._rollback_unless_deferred()
+            raise
 
     def commit(self) -> None:
         self._warehouse._pg_conn.commit()
@@ -134,7 +175,25 @@ class PostgresWarehouse:
         self._pg_conn = self._connect(self.settings.dsn)
         self.conn = _PostgresConnAdapter(self)
         self._defer_commits = False
-        self._bootstrap_schema()
+        try:
+            self._bootstrap_schema()
+        except BaseException:
+            # A half-constructed warehouse is never returned to anyone to close.
+            self._pg_conn.close()
+            raise
+
+    def _rollback_unless_deferred(self) -> None:
+        """Clear the aborted transaction a failed statement leaves behind.
+
+        Postgres refuses every further command on a connection until the failed
+        transaction is rolled back ("current transaction is aborted..."), so
+        without this a single error here made every later call fail with that
+        unrelated message and hid the real cause. Not done while build_gold is
+        deferring commits: that transaction spans the whole rebuild and its own
+        handler decides what to do with it.
+        """
+        if not self._defer_commits:
+            self._pg_conn.rollback()
 
     def _connect(self, dsn: str) -> Any:
         try:
@@ -165,8 +224,75 @@ class PostgresWarehouse:
                 )
             for sql in _POSTGRES_INDEX_SQL:
                 cur.execute(sql)
+            self._ensure_upsert_keys(cur)
             cur.execute(_POSTGRES_VIEW_SQL)
         self._pg_conn.commit()
+
+    def _ensure_upsert_keys(self, cur: Any) -> None:
+        """Make sure every upsert target has the unique index ON CONFLICT needs.
+
+        A no-op on a database this backend created itself. On one seeded by the
+        copy script it builds the missing indexes once; the silver one covers
+        tens of millions of rows and can take minutes, hence the warning.
+        """
+        for flat_table, columns in _UPSERT_KEYS.items():
+            schema, table = _split_table_name(flat_table)
+            if self._has_unique_index(cur, schema, table, columns):
+                continue
+            rel = _pg_name(schema, table)
+            collist = ", ".join(_pg_ident(c) for c in columns)
+            log.warning(
+                "%s has no unique key on (%s), which the pipeline's upserts need "
+                "(typical of a database seeded by copy_sqlite_to_postgres.py). "
+                "Building it now; this is one-time and can take minutes on large "
+                "tables.",
+                rel,
+                ", ".join(columns),
+            )
+            try:
+                cur.execute(
+                    f"CREATE UNIQUE INDEX IF NOT EXISTS "
+                    f"{_pg_ident('ux_' + table + '_upsert_key')} ON {rel} ({collist})"
+                )
+            except Exception as exc:  # psycopg.errors.UniqueViolation, narrowed below
+                if type(exc).__name__ != "UniqueViolation":
+                    raise
+                self._pg_conn.rollback()
+                raise PostgresSchemaError(
+                    f"Cannot build the unique key on {rel} ({', '.join(columns)}): "
+                    f"duplicate rows exist for that key. Find them with\n"
+                    f"  SELECT {collist}, count(*) FROM {rel} GROUP BY {collist} "
+                    f"HAVING count(*) > 1;\n"
+                    f"and remove the duplicates, then start again. Nothing was "
+                    f"changed."
+                ) from exc
+
+    @staticmethod
+    def _has_unique_index(
+        cur: Any, schema: str, table: str, columns: Sequence[str]
+    ) -> bool:
+        """True if a plain (non-partial, non-expression) valid unique index
+        covers exactly ``columns``. Column order does not matter to ON CONFLICT
+        inference, so neither does it here."""
+        cur.execute(
+            """
+            SELECT 1
+            FROM pg_index i
+            JOIN pg_class t ON t.oid = i.indrelid
+            JOIN pg_namespace n ON n.oid = t.relnamespace
+            WHERE n.nspname = %s AND t.relname = %s
+              AND i.indisunique AND i.indisvalid
+              AND i.indpred IS NULL AND i.indexprs IS NULL
+              AND (
+                SELECT array_agg(a.attname::text ORDER BY a.attname::text)
+                FROM unnest(i.indkey::int2[]) AS k(attnum)
+                JOIN pg_attribute a ON a.attrelid = t.oid AND a.attnum = k.attnum
+              ) = %s::text[]
+            LIMIT 1
+            """,
+            (schema, table, sorted(columns)),
+        )
+        return cur.fetchone() is not None
 
     _ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
         ("gold_dim_series", "geo", "TEXT"),
@@ -212,10 +338,18 @@ class PostgresWarehouse:
             conflict = _pg_column_list(upsert_keys)
             sql += f" ON CONFLICT ({conflict}) DO UPDATE SET {updates}"
             data = [tuple(_encode(r.get(c)) for c in cols) for r in rows]
-            with self._pg_conn.cursor() as cur:
-                cur.executemany(sql, data)
+            try:
+                with self._pg_conn.cursor() as cur:
+                    cur.executemany(sql, data)
+            except Exception:
+                self._rollback_unless_deferred()
+                raise
         else:
-            self._copy_rows(rel, cols, ([r.get(c) for c in cols] for r in rows))
+            try:
+                self._copy_rows(rel, cols, ([r.get(c) for c in cols] for r in rows))
+            except Exception:
+                self._rollback_unless_deferred()
+                raise
         if not self._defer_commits:
             self._pg_conn.commit()
         return len(rows)
@@ -286,15 +420,19 @@ class PostgresWarehouse:
         rows = build_meta_rows(list(manifests))
         counts = {}
         counts["fred_series"] = self._insert(
-            "meta_fred_series", rows["fred_series"], upsert_keys=["series_id"]
+            "meta_fred_series",
+            rows["fred_series"],
+            upsert_keys=_UPSERT_KEYS["meta_fred_series"],
         )
         counts["fred_manifest"] = self._insert(
-            "meta_fred_manifest", rows["fred_manifest"], upsert_keys=["manifest_name"]
+            "meta_fred_manifest",
+            rows["fred_manifest"],
+            upsert_keys=_UPSERT_KEYS["meta_fred_manifest"],
         )
         counts["fred_series_manifest_map"] = self._insert(
             "meta_fred_series_manifest_map",
             rows["fred_series_manifest_map"],
-            upsert_keys=["series_id", "manifest_name"],
+            upsert_keys=_UPSERT_KEYS["meta_fred_series_manifest_map"],
         )
         return counts
 
@@ -332,7 +470,7 @@ class PostgresWarehouse:
         return self._insert(
             "silver_fred_observation",
             rows,
-            upsert_keys=["source", "series_id", "observation_date", "realtime_start"],
+            upsert_keys=_UPSERT_KEYS["silver_fred_observation"],
         )
 
     def build_gold(self) -> dict[str, str]:
@@ -445,7 +583,9 @@ class PostgresWarehouse:
         return self._insert("gold_release_calendar", rows)
 
     def persist_run_state(self, run: EtlRun) -> None:
-        self._insert("audit_etl_run", [run.to_row()], upsert_keys=["run_id"])
+        self._insert(
+            "audit_etl_run", [run.to_row()], upsert_keys=_UPSERT_KEYS["audit_etl_run"]
+        )
 
     def persist_series_run(self, series_run: EtlSeriesRun) -> None:
         with self._pg_conn.cursor() as cur:

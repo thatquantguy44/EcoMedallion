@@ -209,3 +209,179 @@ def test_warehouse_factory_builds_postgres(postgres_dsn):
         assert isinstance(wh, PostgresWarehouse)
     finally:
         wh.close()
+
+
+# ---------------------------------------------------------------------------
+# Upsert keys. A database seeded by scripts/copy_sqlite_to_postgres.py has the
+# tables but none of their primary keys, so the first ON CONFLICT upsert failed
+# with "there is no unique or exclusion constraint matching the ON CONFLICT
+# specification" -- and then every later call failed with a different, useless
+# error because the aborted transaction was never rolled back.
+# ---------------------------------------------------------------------------
+
+
+def _drop_all_keys(dsn: str) -> None:
+    """Put the database in the state the copy script leaves it in: every upsert
+    target present, none of them with a primary key or unique constraint."""
+    import psycopg
+
+    from fred_pipeline.io.postgres_store import _UPSERT_KEYS, _split_table_name
+
+    with psycopg.connect(dsn, autocommit=True) as conn:
+        for flat in _UPSERT_KEYS:
+            schema, table = _split_table_name(flat)
+            names = [
+                r[0]
+                for r in conn.execute(
+                    "SELECT conname FROM pg_constraint "
+                    "WHERE conrelid = %s::regclass AND contype IN ('p', 'u')",
+                    (f"{schema}.{table}",),
+                )
+            ]
+            for name in names:
+                conn.execute(f'ALTER TABLE {schema}."{table}" DROP CONSTRAINT "{name}"')
+            for (idx,) in list(
+                conn.execute(
+                    "SELECT indexname FROM pg_indexes "
+                    "WHERE schemaname = %s AND tablename = %s "
+                    "AND indexdef LIKE 'CREATE UNIQUE%%'",
+                    (schema, table),
+                )
+            ):
+                conn.execute(f'DROP INDEX {schema}."{idx}"')
+
+
+def _unique_key_exists(dsn: str, flat_table: str) -> bool:
+    import psycopg
+
+    from fred_pipeline.io.postgres_store import (
+        _UPSERT_KEYS,
+        PostgresWarehouse as PW,
+        _split_table_name,
+    )
+
+    schema, table = _split_table_name(flat_table)
+    with psycopg.connect(dsn) as conn, conn.cursor() as cur:
+        return PW._has_unique_index(cur, schema, table, _UPSERT_KEYS[flat_table])
+
+
+def test_upsert_keys_match_the_primary_keys_the_ddl_declares():
+    """_UPSERT_KEYS is hand-written; the DDL is what actually defines each key.
+    If they drift, the startup repair would build a key the table was never
+    meant to have."""
+    import re
+
+    from fred_pipeline.io.postgres_store import _UPSERT_KEYS, _sqlite_table_defs
+
+    bodies = dict(_sqlite_table_defs())
+    for flat, columns in _UPSERT_KEYS.items():
+        body = bodies[flat]
+        composite = re.search(r"PRIMARY KEY\s*\(([^)]*)\)", body)
+        if composite:
+            declared = tuple(c.strip() for c in composite.group(1).split(","))
+        else:
+            inline = re.search(r"(\w+)\s+\w+\s+PRIMARY KEY", body)
+            assert inline, f"{flat} declares no primary key"
+            declared = (inline.group(1),)
+        assert declared == columns, flat
+
+
+def test_a_database_without_keys_gets_them_back_and_can_upsert(postgres_dsn):
+    PostgresWarehouse(_config(), dsn=postgres_dsn).close()
+    _drop_all_keys(postgres_dsn)
+    assert not _unique_key_exists(postgres_dsn, "meta_fred_series")
+    assert not _unique_key_exists(postgres_dsn, "silver_fred_observation")
+
+    wh = PostgresWarehouse(_config(), dsn=postgres_dsn)  # the repair runs here
+    try:
+        from fred_pipeline.io.postgres_store import _UPSERT_KEYS
+
+        for flat in _UPSERT_KEYS:
+            assert _unique_key_exists(postgres_dsn, flat), flat
+        # And the thing that was actually failing now works, twice, idempotently.
+        keys = _UPSERT_KEYS["meta_fred_series"]
+        wh._insert(
+            "meta_fred_series", [{"series_id": "X", "title": "a"}], upsert_keys=keys
+        )
+        wh._insert(
+            "meta_fred_series", [{"series_id": "X", "title": "b"}], upsert_keys=keys
+        )
+        rows = wh.query("SELECT title FROM meta.fred_series WHERE series_id = 'X'")
+        assert [r["title"] for r in rows] == ["b"]
+    finally:
+        wh.close()
+
+
+def test_the_repair_warns_once_and_a_healthy_database_is_left_alone(
+    postgres_dsn, caplog
+):
+    PostgresWarehouse(_config(), dsn=postgres_dsn).close()
+    _drop_all_keys(postgres_dsn)
+
+    with caplog.at_level("WARNING", logger="fred_pipeline"):
+        PostgresWarehouse(_config(), dsn=postgres_dsn).close()
+    assert "has no unique key on (series_id)" in caplog.text
+    assert "copy_sqlite_to_postgres.py" in caplog.text
+
+    caplog.clear()
+    with caplog.at_level("WARNING", logger="fred_pipeline"):
+        PostgresWarehouse(_config(), dsn=postgres_dsn).close()
+    assert "no unique key" not in caplog.text, "second start must not rebuild"
+
+
+def test_duplicate_rows_stop_the_repair_with_a_clear_error_and_change_nothing(
+    postgres_dsn,
+):
+    import psycopg
+
+    from fred_pipeline.io.postgres_store import PostgresSchemaError
+
+    PostgresWarehouse(_config(), dsn=postgres_dsn).close()
+    _drop_all_keys(postgres_dsn)
+    with psycopg.connect(postgres_dsn, autocommit=True) as conn:
+        conn.execute(
+            "INSERT INTO meta.fred_series (series_id, title) "
+            "VALUES ('DUP', 'one'), ('DUP', 'two')"
+        )
+
+    with pytest.raises(PostgresSchemaError) as exc:
+        PostgresWarehouse(_config(), dsn=postgres_dsn)
+
+    message = str(exc.value)
+    assert '"meta"."fred_series"' in message  # quoted: pasteable into psql
+    assert "duplicate rows" in message
+    assert "HAVING count(*) > 1" in message  # the query to find them is included
+    assert "Nothing was changed" in message
+    assert not _unique_key_exists(postgres_dsn, "meta_fred_series")
+    with psycopg.connect(postgres_dsn) as conn:
+        n = conn.execute(
+            "SELECT count(*) FROM meta.fred_series WHERE series_id = 'DUP'"
+        ).fetchone()[0]
+    assert n == 2  # the user's data is untouched
+
+
+def test_a_failed_statement_does_not_poison_the_connection(postgres_dsn):
+    """Regression for the cascade: one error used to leave the transaction
+    aborted, so the NEXT, unrelated call failed with 'current transaction is
+    aborted' and the real cause was gone."""
+    import psycopg
+
+    wh = PostgresWarehouse(_config(), dsn=postgres_dsn)
+    try:
+        with pytest.raises(psycopg.errors.UndefinedColumn):
+            wh._insert(
+                "meta_fred_series",
+                [{"series_id": "A", "not_a_column": 1}],
+                upsert_keys=("series_id",),
+            )
+        # The very next call must work.
+        wh._insert(
+            "meta_fred_series",
+            [{"series_id": "B", "title": "ok"}],
+            upsert_keys=("series_id",),
+        )
+        assert wh.query("SELECT series_id FROM meta.fred_series") == [
+            {"series_id": "B"}
+        ]
+    finally:
+        wh.close()
