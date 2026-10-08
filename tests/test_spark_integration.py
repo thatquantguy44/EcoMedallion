@@ -52,10 +52,18 @@ def test_merge_delta_upserts_idempotently(spark):
     from fred_pipeline.spark_io import merge_delta
 
     rows = [
-        {"series_id": "X", "observation_date": "2024-01-01",
-         "realtime_start": "2024-02-01", "value": 1.0},
-        {"series_id": "X", "observation_date": "2024-01-02",
-         "realtime_start": "2024-02-01", "value": 2.0},
+        {
+            "series_id": "X",
+            "observation_date": "2024-01-01",
+            "realtime_start": "2024-02-01",
+            "value": 1.0,
+        },
+        {
+            "series_id": "X",
+            "observation_date": "2024-01-02",
+            "realtime_start": "2024-02-01",
+            "value": 2.0,
+        },
     ]
     df = _silver_df(spark, rows)
     df.write.format("delta").mode("overwrite").saveAsTable("silver_it")
@@ -65,10 +73,17 @@ def test_merge_delta_upserts_idempotently(spark):
     assert spark.table("silver_it").count() == 2
 
     # A changed value updates in place (same key).
-    changed = _silver_df(spark, [
-        {"series_id": "X", "observation_date": "2024-01-01",
-         "realtime_start": "2024-02-01", "value": 9.9},
-    ])
+    changed = _silver_df(
+        spark,
+        [
+            {
+                "series_id": "X",
+                "observation_date": "2024-01-01",
+                "realtime_start": "2024-02-01",
+                "value": 9.9,
+            },
+        ],
+    )
     merge_delta(spark, changed, "silver_it", SILVER_KEYS)
     assert spark.table("silver_it").count() == 2
     val = spark.sql(
@@ -77,10 +92,17 @@ def test_merge_delta_upserts_idempotently(spark):
     assert val == 9.9
 
     # A new key inserts.
-    new = _silver_df(spark, [
-        {"series_id": "X", "observation_date": "2024-01-03",
-         "realtime_start": "2024-02-01", "value": 3.0},
-    ])
+    new = _silver_df(
+        spark,
+        [
+            {
+                "series_id": "X",
+                "observation_date": "2024-01-03",
+                "realtime_start": "2024-02-01",
+                "value": 3.0,
+            },
+        ],
+    )
     merge_delta(spark, new, "silver_it", SILVER_KEYS)
     assert spark.table("silver_it").count() == 3
 
@@ -96,10 +118,18 @@ def test_append_rows(spark):
 def test_gold_latest_revision_sql(spark):
     """The Gold 'latest revision per date' logic must pick the newest vintage."""
     rows = [
-        {"series_id": "X", "observation_date": "2024-01-01",
-         "realtime_start": "2024-02-01", "value": 100.0},
-        {"series_id": "X", "observation_date": "2024-01-01",
-         "realtime_start": "2024-03-01", "value": 101.5},  # revised, newer
+        {
+            "series_id": "X",
+            "observation_date": "2024-01-01",
+            "realtime_start": "2024-02-01",
+            "value": 100.0,
+        },
+        {
+            "series_id": "X",
+            "observation_date": "2024-01-01",
+            "realtime_start": "2024-03-01",
+            "value": 101.5,
+        },  # revised, newer
     ]
     _silver_df(spark, rows).write.format("delta").mode("overwrite").saveAsTable(
         "silver_gold_it"
@@ -130,7 +160,11 @@ def test_feature_transforms_zscore_is_expanding_not_full_sample(spark):
     rows = [
         {"series_id": "X", "observation_date": "2024-01-01", "value": 100.0},
         {"series_id": "X", "observation_date": "2024-02-01", "value": 100.0},
-        {"series_id": "X", "observation_date": "2024-03-01", "value": 1000.0},  # outlier
+        {
+            "series_id": "X",
+            "observation_date": "2024-03-01",
+            "value": 1000.0,
+        },  # outlier
     ]
     _silver_df(spark, rows).write.format("delta").mode("overwrite").saveAsTable(
         "latest_zscore_it"
@@ -174,19 +208,39 @@ def test_revision_stats_sql(spark):
     not latest-revision rows."""
     rows = [
         # revised twice: 100.0 (first print) -> 101.5 -> 99.0 (latest)
-        {"series_id": "G", "observation_date": "2024-01-01",
-         "realtime_start": "2024-02-01", "value": 100.0, "revision_number": 1,
-         "is_missing": False},
-        {"series_id": "G", "observation_date": "2024-01-01",
-         "realtime_start": "2024-03-01", "value": 101.5, "revision_number": 2,
-         "is_missing": False},
-        {"series_id": "G", "observation_date": "2024-01-01",
-         "realtime_start": "2024-04-01", "value": 99.0, "revision_number": 3,
-         "is_missing": False},
+        {
+            "series_id": "G",
+            "observation_date": "2024-01-01",
+            "realtime_start": "2024-02-01",
+            "value": 100.0,
+            "revision_number": 1,
+            "is_missing": False,
+        },
+        {
+            "series_id": "G",
+            "observation_date": "2024-01-01",
+            "realtime_start": "2024-03-01",
+            "value": 101.5,
+            "revision_number": 2,
+            "is_missing": False,
+        },
+        {
+            "series_id": "G",
+            "observation_date": "2024-01-01",
+            "realtime_start": "2024-04-01",
+            "value": 99.0,
+            "revision_number": 3,
+            "is_missing": False,
+        },
         # never revised
-        {"series_id": "G", "observation_date": "2024-02-01",
-         "realtime_start": "2024-03-15", "value": 102.0, "revision_number": 1,
-         "is_missing": False},
+        {
+            "series_id": "G",
+            "observation_date": "2024-02-01",
+            "realtime_start": "2024-03-15",
+            "value": 102.0,
+            "revision_number": 1,
+            "is_missing": False,
+        },
     ]
     _silver_df(spark, rows).write.format("delta").mode("overwrite").saveAsTable(
         "silver_revision_it"
@@ -234,10 +288,30 @@ def test_curve_spread_sql_supports_ratio_op_with_zero_guard(spark):
     and ratio ('long / short') ops (see spread_config.load_spread_defs) —
     a zero short leg must drop that row entirely, not divide by zero."""
     rows = [
-        {"series_id": "A", "observation_date": "2024-01-01", "value": 10.0, "is_missing": False},
-        {"series_id": "B", "observation_date": "2024-01-01", "value": 4.0, "is_missing": False},
-        {"series_id": "A", "observation_date": "2024-01-02", "value": 10.0, "is_missing": False},
-        {"series_id": "B", "observation_date": "2024-01-02", "value": 0.0, "is_missing": False},
+        {
+            "series_id": "A",
+            "observation_date": "2024-01-01",
+            "value": 10.0,
+            "is_missing": False,
+        },
+        {
+            "series_id": "B",
+            "observation_date": "2024-01-01",
+            "value": 4.0,
+            "is_missing": False,
+        },
+        {
+            "series_id": "A",
+            "observation_date": "2024-01-02",
+            "value": 10.0,
+            "is_missing": False,
+        },
+        {
+            "series_id": "B",
+            "observation_date": "2024-01-02",
+            "value": 0.0,
+            "is_missing": False,
+        },
     ]
     _silver_df(spark, rows).write.format("delta").mode("overwrite").saveAsTable(
         "latest_curve_spread_it"
@@ -277,7 +351,9 @@ def test_fomc_tables_build_end_to_end_on_spark(spark, monkeypatch):
     from fred_pipeline.config import Environment, PipelineConfig
     from fred_pipeline.writer.gold import _build_regime_stats
 
-    monkeypatch.setattr(PipelineConfig, "catalog", property(lambda self: "spark_catalog"))
+    monkeypatch.setattr(
+        PipelineConfig, "catalog", property(lambda self: "spark_catalog")
+    )
     monkeypatch.setenv("FRED_FOMC_CONFIG_FILE", "config/fomc.yml")
     monkeypatch.setenv("FRED_REGIME_FILE", "/nonexistent/regime.yml")
     monkeypatch.setenv("FRED_STATS_PAIRS_FILE", "/nonexistent/stats_pairs.yml")
@@ -286,13 +362,55 @@ def test_fomc_tables_build_end_to_end_on_spark(spark, monkeypatch):
     spark.sql("CREATE DATABASE IF NOT EXISTS spark_catalog.gold")
 
     rows = [
-        {"series_id": "EFFR", "observation_date": "2026-07-17", "realtime_start": "2026-07-17", "value": 4.33, "is_missing": False},
-        {"series_id": "DFEDTARL", "observation_date": "2026-07-17", "realtime_start": "2026-07-17", "value": 4.25, "is_missing": False},
-        {"series_id": "DFEDTARU", "observation_date": "2026-07-17", "realtime_start": "2026-07-17", "value": 4.50, "is_missing": False},
-        {"series_id": "DGS1MO", "observation_date": "2026-07-17", "realtime_start": "2026-07-17", "value": 4.30, "is_missing": False},
-        {"series_id": "DGS3MO", "observation_date": "2026-07-17", "realtime_start": "2026-07-17", "value": 4.10, "is_missing": False},
-        {"series_id": "DGS6MO", "observation_date": "2026-07-17", "realtime_start": "2026-07-17", "value": 3.95, "is_missing": False},
-        {"series_id": "DGS1", "observation_date": "2026-07-17", "realtime_start": "2026-07-17", "value": 3.70, "is_missing": False},
+        {
+            "series_id": "EFFR",
+            "observation_date": "2026-07-17",
+            "realtime_start": "2026-07-17",
+            "value": 4.33,
+            "is_missing": False,
+        },
+        {
+            "series_id": "DFEDTARL",
+            "observation_date": "2026-07-17",
+            "realtime_start": "2026-07-17",
+            "value": 4.25,
+            "is_missing": False,
+        },
+        {
+            "series_id": "DFEDTARU",
+            "observation_date": "2026-07-17",
+            "realtime_start": "2026-07-17",
+            "value": 4.50,
+            "is_missing": False,
+        },
+        {
+            "series_id": "DGS1MO",
+            "observation_date": "2026-07-17",
+            "realtime_start": "2026-07-17",
+            "value": 4.30,
+            "is_missing": False,
+        },
+        {
+            "series_id": "DGS3MO",
+            "observation_date": "2026-07-17",
+            "realtime_start": "2026-07-17",
+            "value": 4.10,
+            "is_missing": False,
+        },
+        {
+            "series_id": "DGS6MO",
+            "observation_date": "2026-07-17",
+            "realtime_start": "2026-07-17",
+            "value": 3.95,
+            "is_missing": False,
+        },
+        {
+            "series_id": "DGS1",
+            "observation_date": "2026-07-17",
+            "realtime_start": "2026-07-17",
+            "value": 3.70,
+            "is_missing": False,
+        },
     ]
     _silver_df(spark, rows).write.format("delta").mode("overwrite").saveAsTable(
         config.table("gold", "fred_latest_observation")
@@ -304,14 +422,32 @@ def test_fomc_tables_build_end_to_end_on_spark(spark, monkeypatch):
         f"SELECT meeting_date, SUM(probability) AS total "
         f"FROM {config.table('gold', 'fomc_probability')} GROUP BY meeting_date"
     ).collect()
-    assert len(prob) == 12  # config/fomc.yml has 12 scheduled meetings
+    # compute_fomc_probability only models FUTURE meetings, so the expected
+    # count shrinks every time one passes. This was a hard-coded 12, which went
+    # stale on 2026-09-16 and had this job failing on main for weeks; derive it
+    # from the same config with the same clock instead.
+    from datetime import date
+
+    from fred_pipeline.gold_config.fomc_config import load_fomc_config
+
+    expected_meetings = sum(
+        1
+        for d in load_fomc_config("config/fomc.yml").meeting_dates
+        if d >= date.today()
+    )
+    assert expected_meetings > 0, (
+        "config/fomc.yml has no future meetings left; refresh it (the "
+        "calendar check and test_fomc_meeting_dates_have_runway warn long "
+        "before this)"
+    )
+    assert len(prob) == expected_meetings
     for row in prob:
         assert row["total"] == pytest.approx(1.0, abs=1e-6)
 
     path = spark.sql(
         f"SELECT COUNT(*) AS n FROM {config.table('gold', 'fomc_meeting_path')}"
     ).collect()
-    assert path[0]["n"] == 12
+    assert path[0]["n"] == expected_meetings
 
 
 # ---------------------------------------------------------------------------
@@ -404,17 +540,40 @@ def terminal_build(spark, tmp_path_factory):
         spark.sql("CREATE DATABASE IF NOT EXISTS spark_catalog.meta")
 
         meta_rows = [
-            {"series_id": "UNRATE", "title": "Unemployment Rate", "frequency": "m", "units": "Percent"},
-            {"series_id": "CAUR", "title": "Unemployment Rate in California", "frequency": "m", "units": "Percent"},
-            {"series_id": "DGS2", "title": "2-Year Treasury", "frequency": "d", "units": "Percent"},
-            {"series_id": "DGS10", "title": "10-Year Treasury", "frequency": "d", "units": "Percent"},
-            {"series_id": "DGS3MO", "title": "3-Month Treasury", "frequency": "d", "units": "Percent"},
+            {
+                "series_id": "UNRATE",
+                "title": "Unemployment Rate",
+                "frequency": "m",
+                "units": "Percent",
+            },
+            {
+                "series_id": "CAUR",
+                "title": "Unemployment Rate in California",
+                "frequency": "m",
+                "units": "Percent",
+            },
+            {
+                "series_id": "DGS2",
+                "title": "2-Year Treasury",
+                "frequency": "d",
+                "units": "Percent",
+            },
+            {
+                "series_id": "DGS10",
+                "title": "10-Year Treasury",
+                "frequency": "d",
+                "units": "Percent",
+            },
+            {
+                "series_id": "DGS3MO",
+                "title": "3-Month Treasury",
+                "frequency": "d",
+                "units": "Percent",
+            },
         ]
-        spark.createDataFrame(meta_rows).write.format("delta").mode(
-            "overwrite"
-        ).option("overwriteSchema", "true").saveAsTable(
-            config.table("meta", "fred_series")
-        )
+        spark.createDataFrame(meta_rows).write.format("delta").mode("overwrite").option(
+            "overwriteSchema", "true"
+        ).saveAsTable(config.table("meta", "fred_series"))
 
         observations = []
         for day, (unrate, caur, two, ten, three_m, usrec) in {
@@ -424,21 +583,25 @@ def terminal_build(spark, tmp_path_factory):
             "2026-04-01": (4.1, 5.0, 4.40, 4.25, 4.45, 1.0),
         }.items():
             for series_id, value in (
-                ("UNRATE", unrate), ("CAUR", caur), ("DGS2", two),
-                ("DGS10", ten), ("DGS3MO", three_m), ("USREC", usrec),
+                ("UNRATE", unrate),
+                ("CAUR", caur),
+                ("DGS2", two),
+                ("DGS10", ten),
+                ("DGS3MO", three_m),
+                ("USREC", usrec),
             ):
-                observations.append({
-                    "series_id": series_id,
-                    "observation_date": day,
-                    "realtime_start": day,
-                    "value": value,
-                    "is_missing": False,
-                })
-        _silver_df(spark, observations).write.format("delta").mode(
-            "overwrite"
-        ).option("overwriteSchema", "true").saveAsTable(
-            config.table("gold", "fred_latest_observation")
-        )
+                observations.append(
+                    {
+                        "series_id": series_id,
+                        "observation_date": day,
+                        "realtime_start": day,
+                        "value": value,
+                        "is_missing": False,
+                    }
+                )
+        _silver_df(spark, observations).write.format("delta").mode("overwrite").option(
+            "overwriteSchema", "true"
+        ).saveAsTable(config.table("gold", "fred_latest_observation"))
 
         _build_terminal_views(config, spark)
         yield config
@@ -471,7 +634,9 @@ def test_dim_series_carries_geo_and_metric_on_delta(spark, terminal_build):
         f"FROM {terminal_build.table('gold', 'dim_series')} "
         f"WHERE series_id = 'CAUR'"
     ).collect()
-    assert row, "CAUR missing from dim_series (is it still in config/series_catalog.yml?)"
+    assert row, (
+        "CAUR missing from dim_series (is it still in config/series_catalog.yml?)"
+    )
     assert row[0]["econ_category"] == "REGIONAL"
     assert row[0]["geo"] == "CA"
     assert row[0]["metric"] == "Unemployment Rate"
@@ -483,11 +648,11 @@ def test_terminal_views_populate_their_core_tables(spark, terminal_build):
     """Schema parity alone would pass on 18 empty tables. These are the ones
     whose inputs the fixture provides, so they must actually have rows."""
     for table, minimum in (
-        ("dim_series", 200),   # the catalog is 254 entries
-        ("dim_date", 90),      # ~4 months of daily rows
+        ("dim_series", 200),  # the catalog is 254 entries
+        ("dim_date", 90),  # ~4 months of daily rows
         ("market_calendar", 90),
-        ("macro_indicator_dashboard", 2),   # UNRATE + CAUR at least
-        ("treasury_curve", 3),              # 3 tenors x 4 dates
+        ("macro_indicator_dashboard", 2),  # UNRATE + CAUR at least
+        ("treasury_curve", 3),  # 3 tenors x 4 dates
         ("curve_spread_daily", 1),
     ):
         count = spark.sql(

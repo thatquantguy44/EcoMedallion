@@ -2,6 +2,10 @@ services:
   postgres:
     image: postgres:16
     container_name: fred-pipeline-postgres
+    # Comes back on its own whenever Docker Desktop starts, so a reboot doesn't
+    # silently leave the warehouse unreachable. "unless-stopped" and not
+    # "always": an explicit `docker compose stop` stays stopped.
+    restart: unless-stopped
     environment:
       POSTGRES_DB: macro_medallion
       POSTGRES_USER: fred

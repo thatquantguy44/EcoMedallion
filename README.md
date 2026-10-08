@@ -188,6 +188,67 @@ for a real example of mixing them up and how it was resolved.
 Switching backends changes where data is stored, not how much memory a full
 Gold rebuild needs — see the performance handoff above for that constraint.
 
+#### Connecting to the local Postgres warehouse
+
+Once `docker compose up -d postgres` has run, the warehouse is reachable at:
+
+| | |
+|---|---|
+| Host / port | `127.0.0.1` : `55432` |
+| Database | `macro_medallion` |
+| User / password | `fred` / `fred` |
+| Container | `fred-pipeline-postgres` |
+
+```bash
+postgresql://fred:fred@127.0.0.1:55432/macro_medallion
+```
+
+Three ways in:
+
+```bash
+# 1. psql inside the container -- needs no client installed on the host
+docker exec -it fred-pipeline-postgres psql -U fred -d macro_medallion
+
+# 2. This repo's own query tool
+python scripts/query_gold_layer.py --backend postgres --schema gold --list-tables
+
+# 3. A GUI (DBeaver, TablePlus, pgAdmin) using the table above
+```
+
+macOS ships no `psql`, so options 2 and 3 need a client: `brew install libpq`
+(client only) or `brew install postgresql@16` (client + an unused server).
+Option 1 needs nothing.
+
+**Three layers have to be up, and only the third is this repo's business:**
+
+1. **Docker Desktop** — the engine. It does *not* start at login unless you
+   enable that in Settings → General.
+2. **The container** — `docker compose up -d postgres`. It carries
+   `restart: unless-stopped`, so once Docker Desktop is running this comes
+   back by itself; you only need the command after an explicit
+   `docker compose stop`.
+3. **The database** — inside the container, on port 55432.
+
+**The data is not in the container.** It lives in a named Docker volume
+(`fred-bronze-to-gold-pipeline_fred_postgres_data`), so stopping, deleting or
+recreating the container does not touch it — the container is just the engine
+in front of the data. Only `docker volume rm` destroys the warehouse, which
+for a seeded copy of `fred_local.db` means a multi-hour re-import. Check what
+is actually there before assuming an empty database:
+
+```bash
+docker exec fred-pipeline-postgres psql -U fred -d macro_medallion -c \
+  "SELECT schemaname, count(*) AS tables FROM pg_tables
+   WHERE schemaname IN ('meta','audit','bronze','silver','gold')
+   GROUP BY schemaname ORDER BY schemaname;"
+```
+
+To seed Postgres from an existing `fred_local.db`, use
+`scripts/copy_sqlite_to_postgres.py` — note it **replaces** the target schemas
+unless you pass `--append`. Full procedure in
+[`docs/deployment/postgres_deployment_runbook.md`](docs/deployment/postgres_deployment_runbook.md)
+§D2.
+
 ## Operations reference
 
 Every `python -m fred_pipeline <command>` the CLI supports, grouped by what
