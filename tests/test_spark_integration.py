@@ -422,14 +422,32 @@ def test_fomc_tables_build_end_to_end_on_spark(spark, monkeypatch):
         f"SELECT meeting_date, SUM(probability) AS total "
         f"FROM {config.table('gold', 'fomc_probability')} GROUP BY meeting_date"
     ).collect()
-    assert len(prob) == 12  # config/fomc.yml has 12 scheduled meetings
+    # compute_fomc_probability only models FUTURE meetings, so the expected
+    # count shrinks every time one passes. This was a hard-coded 12, which went
+    # stale on 2026-09-16 and had this job failing on main for weeks; derive it
+    # from the same config with the same clock instead.
+    from datetime import date
+
+    from fred_pipeline.gold_config.fomc_config import load_fomc_config
+
+    expected_meetings = sum(
+        1
+        for d in load_fomc_config("config/fomc.yml").meeting_dates
+        if d >= date.today()
+    )
+    assert expected_meetings > 0, (
+        "config/fomc.yml has no future meetings left; refresh it (the "
+        "calendar check and test_fomc_meeting_dates_have_runway warn long "
+        "before this)"
+    )
+    assert len(prob) == expected_meetings
     for row in prob:
         assert row["total"] == pytest.approx(1.0, abs=1e-6)
 
     path = spark.sql(
         f"SELECT COUNT(*) AS n FROM {config.table('gold', 'fomc_meeting_path')}"
     ).collect()
-    assert path[0]["n"] == 12
+    assert path[0]["n"] == expected_meetings
 
 
 # ---------------------------------------------------------------------------
