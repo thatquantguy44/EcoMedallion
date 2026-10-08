@@ -2,8 +2,8 @@
 set -euo pipefail
 shopt -s nocasematch
 
-expected_name="${GIT_HOOK_EXPECTED_AUTHOR_NAME:-Joshua Lutkemuller}"
-expected_email="${GIT_HOOK_EXPECTED_AUTHOR_EMAIL:-110635594+joshualutkemuller@users.noreply.github.com}"
+expected_name="${GIT_HOOK_EXPECTED_AUTHOR_NAME:-$(git config --get user.name || true)}"
+expected_email="${GIT_HOOK_EXPECTED_AUTHOR_EMAIL:-$(git config --get user.email || true)}"
 
 agent_pattern='(claude|codex|openai|anthropic|chatgpt|copilot|assistant|agent)'
 
@@ -19,7 +19,7 @@ fail_identity() {
   local actual_email="$3"
 
   cat >&2 <<EOF
-Commit blocked: ${label} identity must be Joshua Lutkemuller.
+Commit blocked: ${label} identity does not match this checkout's configured Git identity.
 
 Expected:
   ${expected_name} <${expected_email}>
@@ -54,6 +54,14 @@ check_ident() {
     fail_identity "$label_lower" "$actual_name" "$actual_email"
   fi
 }
+
+if [[ -z "${expected_name}" || -z "${expected_email}" ]]; then
+  cat >&2 <<'EOF'
+Commit blocked: configure user.name and user.email for this checkout, or set
+GIT_HOOK_EXPECTED_AUTHOR_NAME and GIT_HOOK_EXPECTED_AUTHOR_EMAIL.
+EOF
+  exit 1
+fi
 
 check_ident AUTHOR
 check_ident COMMITTER

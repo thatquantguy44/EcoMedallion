@@ -1,6 +1,6 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "$id": "https://github.com/joshualutkemuller/fred-bronze-to-gold-pipeline/manifest.schema.json",
+  "$id": "urn:fred-bronze-to-gold-pipeline:manifest.schema.json",
   "title": "FRED Pipeline Manifest",
   "description": "Schema for a FRED ingestion manifest. Mirrors fred_pipeline.manifest.",
   "type": "object",

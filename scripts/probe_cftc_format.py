@@ -53,7 +53,7 @@ import requests
 
 USER_AGENT = (
     "fred-bronze-to-gold-pipeline/spec006-probe "
-    "(https://github.com/thatquantguy44/EcoMedallion; research probe, not "
+    "(https://github.com/OWNER/REPOSITORY; research probe, not "
     "a production client -- contact repo owner)"
 )
 
@@ -74,11 +74,15 @@ SOCRATA_CANDIDATES = [
     Candidate(
         name="socrata_catalog_search",
         url="https://api.us.socrata.com/api/catalog/v1",
-        params={"domains": "publicreporting.cftc.gov", "q": "commitments of traders", "limit": "20"},
+        params={
+            "domains": "publicreporting.cftc.gov",
+            "q": "commitments of traders",
+            "limit": "20",
+        },
         note="Socrata's generic dataset-discovery API, scoped to CFTC's open-data domain. "
-             "If this returns dataset ids, each one likely has a stable SODA REST endpoint "
-             "(a real structural-fit win over bulk files) -- follow up on whichever id looks "
-             "like the Legacy/Disaggregated/TFF COT report.",
+        "If this returns dataset ids, each one likely has a stable SODA REST endpoint "
+        "(a real structural-fit win over bulk files) -- follow up on whichever id looks "
+        "like the Legacy/Disaggregated/TFF COT report.",
     ),
 ]
 
@@ -92,19 +96,21 @@ LEGACY_CANDIDATES = [
         name="cftc_gov_market_reports_index",
         url="https://www.cftc.gov/MarketReports/CommitmentsofTraders/index.htm",
         note="The human-facing index page, not a data file -- if reachable, read it for the "
-             "real current download links rather than trusting the guesses below.",
+        "real current download links rather than trusting the guesses below.",
     ),
     Candidate(
         name="cftc_gov_legacy_futures_only_current",
         url="https://www.cftc.gov/dea/newcot/deacot.txt",
         note="A commonly-referenced 'current Legacy Futures-Only COT' short-format text file "
-             "path from CFTC's older file layout -- may well be stale; verify against the "
-             "index page above before trusting it.",
+        "path from CFTC's older file layout -- may well be stale; verify against the "
+        "index page above before trusting it.",
     ),
 ]
 
 
-def _probe(candidate: Candidate, timeout: int) -> tuple[Candidate, requests.Response | None, Exception | None]:
+def _probe(
+    candidate: Candidate, timeout: int
+) -> tuple[Candidate, requests.Response | None, Exception | None]:
     try:
         resp = requests.get(
             candidate.url,
@@ -122,7 +128,9 @@ def main() -> int:
     parser.add_argument("--timeout", type=int, default=30)
     parser.add_argument("--socrata-only", action="store_true")
     parser.add_argument(
-        "--out-dir", type=Path, default=None,
+        "--out-dir",
+        type=Path,
+        default=None,
         help="save each candidate's raw response body here",
     )
     args = parser.parse_args()
@@ -145,8 +153,10 @@ def main() -> int:
             continue
 
         content_type = resp.headers.get("content-type", "")
-        print(f"HTTP {resp.status_code}, content-type={content_type!r}, "
-              f"{len(resp.content)} bytes")
+        print(
+            f"HTTP {resp.status_code}, content-type={content_type!r}, "
+            f"{len(resp.content)} bytes"
+        )
 
         if resp.status_code == 200:
             any_ok = True
@@ -164,14 +174,18 @@ def main() -> int:
 
     print("\n" + "=" * 60)
     if any_ok:
-        print("At least one candidate returned HTTP 200 -- inspect the "
-              "preview(s) above to decide: Socrata REST API vs. bulk-file "
-              "download vs. neither actually matches what §5.2 assumed.")
+        print(
+            "At least one candidate returned HTTP 200 -- inspect the "
+            "preview(s) above to decide: Socrata REST API vs. bulk-file "
+            "download vs. neither actually matches what §5.2 assumed."
+        )
         return 0
-    print("Every candidate failed. Either network access to these hosts is "
-          "blocked in this environment (the common case so far), or every "
-          "guessed URL above is stale and needs a fresh check against "
-          "cftc.gov / publicreporting.cftc.gov directly.")
+    print(
+        "Every candidate failed. Either network access to these hosts is "
+        "blocked in this environment (the common case so far), or every "
+        "guessed URL above is stale and needs a fresh check against "
+        "cftc.gov / publicreporting.cftc.gov directly."
+    )
     return 1
 
 

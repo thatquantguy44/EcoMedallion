@@ -99,7 +99,7 @@ _VINTAGE_ID_RE = re.compile(r"_\d{4}_[A-Z]{3}_VINTAGE$", re.IGNORECASE)
 
 USER_AGENT = (
     "fred-bronze-to-gold-pipeline/spec006-probe "
-    "(https://github.com/thatquantguy44/EcoMedallion; research probe, not "
+    "(https://github.com/OWNER/REPOSITORY; research probe, not "
     "a production client -- contact repo owner)"
 )
 
@@ -185,13 +185,14 @@ def _fetch_dataflows(base_url: str, timeout: int) -> tuple[dict[str, Any], str]:
         except requests.RequestException as exc:  # network/proxy failure
             last_err = exc
             continue
-        print(f"  tried Accept={accept!r} -> HTTP {resp.status_code}, "
-              f"content-type={resp.headers.get('content-type')!r}",
-              file=sys.stderr)
+        print(
+            f"  tried Accept={accept!r} -> HTTP {resp.status_code}, "
+            f"content-type={resp.headers.get('content-type')!r}",
+            file=sys.stderr,
+        )
         if resp.status_code != 200:
             last_err = RuntimeError(
-                f"HTTP {resp.status_code} for Accept={accept!r}: "
-                f"{resp.text[:500]!r}"
+                f"HTTP {resp.status_code} for Accept={accept!r}: {resp.text[:500]!r}"
             )
             continue
         try:
@@ -269,7 +270,9 @@ def _probe_sample_data_query(args: argparse.Namespace) -> None:
     )
     if args.out_dir:
         args.out_dir.mkdir(parents=True, exist_ok=True)
-        out_path = args.out_dir / f"imf_{args.sample_dataflow.lower()}_data_probe_raw.json"
+        out_path = (
+            args.out_dir / f"imf_{args.sample_dataflow.lower()}_data_probe_raw.json"
+        )
         out_path.write_text(json.dumps(payload, indent=2))
         print(
             f"Saved raw data-query response to {out_path} -- this is the "
@@ -285,15 +288,19 @@ def main() -> int:
     parser.add_argument("--base-url", default=DEFAULT_BASE_URL)
     parser.add_argument("--timeout", type=int, default=30)
     parser.add_argument(
-        "--out-dir", type=Path, default=None,
+        "--out-dir",
+        type=Path,
+        default=None,
         help="save the raw response and classified split as JSON here",
     )
     parser.add_argument(
-        "--sample-dataflow", default="COFER",
+        "--sample-dataflow",
+        default="COFER",
         help="dataflow id to attempt a real data query against (default: COFER)",
     )
     parser.add_argument(
-        "--skip-data-query", action="store_true",
+        "--skip-data-query",
+        action="store_true",
         help="only run the dataflow-list probe, skip the data-query capture attempt",
     )
     args = parser.parse_args()
@@ -313,7 +320,8 @@ def main() -> int:
     if not records:
         print(
             "Response parsed as JSON but no known dataflow-list shape "
-            "matched. Top-level keys:", list(payload.keys()),
+            "matched. Top-level keys:",
+            list(payload.keys()),
             file=sys.stderr,
         )
         print(
@@ -327,8 +335,10 @@ def main() -> int:
             (args.out_dir / "imf_dataflow_probe_raw.json").write_text(
                 json.dumps(payload, indent=2)
             )
-            print(f"Saved raw payload to {args.out_dir / 'imf_dataflow_probe_raw.json'}",
-                  file=sys.stderr)
+            print(
+                f"Saved raw payload to {args.out_dir / 'imf_dataflow_probe_raw.json'}",
+                file=sys.stderr,
+            )
         return 2
 
     stable = []
@@ -356,7 +366,9 @@ def main() -> int:
         f"{BASELINE_STABLE} stable / {BASELINE_VINTAGE} vintage."
     )
     if (len(records), len(stable), len(vintage)) != (
-        BASELINE_TOTAL, BASELINE_STABLE, BASELINE_VINTAGE,
+        BASELINE_TOTAL,
+        BASELINE_STABLE,
+        BASELINE_VINTAGE,
     ):
         print(
             "-> Counts differ from the recorded baseline. Could be a real "
@@ -377,8 +389,10 @@ def main() -> int:
         (args.out_dir / "imf_vintage_dataflow_ids.json").write_text(
             json.dumps(sorted(vintage), indent=2)
         )
-        print(f"\nSaved raw payload + classified id lists under {args.out_dir}",
-              file=sys.stderr)
+        print(
+            f"\nSaved raw payload + classified id lists under {args.out_dir}",
+            file=sys.stderr,
+        )
 
     return 0
 

@@ -10,8 +10,7 @@ if grep -Eiq '(^|[[:space:]])co-authored-by:[[:space:]].*(claude|codex|openai|an
   cat >&2 <<'EOF'
 Commit blocked: agent co-author trailers are not allowed in this repository.
 
-Keep the commit author as:
-  Joshua Lutkemuller <110635594+joshualutkemuller@users.noreply.github.com>
+Use the human author identity configured for this checkout.
 EOF
   exit 1
 fi

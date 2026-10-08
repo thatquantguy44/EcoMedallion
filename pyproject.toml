@@ -9,7 +9,7 @@ description = "Manifest-driven FRED API Bronze-to-Gold ingestion pipeline for Da
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
-authors = [{ name = "joshualutkemuller" }]
+authors = [{ name = "Project Contributors" }]
 keywords = ["fred", "databricks", "delta-lake", "etl", "macro", "quant"]
 
 dependencies = [

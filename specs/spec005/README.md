@@ -11,8 +11,8 @@ Gold data contracts, all supported storage backends, and the CI/release path.
 
 Baseline repository commit: `32c7502f2f13509dfd67700611d57c712103f363`
 
-External design reference: QuantSmith commit
-[`2a12fbb`](https://github.com/thatquantguy44/QuantSmith/tree/2a12fbb156c1d52aeeeddb2e5ad64e3a7b535012),
+External design reference: QuantSmith commit `2a12fbb`
+(`https://github.com/OWNER/QuantSmith/tree/2a12fbb156c1d52aeeeddb2e5ad64e3a7b535012`),
 inspected 2026-09-12.
 
 ---
@@ -241,22 +241,22 @@ evidence are outcomes.
 This design uses the separation of responsibilities documented in these
 QuantSmith artifacts at the pinned reference commit:
 
-- [`agents/test_engineering/README.md`](https://github.com/thatquantguy44/QuantSmith/blob/2a12fbb156c1d52aeeeddb2e5ad64e3a7b535012/agents/test_engineering/README.md)
+- [`agents/test_engineering/README.md`](https://github.com/OWNER/QuantSmith/blob/2a12fbb156c1d52aeeeddb2e5ad64e3a7b535012/agents/test_engineering/README.md)
   — language-specific test authorship is distinct from AC validation and
   release approval;
-- [`test_engineering_orchestrator`](https://github.com/thatquantguy44/QuantSmith/tree/2a12fbb156c1d52aeeeddb2e5ad64e3a7b535012/agents/test_engineering/test_engineering_orchestrator)
+- [`test_engineering_orchestrator`](https://github.com/OWNER/QuantSmith/tree/2a12fbb156c1d52aeeeddb2e5ad64e3a7b535012/agents/test_engineering/test_engineering_orchestrator)
   — detect the stack, route work, consolidate gaps, and hand off;
-- [`python_test_engineer`](https://github.com/thatquantguy44/QuantSmith/tree/2a12fbb156c1d52aeeeddb2e5ad64e3a7b535012/agents/test_engineering/python_test_engineer)
+- [`python_test_engineer`](https://github.com/OWNER/QuantSmith/tree/2a12fbb156c1d52aeeeddb2e5ad64e3a7b535012/agents/test_engineering/python_test_engineer)
   — pytest fixtures, parametrization, boundary-aware fakes, property tests,
   determinism, and meaningful assertions;
-- [`testing_validation`](https://github.com/thatquantguy44/QuantSmith/tree/2a12fbb156c1d52aeeeddb2e5ad64e3a7b535012/agents/testing_validation)
+- [`testing_validation`](https://github.com/OWNER/QuantSmith/tree/2a12fbb156c1d52aeeeddb2e5ad64e3a7b535012/agents/testing_validation)
   — map acceptance criteria to evidence and review quant integrity; and
-- [`quality-guard-agent`](https://github.com/thatquantguy44/QuantSmith/tree/2a12fbb156c1d52aeeeddb2e5ad64e3a7b535012/agents/quality-guard-agent)
+- [`quality-guard-agent`](https://github.com/OWNER/QuantSmith/tree/2a12fbb156c1d52aeeeddb2e5ad64e3a7b535012/agents/quality-guard-agent)
   — make an explicit approve/reject decision based on contract and policy
   evidence.
 
 QuantSmith's shared
-[`test_engineering.md`](https://github.com/thatquantguy44/QuantSmith/blob/2a12fbb156c1d52aeeeddb2e5ad64e3a7b535012/instructions/test_engineering.md)
+[`test_engineering.md`](https://github.com/OWNER/QuantSmith/blob/2a12fbb156c1d52aeeeddb2e5ad64e3a7b535012/instructions/test_engineering.md)
 also establishes principles this spec adopts: deterministic tests, behavioral
 assertions over coverage-chasing, boundary-appropriate fakes, mutation testing
 as a stronger periodic signal, and honest reporting of untested paths.

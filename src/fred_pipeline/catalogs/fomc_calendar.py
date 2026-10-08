@@ -657,7 +657,9 @@ def _merge_new_meetings(
             if existing_date > meeting.decision_date:
                 insert_at = i
                 break
-        merged.insert(insert_at, ([], _render_meeting_item(meeting), meeting.decision_date))
+        merged.insert(
+            insert_at, ([], _render_meeting_item(meeting), meeting.decision_date)
+        )
 
     new_block_lines: list[str] = []
     for leading, item_line, _ in merged:
@@ -692,7 +694,9 @@ def _bump_provenance_lines(
     values = {
         "last_verified": last_verified.isoformat(),
         "verified_by": verified_by,
-        "published_through": published_through.isoformat() if published_through else None,
+        "published_through": published_through.isoformat()
+        if published_through
+        else None,
     }
     for i in range(block_start, block_end):
         for field, pattern in _PROVENANCE_FIELD_RE.items():
@@ -770,7 +774,7 @@ VALID_BACKENDS = ("auto", "requests", "selenium")
 # python-requests UA is sometimes refused; this says what it is and why.
 DEFAULT_USER_AGENT = (
     "fred-bronze-to-gold-pipeline/fomc-calendar-scraper "
-    "(+https://github.com/joshualutkemuller/fred-bronze-to-gold-pipeline; "
+    "(+https://github.com/OWNER/REPOSITORY; "
     "refreshes config/fomc.yml a few times a year)"
 )
 
