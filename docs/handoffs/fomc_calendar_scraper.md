@@ -389,3 +389,70 @@ the Fed's own note. `--check` reports in sync, exit 0.
   meeting lives in that prose note, so anything reading the horizon depends
   on the same fragile sentence that produced one of these two bugs. Treat it
   accordingly.
+
+## 12. In the pipeline run (2026-10-07)
+
+`python -m fred_pipeline run` now records a `fomc_calendar` stage just before
+Gold. Two behaviours, deliberately independent.
+
+### The check: always on, offline
+
+Reads only the local `config/fomc.yml` (no network, so no new way for a run to
+fail) and records one of:
+
+| Calendar state | Stage status | Run verdict |
+|---|---|---|
+| more than 120 days of runway (including the 121-270 "due" band) | succeeded | unaffected; "due" is logged only |
+| 120 days or fewer | **warned** | `partial` (and so the run-alert email) |
+| file missing, malformed, or expired | **failed** | `partial`; Gold still builds |
+
+Why those thresholds: a `WARNED` stage makes the *whole run* `partial`, so
+warning from 270 days out would make every run for months look degraded. The
+weekly workflow already owns that nudge (it opens an issue at 270). The run
+speaks up at 120, where the old blocking test used to, and the stage is
+`required=False`, so even a `failed` calendar never costs you the other 50+
+Gold tables.
+
+The failure it exists for: **a missing or expired calendar used to produce
+empty `gold.fomc_probability` / `gold.fomc_meeting_path` with a run that
+reported success.** Now it is on the record.
+
+The default path `config/fomc.yml` is **relative to the working directory**.
+Running from anywhere but the repo root therefore finds no file, and the
+message says so, naming the path it looked at and the cwd. Set
+`FRED_FOMC_CONFIG_FILE` to pin it.
+
+### The refresh: opt-in, can never stop a run
+
+```bash
+python -m fred_pipeline run --refresh-fomc-calendar
+```
+
+Before the check, fetches the Fed page (plain HTTP, 15 s timeout, never
+Selenium) and adds newly published meetings to the file. Guarantees:
+
+- **Fallback on anything.** Fetch, parse, validate or write failing, for any
+  reason, leaves the file byte-identical, logs a warning, marks the stage
+  `warned`, and the run continues on the calendar already on disk.
+- **Additive only.** A configured date missing from the Fed page is reported,
+  never removed (that usually means a meeting moved). A lost advance-notice
+  sentence is reported as a *parser* problem and the file is not touched on
+  that account.
+- **Validated, atomic write.** The new text must load as a valid config and
+  still contain every date the old one had, then replaces the file through a
+  temp file and `os.replace`.
+
+**It edits a tracked file and does not commit.** A refreshing run leaves
+`config/fomc.yml` modified in the working tree for a human to review and
+commit. On a deployment where the config is baked into an image or bundle, the
+edit lives only until the next deploy; there the scheduled workflow's PR is the
+durable path, and this flag is just a convenience.
+
+The cost, stated plainly: it puts `federalreserve.gov` in the run's path. The
+fallback means that costs a warning, not a failure, but it is a dependency the
+default run does not have, which is why it is off by default.
+
+Verified against the live Fed page on a scratch copy of the config with its
+last two meetings removed: it restored both (2027-12-08, 2028-01-26). With the
+network deliberately broken it left the file byte-identical and reported a
+warning.

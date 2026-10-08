@@ -241,6 +241,20 @@ based, not activity-based), has network egress (fact 4), has a natural home
 for credentials it does not need, and can *act* — open a PR, open an issue —
 rather than merely report.
 
+> **Amendment (2026-10-07): a pipeline stage now exists, opt-in.** The table
+> above rejects "a stage inside `fred_pipeline run`", and the reasoning
+> stands for the *default*. It was later decided to offer it anyway behind
+> `--refresh-fomc-calendar`, with the objection answered structurally instead
+> of by omission: **nothing the refresh does can stop a run.** Any fetch,
+> parse, validation or write failure is caught, logged, and the calendar on
+> disk is used unchanged. Separately, an **offline** health check now always
+> runs before Gold (no flag, no network), because an expired or missing
+> calendar was otherwise invisible: the FOMC Gold tables come out empty and
+> the run reports success. Details and severity thresholds:
+> `governance/fomc_calendar_check.py` and
+> `docs/handoffs/fomc_calendar_scraper.md` §12. The scheduled workflow
+> remains the primary mechanism; this is the belt to its braces.
+
 **Cadence: weekly, Mondays.** Weekly is ~52 fetches/year against a public
 page — negligible load, honest UA already in place — and bounds worst-case
 detection latency at 7 days against an event with months of slack. Daily

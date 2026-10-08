@@ -479,6 +479,7 @@ class FredPipeline:
         exclude_sources: list[str] | None = None,
         force_full: bool = False,
         skip_not_due: bool = True,
+        refresh_fomc_calendar: bool = False,
     ) -> EtlRun:
         manifests = load_manifests(manifest_path)
         specs = all_series(manifests, active_only=True)
@@ -517,6 +518,7 @@ class FredPipeline:
             build_gold_layer=build_gold_layer,
             force_full=force_full,
             skip_not_due=skip_not_due,
+            refresh_fomc_calendar=refresh_fomc_calendar,
         )
 
     @timed("FredPipeline.run")
@@ -529,6 +531,7 @@ class FredPipeline:
         build_gold_layer: bool = True,
         force_full: bool = False,
         skip_not_due: bool = True,
+        refresh_fomc_calendar: bool = False,
     ) -> EtlRun:
         specs = list(specs)
         run = EtlRun(
@@ -651,6 +654,10 @@ class FredPipeline:
         # not abort a run whose ingestion succeeded) but the failure is now
         # RECORDED rather than only logged, so the run summary can say so.
         if build_gold_layer and run.series_succeeded > 0 and self.warehouse is not None:
+            # Before Gold, because Gold reads config/fomc.yml: a refresh has to
+            # land first, and a calendar that cannot support the FOMC tables
+            # should be on the record BEFORE they silently come out empty.
+            self._check_fomc_calendar(tracker, refresh=refresh_fomc_calendar)
             with tracker.stage("gold", swallow=True) as stage:
                 result = self.warehouse.build_gold()
                 if isinstance(result, dict):
@@ -679,10 +686,13 @@ class FredPipeline:
                 )
         elif not build_gold_layer:
             tracker.skip("gold", "build_gold_layer=False")
+            tracker.skip("fomc_calendar", "gold layer not built")
         elif self.warehouse is None:
             tracker.skip("gold", "no warehouse (dry run)")
+            tracker.skip("fomc_calendar", "gold layer not built")
         else:
             tracker.skip("gold", "no series succeeded")
+            tracker.skip("fomc_calendar", "gold layer not built")
 
         if build_gold_layer and self.warehouse is not None:
             with tracker.stage("release_calendar", swallow=True):
@@ -704,6 +714,31 @@ class FredPipeline:
             run.series_failed,
         )
         return run
+
+    def _check_fomc_calendar(self, tracker: Any, *, refresh: bool) -> None:
+        """Record whether config/fomc.yml can support the FOMC Gold tables.
+
+        Never lets a calendar problem stop the run (``swallow=True``): at worst
+        the FOMC tables are empty, which is exactly what this stage makes
+        visible instead of leaving silent.
+        """
+        from fred_pipeline.governance.fomc_calendar_check import (
+            FAIL,
+            WARN,
+            FOMCCalendarError,
+            check_fomc_calendar,
+        )
+
+        result = None
+        with tracker.stage("fomc_calendar", swallow=True) as stage:
+            result = check_fomc_calendar(refresh=refresh)
+            stage.detail.update(result.detail())
+            for message in result.messages:
+                log.warning("%s", message)
+            if result.status == FAIL:
+                raise FOMCCalendarError(" | ".join(result.messages))
+        if result is not None and result.status == WARN:
+            tracker.warn("fomc_calendar", " | ".join(result.messages))
 
     def _send_run_alert(self, run: EtlRun, tracker: Any) -> None:
         """Email the stage summary (config/alerting.yml).
