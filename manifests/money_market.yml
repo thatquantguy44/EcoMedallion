@@ -1,0 +1,36 @@
+name: money_market
+description: >
+  Series added for the terminal's money-market optimizer (MMKT; specs/spec009).
+  One manifest per series: every other money-market rate MMKT reads (SOFR, EFFR,
+  IORB, OBFR, TGCRRATE, RRPONTSYAWARD, DTB4WK/DTB3/DTB6, DGS1MO/3MO/6MO, DCPF3M)
+  is already declared by rates.yml or fed_funding.yml and is deliberately NOT
+  repeated here -- see config/mmkt_instruments.yml for the full instrument map.
+
+  Shipped INACTIVE. The build environment cannot reach FRED, so this id has not
+  been checked against live metadata; it comes from the Federal Reserve's H.15
+  commercial-paper listing (the nonfinancial companion of DCPF3M, quoted on the
+  same discount basis). Verify, then activate:
+
+      python scripts/probe_mmkt_series.py --fred-key "$FRED_API_KEY"
+
+  The probe confirms the id resolves, reports its title/units/frequency, and
+  flags a quoting basis that disagrees with config/mmkt_instruments.yml.
+  Until it is active the snapshot reports the instrument as `missing`, not as
+  absent.
+version: 1
+
+series:
+  - series_id: DCPN3M
+    title: 90-Day AA Nonfinancial Commercial Paper Interest Rate
+    category: rates
+    frequency: d
+    expected_update_frequency: daily
+    units: Percent
+    active: false           # verify live with scripts/probe_mmkt_series.py, then flip
+    vintage_enabled: false  # published market rate, not revised
+    validation_profile: standard
+    downstream_use_case: mmkt
+    priority: 3
+    min_value: -1
+    max_value: 25
+    tags: [rates, money_market, commercial_paper, mmkt]

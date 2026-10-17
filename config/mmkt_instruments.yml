@@ -1,0 +1,63 @@
+# Money-market instrument map (specs/spec009; consumed by the terminal's MMKT
+# module through gold.mmkt_rate_snapshot).
+#
+# Each entry names one instrument the money-market optimizer may hold or price
+# against, the series that carries its rate, and -- the point of this file --
+# the QUOTING BASIS of that series. The sources disagree: FRED's DTB* bill
+# series and the Fed's commercial-paper series are quoted on a DISCOUNT basis,
+# DGS* constant-maturity yields on a BOND-EQUIVALENT (investment) basis, and
+# SOFR/EFFR/repo rates on a simple ACT/360 money-market basis. Comparing them
+# raw ranks instruments by a quoting convention, not by yield. The snapshot
+# normalizes every rate to one basis -- simple ACT/360 money-market yield --
+# and keeps the quoted value next to it.
+#
+# basis:
+#   money_market     already simple ACT/360; passed through unchanged
+#   discount         d (ACT/360)  ->  d / (1 - d * tenor_days / 360)
+#   bond_equivalent  simple ACT/365 yield  ->  y * 360 / 365   (tenor <= 182 days)
+#
+# A configured series that is not ingested, or whose latest observation is
+# older than max_staleness_days, is reported with status "missing" / "stale"
+# -- never silently dropped. (config/funding.yml once named TGCR while the
+# manifest declared TGCRRATE; the engine found no rows, nothing failed, and a
+# whole Gold table came out empty. This file's engine refuses that failure
+# mode, and tests/test_mmkt_instruments.py cross-checks every id against the
+# manifests.)
+#
+# Not yet here, deliberately: money-fund yield/WAM/WAL/liquid assets (needs the
+# SEC N-MFP source, spec009 phase 3), repo by tenor (OFR, phase 3), CDs and bank
+# deposits (licensed or illustrative). Where an instrument has no source the
+# terminal must label any stand-in number SIM; it must not appear here.
+
+version: 1
+
+# Daily market rates publish on business days; 5 calendar days covers a long
+# weekend plus a late print. Weekly series get 10.
+default_max_staleness_days: 5
+
+instruments:
+  # --- overnight / policy ---
+  - {instrument_id: ON_SOFR,  label: SOFR,                              instrument_class: overnight, series_id: SOFR,          tenor_days: 1,   basis: money_market}
+  - {instrument_id: ON_EFFR,  label: Effective Fed Funds Rate,          instrument_class: overnight, series_id: EFFR,          tenor_days: 1,   basis: money_market}
+  - {instrument_id: ON_OBFR,  label: Overnight Bank Funding Rate,       instrument_class: overnight, series_id: OBFR,          tenor_days: 1,   basis: money_market}
+  - {instrument_id: POL_IORB, label: Interest on Reserve Balances,       instrument_class: policy,    series_id: IORB,          tenor_days: 1,   basis: money_market}
+
+  # --- repo / Fed RRP ---
+  # The FRED id carries a RATE suffix; bare TGCR is a prefix of the percentile
+  # and volume companions, not the rate (see manifests/fed_funding.yml).
+  - {instrument_id: REPO_TGCR, label: Tri-Party General Collateral Rate, instrument_class: repo,      series_id: TGCRRATE,      tenor_days: 1,   basis: money_market}
+  - {instrument_id: RRP_AWARD, label: Fed Overnight RRP Award Rate,      instrument_class: rrp,       series_id: RRPONTSYAWARD, tenor_days: 1,   basis: money_market}
+
+  # --- T-bills, secondary market, discount basis ---
+  - {instrument_id: TBILL_4W, label: 4-Week T-Bill,   instrument_class: tbill, series_id: DTB4WK, tenor_days: 28,  basis: discount}
+  - {instrument_id: TBILL_3M, label: 3-Month T-Bill,  instrument_class: tbill, series_id: DTB3,   tenor_days: 91,  basis: discount}
+  - {instrument_id: TBILL_6M, label: 6-Month T-Bill,  instrument_class: tbill, series_id: DTB6,   tenor_days: 182, basis: discount}
+
+  # --- Treasury constant maturity, bond-equivalent (investment) basis ---
+  - {instrument_id: CMT_1M, label: 1-Month Treasury CMT, instrument_class: treasury_cmt, series_id: DGS1MO, tenor_days: 30,  basis: bond_equivalent}
+  - {instrument_id: CMT_3M, label: 3-Month Treasury CMT, instrument_class: treasury_cmt, series_id: DGS3MO, tenor_days: 91,  basis: bond_equivalent}
+  - {instrument_id: CMT_6M, label: 6-Month Treasury CMT, instrument_class: treasury_cmt, series_id: DGS6MO, tenor_days: 182, basis: bond_equivalent}
+
+  # --- commercial paper, AA, 90-day, discount basis (Fed H.15) ---
+  - {instrument_id: CP_FIN_3M,    label: 90-Day AA Financial CP,    instrument_class: cp, series_id: DCPF3M, tenor_days: 90, basis: discount}
+  - {instrument_id: CP_NONFIN_3M, label: 90-Day AA Nonfinancial CP, instrument_class: cp, series_id: DCPN3M, tenor_days: 90, basis: discount}
