@@ -431,6 +431,13 @@ on dates where **every** component spread has a value (`n_components` records
 how many were blended). An early observation whose expanding std is still 0
 contributes a neutral 0, not a gap.
 
+#### `gold.mmkt_rate_snapshot`
+One row per configured instrument in `config/mmkt_instruments.yml`. Carries
+the quoted source rate and its normalized simple ACT/360 yield, the FRED series
+provenance, observation/as-of dates, staleness limit, and `ok`, `stale`, or
+`missing` status. Stale rows retain the last value; missing rows have no
+quoted or normalized value. Consumers must check status before pricing.
+
 #### `gold.credit_spread_daily`
 OAS history per instrument in `config/credit.yml` (ICE BofA indices; FRED
 publishes percent — `oas_pct`, with `oas_bps` = ×100): `change_bps` vs. the

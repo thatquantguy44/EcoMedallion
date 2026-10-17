@@ -370,6 +370,13 @@ CREATE TABLE IF NOT EXISTS gold_funding_stress_daily (
     observation_date TEXT, composite_z REAL, stress_score REAL,
     stress_bucket TEXT, n_components INTEGER
 );
+CREATE TABLE IF NOT EXISTS gold_mmkt_rate_snapshot (
+    instrument_id TEXT, label TEXT, instrument_class TEXT, tenor_days INTEGER,
+    series_id TEXT, quoted_basis TEXT, quoted_rate_pct REAL,
+    normalized_basis TEXT, mm_yield_pct REAL, conversion TEXT,
+    observation_date TEXT, as_of_date TEXT, staleness_days INTEGER,
+    max_staleness_days INTEGER, status TEXT, status_detail TEXT
+);
 CREATE TABLE IF NOT EXISTS gold_credit_spread_daily (
     instrument TEXT, series_id TEXT, category TEXT, observation_date TEXT,
     oas_pct REAL, oas_bps REAL, change_bps REAL, zscore REAL,
@@ -1896,6 +1903,8 @@ class LocalWarehouse:
             load_credit_config,
             load_funding_config,
         )
+        from fred_pipeline.gold_config.mmkt_config import load_mmkt_config
+        from fred_pipeline.writer.mmkt_views import compute_mmkt_rate_snapshot
         from fred_pipeline.regime_stats import (
             compute_macro_regime,
             compute_series_lead_lag,
@@ -1912,6 +1921,8 @@ class LocalWarehouse:
         spreads = load_spread_defs()
         board = load_benchmark_board()
         funding_cfg = load_funding_config()
+        mmkt_cfg = load_mmkt_config()
+        mmkt_ids = {instrument.series_id for instrument in mmkt_cfg.instruments}
         credit_cfg = load_credit_config()
         infl_items = list(load_inflation_items())
         fomc_cfg = load_fomc_config()
@@ -1970,6 +1981,11 @@ class LocalWarehouse:
                 "benchmark_rate_board": _stage_timed("pf.benchmark_rate_board")(
                     lambda: compute_benchmark_rate_board(
                         _select_series(latest_by_series, board_ids), board
+                    )
+                ),
+                "mmkt_rate_snapshot": _stage_timed("pf.mmkt_rate_snapshot")(
+                    lambda: compute_mmkt_rate_snapshot(
+                        _select_series(latest_by_series, mmkt_ids), mmkt_cfg
                     )
                 ),
                 "inflation": _stage_timed("pf.inflation")(
@@ -2071,6 +2087,8 @@ class LocalWarehouse:
         funding_stress_rows = _stage_timed("funding_stress_daily")(
             self._build_funding_stress_daily
         )(funding_cfg)
+        self.conn.execute("DELETE FROM gold_mmkt_rate_snapshot")
+        self._insert("gold_mmkt_rate_snapshot", computed["mmkt_rate_snapshot"])
 
         # spec003 Phase 3: second incremental table, same per-entity pattern
         # as gold_curve_spread_daily above. Unlike that table, downstream
@@ -2343,6 +2361,7 @@ class LocalWarehouse:
                 "benchmark_rate_board",
                 "funding_tape_daily",
                 "funding_stress_daily",
+                "mmkt_rate_snapshot",
                 "credit_spread_daily",
                 "inflation_explorer",
                 "inflation_contribution",
