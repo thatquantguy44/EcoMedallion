@@ -56,9 +56,10 @@ def get_documented_tables() -> set[str]:
     """Extract table names from data_dictionary.md."""
     dict_path = GIT_ROOT / "docs" / "dictionary" / "data_dictionary.md"
     text = dict_path.read_text()
-    # Look for headers like ### `meta.fred_series`
-    matches = re.findall(r"^### `([a-z_]+\.[a-z0-9_]+)`", text, re.MULTILINE)
-    return set(matches)
+    # Gold dictionary entries use level-4 headers and schema-qualified names;
+    # the SQLite DDL inventory and existing baseline use flat physical names.
+    matches = re.findall(r"^#{3,4} `([a-z_]+)\.([a-z0-9_]+)`", text, re.MULTILINE)
+    return {f"{schema}_{table}" for schema, table in matches}
 
 
 def check_handoff_dates() -> list[str]:

@@ -1592,6 +1592,111 @@ class LocalWarehouse:
             self._insert("gold_series_correlation", new_rows)
         self._write_checkpoints_batch("gold_series_correlation", checkpoint_entries)
 
+    def _build_equity_total_return_index(
+        self,
+        tiingo_rows: list[dict[str, Any]],
+        touched: dict[str, str],
+        full: bool,
+    ) -> None:
+        """Incrementally rebuild the Tiingo total-return index per ticker."""
+        from fred_pipeline.writer.equity_views import (
+            compute_equity_total_return_index,
+            resume_equity_total_return_index,
+        )
+
+        table_name = "gold_equity_total_return_index"
+        checkpoint_table = table_name
+        config_hash = hashlib.sha256(
+            b"equity_total_return_index:v1:close+divCash+splitFactor:act365-trailing-dividend"
+        ).hexdigest()
+
+        if full:
+            self._clear_checkpoints(checkpoint_table)
+            self.conn.execute(f"DELETE FROM {table_name}")
+            self._insert(table_name, compute_equity_total_return_index(tiingo_rows))
+            return
+
+        rows_by_ticker: dict[str, list[dict[str, Any]]] = {}
+        watched_fields = {"close", "divCash", "splitFactor"}
+        for row in tiingo_rows:
+            ticker, separator, field = row.get("series_id", "").partition(":")
+            if separator and field in watched_fields:
+                rows_by_ticker.setdefault(ticker, []).append(row)
+
+        checkpoints = self._load_checkpoints(checkpoint_table)
+        tickers = sorted(set(rows_by_ticker) | set(checkpoints))
+        to_delete: list[str] = []
+        new_rows: list[dict[str, Any]] = []
+        checkpoint_entries: list[tuple[str, str, dict[str, Any], str]] = []
+
+        for ticker in tickers:
+            rows = rows_by_ticker.get(ticker, [])
+            checkpoint = checkpoints.get(ticker)
+            watched = {f"{ticker}:{field}" for field in watched_fields}
+            config_changed = (
+                checkpoint is not None and checkpoint["config_hash"] != config_hash
+            )
+            min_touched = min(
+                (touched[series_id] for series_id in watched if series_id in touched),
+                default=None,
+            )
+
+            if checkpoint is not None and not config_changed and min_touched is None:
+                continue
+
+            if not rows:
+                if checkpoint is not None:
+                    to_delete.append(ticker)
+                    self.conn.execute(
+                        "DELETE FROM gold_incremental_checkpoint "
+                        "WHERE table_name = ? AND entity_key = ?",
+                        (checkpoint_table, ticker),
+                    )
+                continue
+
+            frontier = checkpoint["frontier_date"] if checkpoint else None
+            needs_full = (
+                checkpoint is None
+                or config_changed
+                or min_touched is None
+                or min_touched <= frontier
+            )
+            if needs_full:
+                to_delete.append(ticker)
+                engine_checkpoints: dict[str, dict[str, Any]] = {}
+            else:
+                engine_checkpoints = {
+                    ticker: {
+                        **checkpoint["state"],
+                        "frontier_date": checkpoint["frontier_date"],
+                    }
+                }
+
+            updated, out_rows = resume_equity_total_return_index(
+                rows, engine_checkpoints
+            )
+            new_rows.extend(out_rows)
+            state = updated.get(ticker)
+            if state is not None:
+                checkpoint_entries.append(
+                    (
+                        ticker,
+                        state["frontier_date"],
+                        {
+                            key: value
+                            for key, value in state.items()
+                            if key != "frontier_date"
+                        },
+                        config_hash,
+                    )
+                )
+
+        for ticker in to_delete:
+            self.conn.execute(f"DELETE FROM {table_name} WHERE ticker = ?", (ticker,))
+        if new_rows:
+            self._insert(table_name, new_rows)
+        self._write_checkpoints_batch(checkpoint_table, checkpoint_entries)
+
     # ---- Warehouse surface ---------------------------------------------
 
     def sync_meta(self, manifests: Iterable[Manifest]) -> dict[str, int]:
@@ -2172,7 +2277,6 @@ class LocalWarehouse:
         from fred_pipeline.equity_views import (
             compute_equity_price_reconciliation,
             compute_equity_return_daily,
-            compute_equity_total_return_index,
             compute_index_constituents,
             compute_realized_volatility,
             select_canonical_equity_price_rows,
@@ -2196,13 +2300,9 @@ class LocalWarehouse:
                 ishares_rows
             ),
         )
-        self.conn.execute("DELETE FROM gold_equity_total_return_index")
-        self._insert(
-            "gold_equity_total_return_index",
-            _stage_timed("equity_total_return_index")(
-                compute_equity_total_return_index
-            )(tiingo_rows),
-        )
+        _stage_timed("equity_total_return_index_incremental")(
+            self._build_equity_total_return_index
+        )(tiingo_rows, touched, full)
         self.conn.execute("DELETE FROM gold_equity_price_reconciliation")
         self._insert(
             "gold_equity_price_reconciliation",

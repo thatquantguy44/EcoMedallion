@@ -1,8 +1,9 @@
 # Spec 010: Next Pipeline Performance Pass
 
-Status: **Phase 0 implemented; SQLite fixture acceptance passed** (2026-10-18).
-The fixture smoke is a harness check, not a representative production-speed
-baseline. Live API, PostgreSQL, and Spark measurements remain unverified.
+Status: **Phase 0 implemented; Phase 1 equity pilot integrated and correctness-tested** (2026-10-18).
+No representative large-seed speedup has been measured yet; the fixture smoke
+is a harness check, not a production baseline. Live API and Spark measurements
+remain unverified.
 The due-date parity change on `perf/enable-due-gating-spark-postgres` is the
 starting point; its Spark and PostgreSQL integration tests still need a runner
 with working services.
@@ -64,8 +65,15 @@ from timing thresholds.
 
 ## Phase 1: Integrate the existing resumable Gold engines
 
-Wire `gold_equity_total_return_index` and
-`gold_recession_probability_daily` into the existing
+**Pilot status (2026-10-18):** `gold_equity_total_return_index` is now
+checkpointed per ticker on SQLite and PostgreSQL. Tests cover no-op skipping,
+forward append, backdated dividend restatement, config-hash invalidation,
+`full=True` reset/reseed, and interrupted-build rollback/recovery on both local
+backends. The large-seed performance gate is still pending, so this records
+correctness integration, not a measured speedup. `gold_recession_probability_daily`
+remains unintegrated.
+
+Wire `gold_recession_probability_daily` into the existing
 `gold_incremental_checkpoint` and `gold_build_watermark` pattern from
 spec003. Skip an entity only when its watched Silver inputs have no changed
 rows and its configuration hash matches. Append from a checkpoint only for
@@ -77,11 +85,14 @@ transaction. Apply the shared orchestration to SQLite and PostgreSQL;
 measure Spark separately because its Gold builder does not use the local
 checkpoint path.
 
-**Acceptance:** exact row parity with a full rebuild for no-change, forward
-append, revision, backfill, config edit, and interrupted-build recovery on
-both local backends. Benchmark the two stages and end-to-end Gold on the same
-seed. Keep only changes that improve the target stage materially (suggested
-gate: at least 20% median) without increasing peak RSS or changing output.
+**Remaining acceptance:** for each pilot table, exact row parity with a full
+rebuild for no-change, forward append, revision, backfill, config edit, and
+interrupted-build recovery on both local backends. Benchmark each stage and
+end-to-end Gold on the same large seed. Keep only changes that improve the
+target stage materially (suggested gate: at least 20% median) without increasing
+peak RSS or changing output. The equity pilot has correctness coverage on these
+paths on SQLite and PostgreSQL; the performance gate and recession-probability
+integration remain open.
 
 ## Phase 2: Reduce full-history reads and peak memory
 
