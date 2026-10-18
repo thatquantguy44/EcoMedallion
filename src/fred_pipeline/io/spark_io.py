@@ -44,6 +44,7 @@ def merge_delta(
     *,
     update: bool = True,
     insert: bool = True,
+    match_update_condition: Optional[str] = None,
 ) -> dict[str, int]:
     """Idempotent upsert of ``source_df`` into ``target_table`` via Delta MERGE.
 
@@ -61,7 +62,7 @@ def merge_delta(
         dt = DeltaTable.forName(spark, target_table)
         builder = dt.alias("t").merge(source_df.alias("s"), on_clause)
         if update:
-            builder = builder.whenMatchedUpdateAll()
+            builder = builder.whenMatchedUpdateAll(condition=match_update_condition)
         if insert:
             builder = builder.whenNotMatchedInsertAll()
         builder.execute()
@@ -71,10 +72,14 @@ def merge_delta(
         set_clause = ", ".join(f"t.{c} = s.{c}" for c in source_df.columns)
         cols = ", ".join(source_df.columns)
         vals = ", ".join(f"s.{c}" for c in source_df.columns)
+        matched_clause = ""
+        if update:
+            condition = f" AND {match_update_condition}" if match_update_condition else ""
+            matched_clause = f"WHEN MATCHED{condition} THEN UPDATE SET {set_clause}"
         sql = f"""
             MERGE INTO {target_table} t
             USING {view} s ON {on_clause}
-            {"WHEN MATCHED THEN UPDATE SET " + set_clause if update else ""}
+            {matched_clause}
             {"WHEN NOT MATCHED THEN INSERT (" + cols + ") VALUES (" + vals + ")" if insert else ""}
         """
         spark.sql(sql)

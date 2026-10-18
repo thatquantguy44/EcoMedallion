@@ -348,7 +348,7 @@ def _extract_workers_for_source(config: PipelineConfig, source: str) -> int:
     return total
 
 
-# Minimum time since a series' last successful pull before it counts as "due"
+# Minimum time since a series' last changed Silver row before it counts as "due"
 # again, per publication cadence (spec007 §5). Deliberately looser than the
 # nominal cadence -- a false "not due" wastes a print until next run; a false
 # "due" only costs a wasted pull. Validated against real per-source publish
@@ -391,12 +391,12 @@ def _series_is_due(
 
     Pure and free of any ``Pipeline``/warehouse dependency so its date-math
     edge cases are directly unit-testable. A series is always due when it has
-    never been pulled successfully (``last_ingested_at is None``) or when
+    has no Silver observations (``last_ingested_at is None``) or when
     ``expected_update_frequency`` is missing/unrecognized -- both fall back to
     today's "always attempt" behavior rather than a new way to silently
     under-serve data. ``last_ingested_at`` is an ISO 8601 timestamp (as written
-    to ``silver_fred_observation.ingested_at``); naive timestamps are assumed
-    UTC.
+    to ``silver_fred_observation.ingested_at``); an unchanged re-pull leaves
+    that timestamp intact. Naive timestamps are assumed UTC.
     """
     if last_ingested_at is None:
         return True

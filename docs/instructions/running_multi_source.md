@@ -139,7 +139,8 @@ Useful flags for `fred-pipeline run`:
 | `--series ID1,ID2` | run only those series (they must be `active`) |
 | `--source fred,stooq` | run only active series from those sources |
 | `--exclude-source tiingo` | skip active series from those sources |
-| `--full` | force a full-history re-pull, ignoring the incremental restate watermark |
+| `--full` | force a full-history re-pull and bypass due-date skipping |
+| `--skip-not-due` / `--no-skip-not-due` | skip series that are not due (default) / attempt every active series |
 | `--no-gold` | extract/write Bronze + Silver, but skip the Gold rebuild |
 | `--dry-run` | extract + validate in memory; no writes, no Gold |
 | `--local --db-path f.db` | persist to SQLite instead of Databricks/Delta |
@@ -148,7 +149,13 @@ Useful flags for `fred-pipeline run`:
 | `--rate-limit-per-minute N` | override the FRED request rate limit |
 | `--source-rate-limits fred=60,stooq=20,tiingo=5` | override per-source request-rate caps |
 | `--env dev\|test\|prod` | pick the environment / catalog |
-| *(no `--local`)* | Databricks/Spark backend — run inside a workspace job |
+| *(no `--local`)* | use the backend selected by `config/warehouse.yml` for this environment (PostgreSQL in dev, Databricks in prod) |
+
+Due-date skipping uses the latest changed Silver row per series on SQLite,
+PostgreSQL, and Databricks. An API response with no changed observations does
+not advance that timestamp, so a series already due may be checked again on
+the next run. Use `--no-skip-not-due` to check every active series; `--full`
+also bypasses the due-date gate while pulling full history.
 
 Rate-safe local full run, separating API extraction from the heavy Gold build:
 

@@ -13,6 +13,7 @@ Each backend implements the same small surface used by the pipeline.
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Any, Iterable, Optional, Protocol, runtime_checkable
 
 from fred_pipeline.audit import EtlRun
@@ -26,6 +27,7 @@ class Warehouse(Protocol):
     """Persistence surface required by the pipeline."""
 
     def sync_meta(self, manifests: Iterable[Manifest]) -> dict[str, int]: ...
+    def last_ingested_at_by_series(self) -> dict[str, str]: ...
     def restate_start(self, series_id: str, n: int) -> Optional[str]: ...
     def write_bronze(self, rows: list[dict[str, Any]]) -> int: ...
     def read_bronze(
@@ -72,6 +74,31 @@ class SparkWarehouse:
         from fred_pipeline.meta import sync_meta
 
         return sync_meta(self.config, list(manifests), spark=self.spark)
+
+    def last_ingested_at_by_series(self) -> dict[str, str]:
+        """Return the latest changed Silver row timestamp for each series.
+
+        This is the same due-date watermark used by SQLite and PostgreSQL.
+        Convert through epoch microseconds so the result is UTC regardless of
+        the Spark session's time zone. Missing Silver tables leave every series
+        due on a first run.
+        """
+        from fred_pipeline.spark_io import table_exists
+
+        table = self.config.table("silver", "fred_observation")
+        if not table_exists(self.spark, table):
+            return {}
+        rows = self.spark.sql(
+            "SELECT series_id, UNIX_MICROS(MAX(ingested_at)) AS last_ingested_us "
+            f"FROM {table} GROUP BY series_id"
+        ).collect()
+        return {
+            row["series_id"]: datetime.fromtimestamp(
+                row["last_ingested_us"] / 1_000_000, timezone.utc
+            ).isoformat()
+            for row in rows
+            if row["last_ingested_us"] is not None
+        }
 
     def restate_start(self, series_id: str, n: int) -> Optional[str]:
         """Earliest observation_date among the N most recent for this series.

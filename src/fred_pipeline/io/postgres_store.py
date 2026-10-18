@@ -321,6 +321,7 @@ class PostgresWarehouse:
         table: str,
         rows: Sequence[dict[str, Any]],
         upsert_keys: Sequence[str] | None = None,
+        conflict_where: str | None = None,
     ) -> int:
         if not rows:
             return 0
@@ -337,6 +338,8 @@ class PostgresWarehouse:
             )
             conflict = _pg_column_list(upsert_keys)
             sql += f" ON CONFLICT ({conflict}) DO UPDATE SET {updates}"
+            if conflict_where:
+                sql += f" WHERE {conflict_where}"
             data = [tuple(_encode(r.get(c)) for c in cols) for r in rows]
             try:
                 with self._pg_conn.cursor() as cur:
@@ -471,6 +474,10 @@ class PostgresWarehouse:
             "silver_fred_observation",
             rows,
             upsert_keys=_UPSERT_KEYS["silver_fred_observation"],
+            conflict_where=(
+                'EXCLUDED."row_hash" IS DISTINCT FROM '
+                '"fred_observation"."row_hash"'
+            ),
         )
 
     def build_gold(self) -> dict[str, str]:

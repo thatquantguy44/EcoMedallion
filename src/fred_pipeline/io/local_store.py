@@ -964,9 +964,10 @@ class LocalWarehouse:
         (spec007: due-date gating on extraction). Distinct from
         ``_touched_series_since_watermark`` above, which is scoped to rows
         newer than one global watermark for Gold's own incremental rebuild;
-        this has no watermark and no per-run scope -- it's "when was this
-        series last successfully pulled at all," which due-date gating
-        needs to know for every series, not just recently touched ones.
+        this has no watermark and no per-run scope. Since byte-identical
+        restatements leave Silver unchanged, it records the last changed row,
+        not the last successful API check. This keeps due-date semantics the
+        same across SQLite, PostgreSQL, and Spark.
         Uses ``ix_silver_obs_sid_ingested`` rather than the watermark
         index above, which isn't shaped for a per-series GROUP BY.
         """

@@ -13,6 +13,9 @@ Databricks-only concern).
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
+from types import SimpleNamespace
+
 import pytest
 
 pyspark = pytest.importorskip("pyspark")
@@ -105,6 +108,62 @@ def test_merge_delta_upserts_idempotently(spark):
     )
     merge_delta(spark, new, "silver_it", SILVER_KEYS)
     assert spark.table("silver_it").count() == 3
+
+
+def test_spark_due_date_watermark_tracks_changed_silver_rows(spark):
+    """A no-op restatement must not delay the next due check."""
+    from fred_pipeline.data.silver import merge_silver
+    from fred_pipeline.io.warehouse import SparkWarehouse
+    from fred_pipeline.pipeline import _series_is_due
+
+    table = "silver_due_gate_it"
+    config = SimpleNamespace(table=lambda _schema, _name: table)
+    warehouse = SparkWarehouse(config, spark)
+    old_timezone = spark.conf.get("spark.sql.session.timeZone")
+    spark.conf.set("spark.sql.session.timeZone", "America/New_York")
+    try:
+        # An absent Silver table means a first-run series must remain due.
+        spark.sql(f"DROP TABLE IF EXISTS {table}")
+        assert warehouse.last_ingested_at_by_series() == {}
+        spark.sql(
+            f"""CREATE TABLE {table} (
+                source STRING, series_id STRING, observation_date DATE,
+                realtime_start DATE, realtime_end DATE, value DOUBLE,
+                raw_value STRING, is_missing BOOLEAN, row_hash STRING,
+                revision_number INT, ingested_at TIMESTAMP, run_id STRING
+            ) USING DELTA"""
+        )
+        row = {
+            "source": "fred", "series_id": "DGS10",
+            "observation_date": "2024-01-01", "realtime_start": "2024-01-01",
+            "realtime_end": "9999-12-31", "value": 4.0, "raw_value": "4.0",
+            "is_missing": False, "row_hash": "h1", "revision_number": 1,
+            "ingested_at": "2024-01-02T00:00:00+00:00", "run_id": "first",
+        }
+        merge_silver(config, [row], spark=spark)
+        assert warehouse.last_ingested_at_by_series() == {
+            "DGS10": "2024-01-02T00:00:00+00:00"
+        }
+
+        merge_silver(
+            config,
+            [{**row, "ingested_at": "2024-01-03T00:00:00+00:00", "run_id": "retry"}],
+            spark=spark,
+        )
+        assert warehouse.last_ingested_at_by_series()["DGS10"] == row["ingested_at"]
+
+        changed = {
+            **row, "row_hash": "h2", "value": 4.1, "raw_value": "4.1",
+            "ingested_at": "2024-01-04T00:00:00+00:00", "run_id": "changed",
+        }
+        merge_silver(config, [changed], spark=spark)
+        last = warehouse.last_ingested_at_by_series()["DGS10"]
+        assert last == changed["ingested_at"]
+        assert not _series_is_due("monthly", last, datetime(2024, 1, 20, tzinfo=timezone.utc))
+        assert _series_is_due("monthly", last, datetime(2024, 2, 1, tzinfo=timezone.utc))
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {table}")
+        spark.conf.set("spark.sql.session.timeZone", old_timezone)
 
 
 def test_append_rows(spark):

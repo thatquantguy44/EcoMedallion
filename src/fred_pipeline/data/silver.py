@@ -192,7 +192,16 @@ def merge_silver(
         else:
             exprs.append(col)
     df = df.selectExpr(*exprs)
-    return merge_delta(spark, df, table, SILVER_MERGE_KEYS)
+    # Leave ingested_at untouched when a restated observation has identical
+    # content. Due-date gating and incremental Gold both use it as a change
+    # watermark, matching the SQLite and PostgreSQL merge paths.
+    return merge_delta(
+        spark,
+        df,
+        table,
+        SILVER_MERGE_KEYS,
+        match_update_condition="NOT (t.row_hash <=> s.row_hash)",
+    )
 
 
 __all__ = ["SILVER_COLUMNS", "SILVER_MERGE_KEYS", "build_silver_rows", "merge_silver"]

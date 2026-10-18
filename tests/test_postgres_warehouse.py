@@ -160,7 +160,7 @@ def test_postgres_warehouse_is_idempotent(postgres_dsn):
     wh = PostgresWarehouse(_config(), dsn=postgres_dsn)
     try:
         wh.merge_silver([row])
-        wh.merge_silver([{**row, "value": 4.1}])
+        wh.merge_silver([{**row, "value": 4.1, "row_hash": "h-updated"}])
         got = wh.query("SELECT COUNT(*) AS c FROM silver_fred_observation")
         assert got[0]["c"] == 1
         value = wh.query("SELECT value FROM silver_fred_observation")[0]["value"]
@@ -190,6 +190,26 @@ def test_postgres_last_ingested_at_by_series_matches_local(postgres_dsn, tmp_pat
         assert pg.last_ingested_at_by_series() == {
             "DGS10": "2024-01-03T00:00:00+00:00",
             "DGS2": "2024-01-01T00:00:00+00:00",
+        }
+        retry = {**rows[1], "ingested_at": "2024-01-04T00:00:00+00:00"}
+        local.merge_silver([retry])
+        pg.merge_silver([retry])
+        assert pg.last_ingested_at_by_series() == local.last_ingested_at_by_series()
+        assert pg.last_ingested_at_by_series()["DGS10"] == rows[1]["ingested_at"]
+        assert pg._touched_series_since_watermark(rows[1]["ingested_at"])[0] == {}
+
+        changed = {
+            **retry,
+            "row_hash": "h-dgs10-revised",
+            "value": 4.3,
+            "ingested_at": "2024-01-05T00:00:00+00:00",
+        }
+        local.merge_silver([changed])
+        pg.merge_silver([changed])
+        assert pg.last_ingested_at_by_series() == local.last_ingested_at_by_series()
+        assert pg.last_ingested_at_by_series()["DGS10"] == changed["ingested_at"]
+        assert pg._touched_series_since_watermark(rows[1]["ingested_at"])[0] == {
+            "DGS10": "2024-01-02"
         }
     finally:
         pg.close()
