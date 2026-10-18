@@ -1,238 +1,98 @@
 # Pipeline Benchmarking Guide
 
-**Purpose:** Measure where time is spent during pipeline execution.
+`scripts/benchmark_pipeline.py` reports repeatable pipeline timings and workload
+counters. Use fixture mode for code comparisons; use live mode only when the
+source API quota and target warehouse are available.
 
-**Tool:** `scripts/benchmark_pipeline.py`
+## Fixture Workloads
 
----
-
-## Quick Start
-
-**Default benchmark (6 series):**
-```bash
-FRED_API_KEY=your_key python scripts/benchmark_pipeline.py
-```
-
-**With custom series:**
-```bash
-FRED_API_KEY=your_key python scripts/benchmark_pipeline.py \
-  --series GDPC1,UNRATE,CPIAUCSL,DGS10,SOFR,BAMLH0A0HYM2
-```
-
-**Dry-run (faster, no writes):**
-```bash
-FRED_API_KEY=your_key python scripts/benchmark_pipeline.py --dry-run
-```
-
-**Save results to JSON:**
-```bash
-FRED_API_KEY=your_key python scripts/benchmark_pipeline.py \
-  --output /tmp/bench_results.json
-```
-
----
-
-## Example Output
-
-```
-Starting benchmark (1 iteration(s))...
-
-======================================================================
-Running with default benchmark set (6 series)
-WITH WRITES to /tmp/benchmark.db
-======================================================================
-
-Pipeline completed: partial
-Total elapsed: 45.23s
-Series succeeded: 6, failed: 0
-
-Stage breakdown:
-  bronze                     23.45s ( 51.8%)
-  silver                      8.12s ( 17.9%)
-  quality                     5.34s ( 11.8%)
-  gold                        2.89s (  6.4%)
-  persist                     0.41s (  0.9%)
-  release_calendar            4.02s ( 11.2%)
-
-======================================================================
-BENCHMARK SUMMARY
-======================================================================
-Iterations: 1/1
-Series per run: 6
-Average time: 45.23s
-Per series scaling: ~7.54s per series
-```
-
----
-
-## Benchmark Modes
-
-### 1. Default Benchmark (6 series)
-**Best for:** Quick performance checks, regression testing
-```bash
-FRED_API_KEY=... python scripts/benchmark_pipeline.py
-```
-- Covers all data types: macro (GDPC1), labor (UNRATE), inflation (CPIAUCSL), rates (DGS10), funding (SOFR), credit (BAMLH0A0HYM2)
-- Runtime: ~40-60 seconds
-- API calls: ~50-100
-
-### 2. Small Series Set (3 series)
-**Best for:** Very quick testing, CI pipelines
-```bash
-FRED_API_KEY=... python scripts/benchmark_pipeline.py --series GDPC1,UNRATE,CPIAUCSL
-```
-- Runtime: ~15-30 seconds
-- API calls: ~10-20
-
-### 3. Medium Series Set (20+ series)
-**Best for:** Real-world scaling measurements
-```bash
-FRED_API_KEY=... python scripts/benchmark_pipeline.py \
-  --series GDPC1,UNRATE,CPIAUCSL,DGS1,DGS2,DGS5,DGS10,DGS30,SOFR,EFFR,IORB,BAMLH0A0HYM2,BAMLC0A0CM,PAYEMS,ICSA,INDPRO,HOUST,M2SL,WALCL,WRESBAL
-```
-- Runtime: ~60-90 seconds
-- API calls: ~200-400
-
-### 4. Full Catalog (all active series)
-**Best for:** Maximum scaling analysis, nightly benchmarks
-```bash
-FRED_API_KEY=... python scripts/benchmark_pipeline.py --full-catalog
-```
-- Runtime: **3-15 minutes** (depends on # active series, rate limiting)
-- API calls: **Thousands**
-- Warning: This will make many API calls and respect FRED rate limits
-
-### 5. Dry-Run (no database writes)
-**Best for:** Isolating extract/transform costs
-```bash
-FRED_API_KEY=... python scripts/benchmark_pipeline.py --dry-run
-```
-- Runs extract, transform, quality checks, but skips warehouse writes
-- Faster than full run (no I/O)
-- Useful for measuring API/compute overhead
-
----
-
-## Running Multiple Iterations
-
-**Test consistency:**
-```bash
-FRED_API_KEY=... python scripts/benchmark_pipeline.py --iterations 3
-```
-
-Shows:
-- Average time across runs
-- Min/max times
-- Standard deviation
-- Coefficient of variation (if unstable, check system load)
-
----
-
-## Key Metrics Explained
-
-| Metric | Meaning | Action |
-|---|---|---|
-| **Total elapsed** | Wall-clock time from start to finish | Baseline metric |
-| **Per series** | Total time ÷ # series | Scaling metric (should be stable) |
-| **Bronze %** | Extract + API calls | Usually 50-70% (network-bound) |
-| **Silver %** | Transform + validation | Usually 10-20% (CPU-bound) |
-| **Gold %** | Build analytical tables | Usually 5-10% (CPU + I/O) |
-| **Stddev** | Variation across iterations | <5% is good; >10% means high variance |
-
----
-
-## Interpreting Results
-
-### Healthy Pipeline
-```
-Total: 45s for 6 series
-Per series: 7.5s
-Bronze: 50%, Silver: 20%, Gold: 10%
-Stddev: 2%
-```
-→ Network dominates (as expected for FRED API). Consistent runs.
-
-### Gold Layer Bottleneck
-```
-Total: 120s for 20 series
-Gold: 45%
-```
-→ Consider Polars acceleration for correlation/transform functions
-
-### Variable Results
-```
-Iteration 1: 40s
-Iteration 2: 55s
-Iteration 3: 48s
-Stddev: 8%
-```
-→ Check system load, FRED rate limits, or network conditions
-
----
-
-## JSON Output Format
+The checked-in fixture seeds a fresh SQLite database for each iteration. Seeding
+is excluded from measured wall time. No API key or network access is used.
 
 ```bash
-FRED_API_KEY=... python scripts/benchmark_pipeline.py --output /tmp/results.json
+PYTHONPATH=src python scripts/benchmark_pipeline.py \
+  --fixture tests/fixtures/benchmark_pipeline.json \
+  --workload unchanged --iterations 3 --output /tmp/benchmark-unchanged.json
 ```
 
-Produces:
-```json
-{
-  "summary": {
-    "iterations": 3,
-    "series_per_run": 6,
-    "average_sec": 45.67,
-    "min_sec": 42.1,
-    "max_sec": 48.2,
-    "stddev_sec": 2.89,
-    "per_series_sec": 7.61
-  },
-  "runs": [
-    {
-      "timestamp": "2026-08-19T10:30:00",
-      "series_count": 6,
-      "dry_run": false,
-      "total_elapsed_sec": 42.1
-    },
-    ...
-  ]
-}
+Run the other comparable workloads by changing `--workload`:
+
+```bash
+PYTHONPATH=src python scripts/benchmark_pipeline.py \
+  --fixture tests/fixtures/benchmark_pipeline.json \
+  --workload restatement --iterations 3 --output /tmp/benchmark-restatement.json
+
+PYTHONPATH=src python scripts/benchmark_pipeline.py \
+  --fixture tests/fixtures/benchmark_pipeline.json \
+  --workload full --iterations 3 --output /tmp/benchmark-full.json
 ```
 
-Use for:
-- Regression tracking (compare against baseline)
-- CI/CD performance gates
-- Scaling analysis (plot per_series_sec vs series_count)
+`unchanged` replays the same observations as the seed, `restatement` changes one
+existing observation, and `full` forces full-history extraction. Each iteration
+starts from the same seeded SQLite state. Fixture mode currently supports the
+local backend only.
 
----
+## Live Workloads
 
-## Performance Tuning Checklist
+Live mode defaults to the configured local backend and a six-series sample. It
+uses real source clients and the selected warehouse. Source calls are logical
+client method calls, not low-level HTTP retries.
 
-**If pipeline is slow:**
+```bash
+PYTHONPATH=src python scripts/benchmark_pipeline.py \
+  --series GDPC1,UNRATE,CPIAUCSL,DGS10,SOFR,BAMLH0A0HYM2 \
+  --backend local --iterations 3 --no-skip-not-due \
+  --db-path /tmp/benchmark-live.db --output /tmp/benchmark-live.json
+```
 
-1. ✅ Run benchmark to isolate bottleneck (Bronze vs Silver vs Gold)
-2. ✅ Check FRED API rate limits (should be 120/min by default)
-3. ✅ Check network latency to FRED API
-4. ✅ For Gold-heavy workloads, enable Polars: `pip install polars`
-5. ✅ For large series counts, consider incremental upserts (see `docs/upserts.md`)
+Use `--backend postgres` to use the PostgreSQL settings in `config/warehouse.yml`.
+Use `--full-catalog` only for a deliberate large run; it can make many API calls.
+`--workload full` passes the pipeline's full-history extraction flag. `--dry-run`
+is available only in live mode and excludes warehouse writes and Gold work, so it
+is not comparable with fixture or persisted runs.
 
-**If Gold layer is slow:**
+For before/after comparisons, keep the same hardware, fixture or source snapshot,
+backend, series, cadence-gate setting, and workload. Use at least three repeats;
+compare medians and ranges, not one run's wall time. Compare `--no-skip-not-due`
+with the default gate as separate workloads.
 
-6. ✅ Check which Gold functions dominate (profile the build_gold logs)
-7. ✅ Consider Polars for series_correlation (N² operations)
-8. ✅ Profile database I/O (`sqlite3 -profile fred.db`)
+## Report Fields
 
-**If results vary:**
+The JSON report has `schema_version`, a `summary`, and one object per run.
 
-9. ✅ Run with `--iterations 3` to measure variance
-10. ✅ Check system load (CPU, disk I/O, network)
-11. ✅ Run at consistent time of day (FRED rate limits affect morning more)
+| Field | Meaning |
+|---|---|
+| `summary.median_total_wall_seconds`, `min_...`, `max_...` | Timing range across repeats |
+| `run_id`, `workload`, `backend`, `status` | Run identity and outcome |
+| `total_wall_seconds`, `process_peak_rss_bytes` | End-to-end duration and process high-water RSS |
+| `selected_series`, `due_series`, `succeeded_series`, `failed_series`, `skipped_not_due` | Actual selection and pipeline outcomes |
+| `rows.observations_extracted`, `bronze_rows_written` | Observations and Bronze writes |
+| `rows.silver_rows_merge_reported` | Rows submitted to the Silver merge, as reported by the pipeline |
+| `rows.silver_rows_changed` | Actual SQLite inserts/updates; `null` where the backend does not expose an exact count |
+| `rows.silver_rows_read`, `latest_rows_read` | Gold builder input row counts when available |
+| `warehouse_write_seconds` | Measured Bronze write and Silver merge durations |
+| `stages` | Tracker durations/status/details for plan, extract, Gold, release calendar, and persistence |
+| `gold_table_seconds` | Opt-in per-stage timings from the local Gold builder |
+| `source_calls` | Logical client calls by source and method |
+| `database_size_bytes` | SQLite file size after the run; `null` for other backends |
 
----
+`process_peak_rss_bytes` is the process high-water mark (on fixture runs this
+includes setup/seeding); it is not an isolated per-stage memory profile. Use a
+fresh process for independent memory comparisons. Gold per-stage timings require
+`FRED_GOLD_STAGE_TIMING=1`, which the benchmark enables.
 
-## See Also
+## Historical Results
 
-- `docs/upserts.md` — Whether to use upserts instead of truncate+reload
-- `src/fred_pipeline/timing.py` — The `@timed` decorator that captures stage times
-- `src/fred_pipeline/io/local_store.py` — Gold layer build implementation
+Older timings in `docs/handoffs/pipeline_performance.md` and previous versions
+of this guide are historical measurements, not current baselines. In particular,
+the old 45-second six-series example was illustrative and came from a harness
+that read timings from a nonexistent audit table. Re-measure with this script
+before asserting speedups or setting performance gates.
+
+## Validation
+
+The fixture smoke tests are in `tests/test_benchmark_pipeline.py`. Run them with:
+
+```bash
+PYTHONPATH=src python -m pytest tests/test_benchmark_pipeline.py -q
+```

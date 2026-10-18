@@ -108,10 +108,9 @@ def test_postgres_warehouse_builds_core_gold_like_local(tmp_path, postgres_dsn):
         assert {row["table_schema"]: row["n"] for row in object_counts} == {
             "audit": 4,
             "bronze": 1,
-            # 57, not 56: includes gold_incremental_checkpoint (spec003 Phase 3
-            # checkpoint infra), added on a branch that merged in after this
-            # count was first written.
-            "gold": 57,
+            # Includes gold_incremental_checkpoint (spec003 Phase 3 checkpoint
+            # infra) and mmkt_rate_snapshot (spec009).
+            "gold": 58,
             "meta": 6,
             "silver": 1,
         }
@@ -150,6 +149,14 @@ def test_postgres_warehouse_builds_core_gold_like_local(tmp_path, postgres_dsn):
             ORDER BY series_id, observation_date, realtime_start
         """
         assert pg.query(pit_sql) == local.query(pit_sql)
+
+        local_mmkt = local.query(
+            "SELECT * FROM gold_mmkt_rate_snapshot ORDER BY instrument_id"
+        )
+        postgres_mmkt = pg.query(
+            "SELECT * FROM gold.mmkt_rate_snapshot ORDER BY instrument_id"
+        )
+        assert postgres_mmkt == local_mmkt
     finally:
         pg.close()
         local.close()

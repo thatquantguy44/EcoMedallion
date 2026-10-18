@@ -6,17 +6,17 @@ description: >
   is already declared by rates.yml or fed_funding.yml and is deliberately NOT
   repeated here -- see config/mmkt_instruments.yml for the full instrument map.
 
-  Shipped INACTIVE. The build environment cannot reach FRED, so this id has not
-  been checked against live metadata; it comes from the Federal Reserve's H.15
-  commercial-paper listing (the nonfinancial companion of DCPF3M, quoted on the
-  same discount basis). Verify, then activate:
+  Activated after the 2026-10-18 live probe resolved the id and confirmed daily
+  Percent observations. FRED's metadata does not state a quoting basis, so the
+  configured discount basis remains a manual verification item before pricing
+  from its normalized yield:
 
       python scripts/probe_mmkt_series.py --fred-key "$FRED_API_KEY"
 
   The probe confirms the id resolves, reports its title/units/frequency, and
   flags a quoting basis that disagrees with config/mmkt_instruments.yml.
-  Until it is active the snapshot reports the instrument as `missing`, not as
-  absent.
+  The snapshot reports missing/stale status explicitly; consumers must check
+  status before pricing.
 version: 1
 
 series:
@@ -26,7 +26,7 @@ series:
     frequency: d
     expected_update_frequency: daily
     units: Percent
-    active: false           # verify live with scripts/probe_mmkt_series.py, then flip
+    active: true            # id confirmed live; discount basis still needs review
     vintage_enabled: false  # published market rate, not revised
     validation_profile: standard
     downstream_use_case: mmkt

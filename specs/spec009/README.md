@@ -1,13 +1,13 @@
 # Spec 009: Money-Market Rate Feed for the Terminal's MMKT Optimizer
 
-Status: **proposed — Phase 0 done, nothing live-verified.** Phase 0 (2026-10-17)
-shipped the instrument map, the basis-normalizing snapshot engine, a live probe,
-and one inactive manifest entry. **No series in this spec has been checked
-against a live source** — the build environment blocks FRED and every other host
-(`scripts/probe_mmkt_series.py` was run and reported exactly that). Phase 1
-onward needs a human with network access to run the probe first.
+Status: **in progress — Phase 0 complete; Phase 0.5 partially complete; Phase 1 implemented across SQLite/Postgres/Spark, with Spark runtime verification pending.**
+The 2026-10-18 live probe resolved all 14 configured series, and all 14 were
+ingested into PostgreSQL and written to `gold.mmkt_rate_snapshot` at an explicit
+2026-10-18 cutoff. The probe could not verify the quoting basis of either
+commercial-paper series, so AC-006 remains open. Databricks/Spark persistence
+has not been implemented or verified.
 
-Last verified: 2026-10-17 (offline; unit tests only)
+Last verified: 2026-10-18 (live probe, PostgreSQL refresh, and focused tests)
 Primary owner: TBD
 Target: give the money-market optimizer (QuantMeridian `MMKT`, InventoryBallast
 `specs/0018-live-poc-showcase`, owner decision 2) rates it can price off without
@@ -49,18 +49,36 @@ instrument is never omitted:
 
 ## 2. Current State (Evidence)
 
-### 2.1 What the Gold DB already carries (read-only review, 2026-10-17)
+### 2.1 Source inventory and live MMKT evidence (2026-10-18)
 
-Active in the manifests; not live-checked from this environment:
+The live probe report is captured at
+`tests/fixtures/mmkt_live_probe_2026-10-18.json`. All 14 configured MMKT series
+resolved on FRED as daily Percent series, and the probe confirmed the expected
+discount basis for `DTB4WK`, `DTB3`, and `DTB6`, and the expected
+bond-equivalent basis for `DGS1MO`, `DGS3MO`, and `DGS6MO`. The overnight,
+policy, repo, and RRP titles do not state a basis; the probe accepts these as
+unverifiable for configured `money_market` series. FRED's metadata also does
+not state a basis for `DCPF3M` or `DCPN3M`; these two require manual confirmation
+before their normalized yields are treated as basis-verified.
 
-| Need | Series | Manifest | Quoted basis (to be probed) |
+All 14 configured series were ingested successfully into PostgreSQL. The
+snapshot was rebuilt from Silver with `as_of=2026-10-18`: 14 rows, all status
+`ok`, with observations from 2026-10-13 through 2026-10-18. The October 19
+IORB observation was excluded by the cutoff. `DCPN3M` was activated after the
+live probe resolved it. The Treasury probe also captured the live auction
+fields, including `auction_date`; no Treasury client change has been made yet.
+
+The broader inventory below includes candidate series outside the 14-instrument
+MMKT snapshot; those additional candidates were not validated by this probe:
+
+| Need | Series | Manifest | Expected quoted basis |
 | --- | --- | --- | --- |
 | Overnight / policy | `SOFR`, `EFFR`, `OBFR`, `IORB`, `DFF`, `SOFR30DAYAVG` | `rates.yml`, `fed_funding.yml` | money-market ACT/360 |
 | Repo | `TGCRRATE` | `fed_funding.yml` | money-market |
 | Fed RRP | `RRPONTSYAWARD`, `RRPONTSYD` (volume) | `fed_funding.yml` | money-market |
 | T-bills, secondary | `DTB4WK`, `DTB3`, `DTB6` | `rates.yml` | **discount** |
 | Treasury CMT | `DGS1MO`, `DGS3MO`, `DGS6MO`, `DGS1` | `rates.yml` | **bond-equivalent** |
-| Commercial paper | `DCPF3M` (90-day AA financial) | `fed_funding.yml` | **discount** |
+| Commercial paper | `DCPF3M` (90-day AA financial), `DCPN3M` (90-day AA nonfinancial) | `fed_funding.yml`, `money_market.yml` | **discount** (CP basis still needs manual confirmation) |
 | Money funds | `WRMFNS` (weekly assets), `MMMFFAQ027S` (quarterly) | `money_banking.yml` | n/a (assets, not yields) |
 
 Existing Gold views `benchmark_rate_board`, `funding_tape_daily`,
@@ -73,7 +91,7 @@ does not exist on FRED and the repo rate is `TGCRRATE` — this repo's own
 
 | Gap | Why it matters | Where it lands |
 | --- | --- | --- |
-| Nonfinancial CP (`DCPN3M`) | Second CP point | Phase 0: `manifests/money_market.yml`, **inactive** |
+| Nonfinancial CP (`DCPN3M`) | Second CP point | Activated and ingested 2026-10-18 after the live probe resolved the ID; discount basis still needs manual confirmation |
 | Treasury bill auction results | Primary-market rate and size | Phase 2 (client change) |
 | Money-fund **yield, WAM, WAL, daily/weekly liquid assets** | REQ-017's liquidity floors and WAM caps need realistic fund parameters | Phase 3: SEC Form N-MFP client |
 | Repo by tenor and collateral | Term repo is not on FRED | Phase 3: OFR Short-term Funding Monitor client |
@@ -115,7 +133,9 @@ basis point at these tenors) and said so in `conversion`; `DGS1MO`'s
 
 **The basis labels in `config/mmkt_instruments.yml` are taken from FRED's
 published titles and must be confirmed by the probe** — the probe reads each
-series' title/notes back, and fails on a disagreement.
+series' title/notes back, and fails on a disagreement. The live probe confirmed
+the T-bill and Treasury CMT labels; FRED's text was silent for both commercial-
+paper series, so those configured discount bases remain unverified.
 
 ## 4. Non-Goals
 
@@ -123,7 +143,9 @@ series' title/notes back, and fails on a disagreement.
 * Not changing `benchmark_rate_board`, `funding_tape_daily` or any existing view.
 * No new licensed data (Bloomberg, Crane, iMoneyNet) — a separate adapter question.
 * No wiring into SQLite/Postgres/Spark storage in Phase 0 (see Phase 1).
-* Not activating any manifest entry — a human does that after reading the probe.
+* No automatic manifest activation. `DCPN3M` was activated by explicit human
+   approval after its ID resolved in the live probe; its basis remains a separate
+   verification item.
 
 ## 5. Acceptance Criteria
 
@@ -134,37 +156,40 @@ series' title/notes back, and fails on a disagreement.
 | AC-003 | `as_of` makes the snapshot point-in-time safe: later observations are never read | **done** |
 | AC-004 | Every series named by `config/mmkt_instruments.yml` is declared in a manifest | **done** (same file; the `TGCR`/`TGCRRATE` lesson) |
 | AC-005 | The probe fails on an unresolved id, a quoting-basis disagreement, wrong units/frequency, or staleness, and never treats silence as agreement | **done** (`tests/test_probe_mmkt_series.py`; logic only) |
-| AC-006 | The probe has been **run live** and its report saved as a fixture; every configured series passes | **open — needs network** |
-| AC-007 | `gold.mmkt_rate_snapshot` exists in SQLite, Postgres and Databricks and matches the engine row-for-row | open — Phase 1 |
-| AC-008 | The Treasury client reads auction results keyed by their real date field, from a captured fixture | open — Phase 2 |
-| AC-009 | Each new source (N-MFP, OFR) clears `spec006` §4.1's hard gates, recorded in `config/data_licensing.yml` | open — Phase 3 |
+| AC-006 | The probe has been **run live** and its report saved as a fixture; every configured series passes | **partial** — report captured; all IDs resolve with daily Percent data, but the CP discount basis is unverified and the probe flags both CP series |
+| AC-007 | `gold.mmkt_rate_snapshot` exists in SQLite, Postgres and Databricks and matches the engine row-for-row | **partial** — SQLite/PostgreSQL parity passes; Spark writer, Delta DDL, schema-parity and value assertions are implemented, but the Spark test could not start locally because Java is unavailable |
+| AC-008 | The Treasury client reads auction results keyed by their real date field, from a captured fixture | **open — Phase 2**; live probe captured the `auction_date` field, but client/fixture work remains |
+| AC-009 | Each new source (N-MFP, OFR) clears `spec006` §4.1's hard gates, recorded in `config/data_licensing.yml` | **open — Phase 3** |
 
 ## 6. Phased Plan
 
 **Phase 0 — done (this spec's branch).** `config/mmkt_instruments.yml` +
 `gold_config/mmkt_config.py` (validated loader); `writer/mmkt_views.py::
 compute_mmkt_rate_snapshot` (pure, no I/O); `manifests/money_market.yml`
-(`DCPN3M`, inactive); `scripts/probe_mmkt_series.py`; tests for all of it.
+(`DCPN3M`, activated 2026-10-18 after live ID resolution); `scripts/probe_mmkt_series.py`;
+tests for all of it.
 
-**Phase 0.5 — a human with network access (AC-006).**
-`python scripts/probe_mmkt_series.py --fred-key "$FRED_API_KEY" --out probe.json`.
-Read the report: fix any basis label it flags; flip `DCPN3M` to `active: true` if
-it resolves; save the report under `tests/fixtures/` as the first real capture.
+**Phase 0.5 — partial (AC-006).** The live probe was run on 2026-10-18 and
+saved as `tests/fixtures/mmkt_live_probe_2026-10-18.json`. All 14 IDs resolved;
+`DCPN3M` was activated and all 14 active series were ingested into PostgreSQL.
+The probe exits nonzero because FRED's metadata does not state a quoting basis
+for `DCPF3M` or `DCPN3M`. Manually verify the CP discount convention before
+claiming AC-006 complete or relying on those normalized yields.
 
-**Phase 1 — storage wiring (AC-007).** `gold.funding_stress_daily` is the
-precedent; adding a Gold table touches, per `grep funding_stress_daily`:
-`sql/50_gold.sql`, `io/local_store.py` (DDL, compute, insert, table lists — ~12
-sites), `io/postgres_store.py`, `writer/gold.py` (Spark schema + write),
-`docs/dictionary/data_dictionary.md`, and the local-store, config-integrity and
-Spark integration tests. The Spark path **cannot be run in the build
-environment** (CI's `spark-integration` job is the only check), so this phase
-should be done where it can be exercised. The engine already exists; this is
-plumbing.
+**Phase 1 — implemented; Spark verification pending (AC-007).** SQLite and
+PostgreSQL storage wiring is implemented. PostgreSQL reuses the shared Gold
+builder and schema; its integration test compares the MMKT snapshot with
+SQLite row-for-row. The Spark/Databricks writer, Delta DDL, schema-parity test,
+and persisted-value assertion are implemented. Focused Postgres/MMKT tests
+passed on 2026-10-18, and PostgreSQL currently contains all 14 configured
+instruments at an explicit 2026-10-18 cutoff. The local Spark test could not
+start because this environment has no Java runtime; execute the Spark
+integration job to complete verification.
 
-**Phase 2 — Treasury auction results (AC-008).** The Fiscal Data client keys on
-`record_date`; auction datasets are keyed by `auction_date`. The probe prints the
-real field names; the client change (a configurable date field) is designed from
-that capture, not from memory. `docs/catalog/treasury.md` notes this is "a matter
+**Phase 2 — open (AC-008).** The live Treasury probe captured both `record_date`
+and `auction_date`, along with rate/yield fields. The Treasury client change
+must use the captured auction dataset fields and fixture; no client or manifest
+work has been completed yet. `docs/catalog/treasury.md` notes this is "a matter
 of hand-writing a manifest entry" — true only when the date key matches.
 
 **Phase 3 — new sources (AC-009).** SEC Form N-MFP (fund-level and class-level
@@ -185,7 +210,7 @@ page and the OFR's exact mnemonics were not confirmed from this environment.
 | A mistyped id empties a table without an error (the `TGCR` incident) | `missing` rows are explicit; AC-004 cross-checks every id against the manifests |
 | The terminal prices off a stale rate | `status = stale` plus `staleness_days`/`max_staleness_days`; the terminal's `ERR` policy |
 | Config drifts from what the optimizer assumes | One snapshot hash per solve (terminal side) |
-| Unverified work looks finished | This spec states plainly that nothing is live-verified; AC-006 is open |
+| Unverified work looks finished | Keep AC-006 partial until the CP basis is manually confirmed; keep AC-007 partial until Databricks/Spark is implemented and tested |
 
 ## 8. Open Decisions
 
