@@ -44,3 +44,30 @@ jobs:
           pip install -e .
       - name: Run Spark/Delta integration tests
         run: pytest -q tests/test_spark_integration.py
+
+  postgres-integration:
+    name: PostgreSQL integration
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: fred
+          POSTGRES_PASSWORD: fred
+          POSTGRES_DB: postgres
+        ports:
+          - 55432:5432
+        options: >-
+          --health-cmd "pg_isready -U fred -d postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -e '.[postgres]' pytest
+      - name: Run PostgreSQL integration tests
+        run: pytest -q tests/test_postgres_warehouse.py
