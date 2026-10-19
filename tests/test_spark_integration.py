@@ -134,11 +134,18 @@ def test_spark_due_date_watermark_tracks_changed_silver_rows(spark):
             ) USING DELTA"""
         )
         row = {
-            "source": "fred", "series_id": "DGS10",
-            "observation_date": "2024-01-01", "realtime_start": "2024-01-01",
-            "realtime_end": "9999-12-31", "value": 4.0, "raw_value": "4.0",
-            "is_missing": False, "row_hash": "h1", "revision_number": 1,
-            "ingested_at": "2024-01-02T00:00:00+00:00", "run_id": "first",
+            "source": "fred",
+            "series_id": "DGS10",
+            "observation_date": "2024-01-01",
+            "realtime_start": "2024-01-01",
+            "realtime_end": "9999-12-31",
+            "value": 4.0,
+            "raw_value": "4.0",
+            "is_missing": False,
+            "row_hash": "h1",
+            "revision_number": 1,
+            "ingested_at": "2024-01-02T00:00:00+00:00",
+            "run_id": "first",
         }
         merge_silver(config, [row], spark=spark)
         assert warehouse.last_ingested_at_by_series() == {
@@ -153,14 +160,22 @@ def test_spark_due_date_watermark_tracks_changed_silver_rows(spark):
         assert warehouse.last_ingested_at_by_series()["DGS10"] == row["ingested_at"]
 
         changed = {
-            **row, "row_hash": "h2", "value": 4.1, "raw_value": "4.1",
-            "ingested_at": "2024-01-04T00:00:00+00:00", "run_id": "changed",
+            **row,
+            "row_hash": "h2",
+            "value": 4.1,
+            "raw_value": "4.1",
+            "ingested_at": "2024-01-04T00:00:00+00:00",
+            "run_id": "changed",
         }
         merge_silver(config, [changed], spark=spark)
         last = warehouse.last_ingested_at_by_series()["DGS10"]
         assert last == changed["ingested_at"]
-        assert not _series_is_due("monthly", last, datetime(2024, 1, 20, tzinfo=timezone.utc))
-        assert _series_is_due("monthly", last, datetime(2024, 2, 1, tzinfo=timezone.utc))
+        assert not _series_is_due(
+            "monthly", last, datetime(2024, 1, 20, tzinfo=timezone.utc)
+        )
+        assert _series_is_due(
+            "monthly", last, datetime(2024, 2, 1, tzinfo=timezone.utc)
+        )
     finally:
         spark.sql(f"DROP TABLE IF EXISTS {table}")
         spark.conf.set("spark.sql.session.timeZone", old_timezone)
@@ -513,7 +528,7 @@ def test_fomc_tables_build_end_to_end_on_spark(spark, monkeypatch):
 # Terminal views: the Gold objects the Power BI suite actually binds to.
 #
 # These were the largest untested surface on the Delta path.
-# ``_build_terminal_views`` writes 18 tables, each through its own
+# ``_build_terminal_views`` writes each table through its own
 # ``_write(name, rows, StructType([...]), casts)``. The StructType is written by
 # hand, so a column added to a pure engine's output dict but not to its
 # StructType is silently dropped on the Databricks write while the SQLite
@@ -521,7 +536,7 @@ def test_fomc_tables_build_end_to_end_on_spark(spark, monkeypatch):
 #
 # That is not hypothetical: gold.dim_series shipped without `geo` and `metric`
 # for exactly this reason. tests/test_dim_series_schema_parity.py guards that
-# one table by reading source; this guards all 18 by actually building them on
+# one table by reading source; this guards the table set by building it on
 # Delta and comparing the result against the shipped DDL in sql/50_gold.sql.
 # ---------------------------------------------------------------------------
 
@@ -543,6 +558,7 @@ TERMINAL_TABLES = (
     "benchmark_rate_board",
     "funding_tape_daily",
     "funding_stress_daily",
+    "mmkt_rate_snapshot",
     "credit_spread_daily",
     "credit_spread_rolling",
     "inflation_explorer",
@@ -635,6 +651,22 @@ def terminal_build(spark, tmp_path_factory):
         ).saveAsTable(config.table("meta", "fred_series"))
 
         observations = []
+        mmkt_values = {
+            "SOFR": 3.90,
+            "EFFR": 3.88,
+            "OBFR": 3.88,
+            "IORB": 3.90,
+            "TGCRRATE": 3.87,
+            "RRPONTSYAWARD": 3.75,
+            "DTB4WK": 4.00,
+            "DTB3": 4.10,
+            "DTB6": 4.21,
+            "DGS1MO": 4.17,
+            "DGS3MO": 4.28,
+            "DGS6MO": 4.35,
+            "DCPF3M": 4.08,
+            "DCPN3M": 4.09,
+        }
         for day, (unrate, caur, two, ten, three_m, usrec) in {
             "2026-01-01": (4.0, 5.0, 4.20, 4.50, 4.30, 0.0),
             "2026-02-01": (4.1, 5.1, 4.25, 4.45, 4.35, 0.0),
@@ -658,6 +690,16 @@ def terminal_build(spark, tmp_path_factory):
                         "is_missing": False,
                     }
                 )
+            observations.extend(
+                {
+                    "series_id": series_id,
+                    "observation_date": day,
+                    "realtime_start": day,
+                    "value": value,
+                    "is_missing": False,
+                }
+                for series_id, value in mmkt_values.items()
+            )
         _silver_df(spark, observations).write.format("delta").mode("overwrite").option(
             "overwriteSchema", "true"
         ).saveAsTable(config.table("gold", "fred_latest_observation"))
@@ -674,7 +716,7 @@ def test_terminal_view_schema_matches_shipped_ddl(spark, terminal_build, table):
 
     This is the generic form of the dim_series geo/metric bug: a hand-written
     StructType that has drifted from the engine's output. Comparing against the
-    shipped DDL catches it for all 18 tables at once.
+    shipped DDL catches it across the complete terminal table set.
     """
     written = set(spark.table(terminal_build.table("gold", table)).columns)
     declared = set(_ddl_columns(table))
@@ -713,11 +755,35 @@ def test_terminal_views_populate_their_core_tables(spark, terminal_build):
         ("macro_indicator_dashboard", 2),  # UNRATE + CAUR at least
         ("treasury_curve", 3),  # 3 tenors x 4 dates
         ("curve_spread_daily", 1),
+        ("mmkt_rate_snapshot", 14),
     ):
         count = spark.sql(
             f"SELECT COUNT(*) AS n FROM {terminal_build.table('gold', table)}"
         ).collect()[0]["n"]
         assert count >= minimum, f"gold.{table} has {count} rows, expected >= {minimum}"
+
+
+def test_mmkt_snapshot_values_survive_delta_write(spark, terminal_build):
+    rows = spark.sql(
+        f"SELECT instrument_id, quoted_rate_pct, mm_yield_pct, status, "
+        f"observation_date, as_of_date FROM "
+        f"{terminal_build.table('gold', 'mmkt_rate_snapshot')} "
+        "WHERE instrument_id = 'TBILL_4W'"
+    ).collect()
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["quoted_rate_pct"] == pytest.approx(4.0)
+    assert row["mm_yield_pct"] == pytest.approx(4.012483281319661)
+    assert row["status"] == "ok"
+    assert str(row["observation_date"]) == "2026-04-01"
+    assert str(row["as_of_date"]) == "2026-04-01"
+
+    statuses = spark.sql(
+        f"SELECT status, COUNT(*) AS n "
+        f"FROM {terminal_build.table('gold', 'mmkt_rate_snapshot')} "
+        "GROUP BY status"
+    ).collect()
+    assert {row["status"]: row["n"] for row in statuses} == {"ok": 14}
 
 
 def test_dim_date_recession_flag_survives_the_delta_write(spark, terminal_build):

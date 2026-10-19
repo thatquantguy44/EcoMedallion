@@ -1,9 +1,12 @@
 # Spec 010: Next Pipeline Performance Pass
 
-Status: **proposed** (2026-10-18). This is a measurement and implementation
-plan, not a claim of new measured speedups. The due-date parity change on
-`perf/enable-due-gating-spark-postgres` is the starting point; its Spark and
-PostgreSQL integration tests still need a runner with working services.
+Status: **Phase 0 implemented; Phase 1 equity pilot integrated and correctness-tested** (2026-10-18).
+No representative large-seed speedup has been measured yet; the fixture smoke
+is a harness check, not a production baseline. Live API and Spark measurements
+remain unverified.
+The due-date parity change on `perf/enable-due-gating-spark-postgres` is the
+starting point; its Spark and PostgreSQL integration tests still need a runner
+with working services.
 
 ## Goal
 
@@ -21,7 +24,7 @@ measured stage costs rather than from total runtime alone.
 | Two Gold stages are already prepared for incrementality | The handoff records `equity_total_return_index` at 234.8s and `recession_probability` at 141.8s; `resume_equity_total_return_index()` and `resume_recession_probability()` exist but are not wired to checkpoints | Integrate only after proving touched-entity detection and exact output parity |
 | PostgreSQL Silver upsert is row-oriented | `PostgresWarehouse._insert()` uses `cursor.executemany()` for upserts, including `merge_silver()` | Benchmark a staging-table `COPY` plus set-based merge at realistic row counts and conflict ratios |
 | Spark does extra work during ingestion and planning | `merge_delta()` calls `source_df.count()` before each merge; the new due-date lookup aggregates `MAX(ingested_at)` across Silver | Measure the action and grouped scan before changing them; repeated full-table scans may erase part of the extraction savings |
-| Benchmark guidance has drifted from the code | `scripts/benchmark_pipeline.py` passes a `DatabaseConnectionFactory` read connection as `FredPipeline.warehouse`, uses `Environment.dev` while the enum has `DEV`, and queries an `audit_etl_stage` table absent from the warehouse schema | Repair the harness before using `docs/benchmarking.md` as a source of current numbers |
+| Benchmark guidance had drifted from the code | The old harness used a read-only connection as the warehouse, `Environment.dev`, and a nonexistent `audit_etl_stage` table | Repaired in Phase 0; fixture output is validated, and old timings are labeled historical in `docs/benchmarking.md` |
 
 The old full Gold measurement was ~3250s of active stage time. The handoff
 projects ~2030s after the measured z-score stage improvement, but does not
@@ -48,16 +51,29 @@ record a new full run. Do not treat the projected total as a measured baseline.
    harness actually supports. Label its current example timings as historical
    or illustrative until re-measured.
 
-**Acceptance:** a fixture-backed smoke run completes on SQLite, produces
-nonempty stage timings and accurate series counts, and a second identical
-run is reported as a distinct workload. PostgreSQL and Spark runs are marked
-unverified unless their real integration jobs execute. Keep correctness tests
-separate from timing thresholds.
+**Status: met for the SQLite fixture path (2026-10-18).** The documented
+three-repeat unchanged smoke completed with three distinct run IDs, 2 selected,
+2 due, 2 succeeded per run, zero changed Silver rows, all pipeline tracker
+stages, 49 Gold timing records per run, and a 0.138s median (0.134–0.254s
+range). These tiny-fixture timings validate the harness only; they are not a
+production performance claim. Restatement and `--full` fixture workloads also
+pass focused tests. PostgreSQL changed-row counts are reported as unavailable
+where the backend exposes only submitted merge rows; Spark and live API
+measurements have not been run. Source-call counts are logical client method
+calls, not low-level HTTP attempts/retries. Keep correctness tests separate
+from timing thresholds.
 
 ## Phase 1: Integrate the existing resumable Gold engines
 
-Wire `gold_equity_total_return_index` and
-`gold_recession_probability_daily` into the existing
+**Pilot status (2026-10-18):** `gold_equity_total_return_index` is now
+checkpointed per ticker on SQLite and PostgreSQL. Tests cover no-op skipping,
+forward append, backdated dividend restatement, config-hash invalidation,
+`full=True` reset/reseed, and interrupted-build rollback/recovery on both local
+backends. The large-seed performance gate is still pending, so this records
+correctness integration, not a measured speedup. `gold_recession_probability_daily`
+remains unintegrated.
+
+Wire `gold_recession_probability_daily` into the existing
 `gold_incremental_checkpoint` and `gold_build_watermark` pattern from
 spec003. Skip an entity only when its watched Silver inputs have no changed
 rows and its configuration hash matches. Append from a checkpoint only for
@@ -69,11 +85,14 @@ transaction. Apply the shared orchestration to SQLite and PostgreSQL;
 measure Spark separately because its Gold builder does not use the local
 checkpoint path.
 
-**Acceptance:** exact row parity with a full rebuild for no-change, forward
-append, revision, backfill, config edit, and interrupted-build recovery on
-both local backends. Benchmark the two stages and end-to-end Gold on the same
-seed. Keep only changes that improve the target stage materially (suggested
-gate: at least 20% median) without increasing peak RSS or changing output.
+**Remaining acceptance:** for each pilot table, exact row parity with a full
+rebuild for no-change, forward append, revision, backfill, config edit, and
+interrupted-build recovery on both local backends. Benchmark each stage and
+end-to-end Gold on the same large seed. Keep only changes that improve the
+target stage materially (suggested gate: at least 20% median) without increasing
+peak RSS or changing output. The equity pilot has correctness coverage on these
+paths on SQLite and PostgreSQL; the performance gate and recession-probability
+integration remain open.
 
 ## Phase 2: Reduce full-history reads and peak memory
 

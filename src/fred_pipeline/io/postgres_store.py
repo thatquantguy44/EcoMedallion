@@ -158,6 +158,7 @@ def _borrowed_from_local_warehouse(cls: type) -> type:
         "_build_funding_tape_daily",
         "_build_funding_stress_daily",
         "_build_series_correlation",
+        "_build_equity_total_return_index",
     ):
         setattr(cls, name, getattr(LocalWarehouse, name))
     return cls
@@ -475,16 +476,15 @@ class PostgresWarehouse:
             rows,
             upsert_keys=_UPSERT_KEYS["silver_fred_observation"],
             conflict_where=(
-                'EXCLUDED."row_hash" IS DISTINCT FROM '
-                '"fred_observation"."row_hash"'
+                'EXCLUDED."row_hash" IS DISTINCT FROM "fred_observation"."row_hash"'
             ),
         )
 
-    def build_gold(self) -> dict[str, str]:
+    def build_gold(self, full: bool = False) -> dict[str, str]:
         self.conn.execute("BEGIN")
         self._defer_commits = True
         try:
-            result = self._build_gold_inner()
+            result = self._build_gold_inner(full=full)
         except BaseException:
             self.conn.rollback()
             raise
@@ -535,14 +535,14 @@ class PostgresWarehouse:
             )
             return max(cur.rowcount, 0)
 
-    def _build_gold_inner(self) -> dict[str, str]:
+    def _build_gold_inner(self, full: bool = False) -> dict[str, str]:
         # Reuse the SQLite backend's pure-Python Gold orchestration. The
         # low-level table operations above translate flat table names into
         # Postgres schemas, and the two largest relational transforms are
         # overridden with native Postgres SQL.
         from fred_pipeline.io.local_store import LocalWarehouse
 
-        return LocalWarehouse._build_gold_inner(self)
+        return LocalWarehouse._build_gold_inner(self, full=full)
 
     def point_in_time_features(self, as_of: str) -> list[dict[str, Any]]:
         from fred_pipeline.features import point_in_time_snapshot

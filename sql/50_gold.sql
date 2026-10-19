@@ -599,6 +599,28 @@ CREATE TABLE IF NOT EXISTS gold.funding_stress_daily (
 )
 USING DELTA;
 
+-- One row per configured money-market instrument. The shared MMKT engine
+-- records the source quote, ACT/360-normalized yield, and freshness status.
+CREATE TABLE IF NOT EXISTS gold.mmkt_rate_snapshot (
+    instrument_id      STRING,
+    label              STRING,
+    instrument_class   STRING,
+    tenor_days         INT,
+    series_id          STRING,
+    quoted_basis       STRING,
+    quoted_rate_pct    DOUBLE,
+    normalized_basis   STRING,
+    mm_yield_pct       DOUBLE,
+    conversion         STRING,
+    observation_date   DATE,
+    as_of_date         DATE,
+    staleness_days     INT,
+    max_staleness_days INT,
+    status             STRING,
+    status_detail      STRING
+)
+USING DELTA;
+
 -- ICE BofA OAS history per configured instrument (percent + bps), change vs.
 -- prior print, expanding z-score/percentile, stress-episode flag (expanding
 -- percentile ≥ stress_percentile), and the NBER recession overlay (NULL

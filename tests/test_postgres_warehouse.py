@@ -42,6 +42,33 @@ def _silver_row(
     }
 
 
+def _tiingo_rows(records, *, ingested_at, run_id):
+    rows = []
+    for observation_date, close, dividend, split in records:
+        for field, value in (
+            ("close", close),
+            ("divCash", dividend),
+            ("splitFactor", split),
+        ):
+            rows.append(
+                {
+                    "source": "tiingo",
+                    "series_id": f"AAPL:{field}",
+                    "observation_date": observation_date,
+                    "realtime_start": "",
+                    "realtime_end": "",
+                    "value": value,
+                    "raw_value": str(value),
+                    "is_missing": False,
+                    "row_hash": f"AAPL:{field}:{observation_date}:{value}",
+                    "revision_number": 1,
+                    "ingested_at": ingested_at,
+                    "run_id": run_id,
+                }
+            )
+    return rows
+
+
 @pytest.fixture
 def postgres_dsn():
     psycopg = pytest.importorskip("psycopg")
@@ -108,10 +135,9 @@ def test_postgres_warehouse_builds_core_gold_like_local(tmp_path, postgres_dsn):
         assert {row["table_schema"]: row["n"] for row in object_counts} == {
             "audit": 4,
             "bronze": 1,
-            # 57, not 56: includes gold_incremental_checkpoint (spec003 Phase 3
-            # checkpoint infra), added on a branch that merged in after this
-            # count was first written.
-            "gold": 57,
+            # Includes gold_incremental_checkpoint (spec003 Phase 3 checkpoint
+            # infra) and mmkt_rate_snapshot (spec009).
+            "gold": 58,
             "meta": 6,
             "silver": 1,
         }
@@ -150,6 +176,14 @@ def test_postgres_warehouse_builds_core_gold_like_local(tmp_path, postgres_dsn):
             ORDER BY series_id, observation_date, realtime_start
         """
         assert pg.query(pit_sql) == local.query(pit_sql)
+
+        local_mmkt = local.query(
+            "SELECT * FROM gold_mmkt_rate_snapshot ORDER BY instrument_id"
+        )
+        postgres_mmkt = pg.query(
+            "SELECT * FROM gold.mmkt_rate_snapshot ORDER BY instrument_id"
+        )
+        assert postgres_mmkt == local_mmkt
     finally:
         pg.close()
         local.close()
@@ -167,6 +201,118 @@ def test_postgres_warehouse_is_idempotent(postgres_dsn):
         assert value == 4.1
     finally:
         wh.close()
+
+
+def test_postgres_equity_total_return_incremental_matches_local(postgres_dsn, tmp_path):
+    local = LocalWarehouse(_config(), db_path=str(tmp_path / "local.db"))
+    pg = PostgresWarehouse(_config(), dsn=postgres_dsn)
+    query = (
+        "SELECT * FROM gold_equity_total_return_index ORDER BY ticker, observation_date"
+    )
+    pg_query = (
+        "SELECT * FROM gold.equity_total_return_index ORDER BY ticker, observation_date"
+    )
+    try:
+        initial = _tiingo_rows(
+            [
+                ("2024-01-02", 100.0, 0.0, 1.0),
+                ("2024-01-03", 101.0, 0.0, 1.0),
+                ("2024-01-04", 102.0, 1.0, 1.0),
+            ],
+            ingested_at="2024-02-01T00:00:00+00:00",
+            run_id="initial",
+        )
+        local.merge_silver(initial)
+        pg.merge_silver(initial)
+        local.build_gold()
+        pg.build_gold()
+        assert pg.query(pg_query) == local.query(query)
+
+        forward = _tiingo_rows(
+            [("2024-01-05", 103.0, 0.0, 1.0)],
+            ingested_at="2024-02-02T00:00:00+00:00",
+            run_id="forward",
+        )
+        local.merge_silver(forward)
+        pg.merge_silver(forward)
+        local.build_gold()
+        pg.build_gold()
+        assert pg.query(pg_query) == local.query(query)
+
+        revision = _tiingo_rows(
+            [("2024-01-03", 101.0, 2.0, 1.0)],
+            ingested_at="2024-02-03T00:00:00+00:00",
+            run_id="dividend-restatement",
+        )
+        local.merge_silver(revision)
+        pg.merge_silver(revision)
+        local.build_gold()
+        pg.build_gold()
+        assert pg.query(pg_query) == local.query(query)
+
+        local.build_gold(full=True)
+        pg.build_gold(full=True)
+        assert pg.query(pg_query) == local.query(query)
+
+        local.build_gold()
+        pg.build_gold()
+        local.conn.execute(
+            "UPDATE gold_incremental_checkpoint SET config_hash = 'stale' "
+            "WHERE table_name = 'gold_equity_total_return_index' AND entity_key = 'AAPL'"
+        )
+        local.conn.commit()
+        pg.conn.execute(
+            "UPDATE gold_incremental_checkpoint SET config_hash = 'stale' "
+            "WHERE table_name = 'gold_equity_total_return_index' AND entity_key = 'AAPL'"
+        )
+        pg.conn.commit()
+        local.build_gold()
+        pg.build_gold()
+        assert pg.query(pg_query) == local.query(query)
+
+        forward_again = _tiingo_rows(
+            [("2024-01-06", 104.0, 0.0, 1.0)],
+            ingested_at="2024-02-04T00:00:00+00:00",
+            run_id="forward-again",
+        )
+        local.merge_silver(forward_again)
+        pg.merge_silver(forward_again)
+        before_rows = pg.query(pg_query)
+        before_checkpoints = pg.query(
+            "SELECT entity_key, frontier_date, state_json, config_hash "
+            "FROM gold_incremental_checkpoint "
+            "WHERE table_name = 'gold_equity_total_return_index'"
+        )
+        write_checkpoints = pg._write_checkpoints_batch
+
+        def fail_after_equity_checkpoint(table_name, entries):
+            write_checkpoints(table_name, entries)
+            if table_name == "gold_equity_total_return_index":
+                raise RuntimeError("simulated checkpoint write interruption")
+
+        pg._write_checkpoints_batch = fail_after_equity_checkpoint
+        with pytest.raises(
+            RuntimeError, match="simulated checkpoint write interruption"
+        ):
+            pg.build_gold()
+        pg._write_checkpoints_batch = write_checkpoints
+
+        assert pg.query(pg_query) == before_rows
+        assert (
+            pg.query(
+                "SELECT entity_key, frontier_date, state_json, config_hash "
+                "FROM gold_incremental_checkpoint "
+                "WHERE table_name = 'gold_equity_total_return_index'"
+            )
+            == before_checkpoints
+        )
+
+        local.build_gold()
+        pg.build_gold()
+        assert pg.query(pg_query) == local.query(query)
+    finally:
+        pg.close()
+        local.close()
 
 
 def test_postgres_last_ingested_at_by_series_matches_local(postgres_dsn, tmp_path):

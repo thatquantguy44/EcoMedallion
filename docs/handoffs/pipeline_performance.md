@@ -1,6 +1,6 @@
 # Pipeline performance handoff: Gold rebuild fixed + incremental; extraction is the next lever
 
-**Status: Phases 1–2 done. Phase 3 (Incremental Gold) has 5 tables/groups
+**Status: Phases 1–2 done. Phase 3 (Incremental Gold) has 6 tables/groups
 wired and the pattern is proven; the remaining candidate tables are
 deliberately deferred (see "Phase 3: what's left, and why it's parked"
 below), now revisitable with real touched-vs-skipped data (see next
@@ -316,13 +316,27 @@ value is already computed fresh in Python that build — as
   per-entity append/backfill split. Generally: recompute fully every time,
   cheaply, rather than force-fitting the checkpoint pattern.
 
-### Follow-on integration tasks (resumable functions written, not yet wired in)
+### Follow-on integration tasks
 
-These resumable compute functions have been created and tested in isolation, but the full `_build_gold_inner()` integration (checkpoint I/O, touched-entity detection, append logic, checkpoint updates) is deferred pending validation on real builds:
+`gold.equity_total_return_index` is now wired to per-ticker checkpoints in
+`LocalWarehouse` and shared by `PostgresWarehouse`. The resumed path appends
+strictly forward dates, and replaces a ticker on a historical touch or config
+hash change. SQLite and PostgreSQL parity tests cover no-op, append, dividend
+revision, full rebuild, config invalidation, and interrupted-build rollback /
+recovery. This is correctness integration only; the performance gate has not
+been measured on a large database.
 
-- **`resume_equity_total_return_index()`** (commit b08f2c3, 2026-09-15) — per-ticker cumulative return index. Entity key: ticker. State: frontier_date, price/total_return indices, prev_close. Ready for integration once the pattern is proven stable on `gold_curve_spread_daily` et al. Touched-ticker detection: which tickers received new Tiingo data since last build.
+**Next pickup:** run a Gold-only baseline against an isolated copy of the large
+SQLite/PostgreSQL seed when the machine has adequate memory. Compare the
+`equity_total_return_index` stage and end-to-end Gold median against the same
+full-rebuild reference. Keep the incremental path only if it clears the
+suggested 20% median improvement without increasing peak RSS or changing rows.
+The current small fixtures establish correctness, not speed.
 
-- **`resume_recession_probability()`** (commit 16a6227, 2026-09-15) — global time-series IRLS logistic regression model with warm-start, expands at each new USREC date. State: frontier_date (last USREC date processed), model_weights_by_horizon (beta coefficients per forecast horizon to warm-start the next IRLS iteration). Returns only new rows for USREC dates past the frontier. Ready for integration. Touched-USREC detection: simple, automatic (single series `USREC` in manifest, dated inputs).
+After the baseline gate, the remaining resumable-engine integration is
+**`resume_recession_probability()`** (commit 16a6227, 2026-09-15) — global
+time-series IRLS logistic regression with warm-started model weights, extending
+only new USREC dates. Its touched input is the single `USREC` series.
 
 Further entries here as additional resumable functions are created before their integration tasks are scheduled.
 
@@ -364,12 +378,10 @@ below first; it's not a TODO list, it's a set of conclusions.
   per-pair skipping for these two tables is worth building now, using that
   real number instead of the "would likely count as touched" guess above.
 - **`gold_recession_probability_daily`** (warm-started IRLS, `last_beta`
-  carried forward) and **`gold_equity_total_return_index`** (running product
-  from the ticker's first date) — same shape as the lead-lag/structural-
-  breaks case, same now-resolved precondition above: full-entity-recompute-
-  on-any-touch is the realistic ceiling, and whether "touched" is a small
-  set in practice can now be checked against spec007's real skip data
-  instead of guessed at.
+  carried forward) — full-entity-recompute-on-any-touch is the realistic
+  ceiling, and whether "touched" is a small set in practice can now be checked
+  against spec007's real skip data instead of guessed at. The equity total-
+  return pilot is implemented; its measured performance gate is still pending.
 - **Macro PCA/factor-score tables and anomaly scores** — probably not worth
   it at all. They're cross-sectionally coupled by construction (touching any
   one feature series changes covariance/loadings for every other series from

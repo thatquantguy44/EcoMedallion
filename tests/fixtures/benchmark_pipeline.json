@@ -1,0 +1,21 @@
+{
+  "series": {
+    "DGS10": [
+      {"date": "2026-01-30", "value": "4.12", "realtime_start": "2026-01-31", "realtime_end": "9999-12-31"},
+      {"date": "2026-02-27", "value": "4.18", "realtime_start": "2026-02-28", "realtime_end": "9999-12-31"},
+      {"date": "2026-03-30", "value": "4.21", "realtime_start": "2026-03-31", "realtime_end": "9999-12-31"},
+      {"date": "2026-04-29", "value": "4.25", "realtime_start": "2026-04-30", "realtime_end": "9999-12-31"}
+    ],
+    "UNRATE": [
+      {"date": "2026-01-01", "value": "4.1", "realtime_start": "2026-01-09", "realtime_end": "9999-12-31"},
+      {"date": "2026-02-01", "value": "4.2", "realtime_start": "2026-02-11", "realtime_end": "9999-12-31"},
+      {"date": "2026-03-01", "value": "4.1", "realtime_start": "2026-03-11", "realtime_end": "9999-12-31"},
+      {"date": "2026-04-01", "value": "4.0", "realtime_start": "2026-04-10", "realtime_end": "9999-12-31"}
+    ]
+  },
+  "restatements": {
+    "UNRATE": [
+      {"date": "2026-04-01", "value": "3.9"}
+    ]
+  }
+}
