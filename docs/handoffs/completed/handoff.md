@@ -52,6 +52,25 @@ verification (`docs/deployment_runbook.md`); per-source metadata reconciliation
 for non-FRED sources (`reconcile`/`discover` are FRED-only); optional new sources
 (markets/OHLCV, the SDMX bundle) and a full SEC manifest generator.
 
+## Performance Improvement Pickup (2026-10-19)
+
+Spec 010 Phase 0's fixture-backed benchmark harness is implemented and its
+SQLite smoke acceptance passes. Phase 1's `gold.equity_total_return_index`
+checkpoint pilot is integrated for SQLite and PostgreSQL. Focused tests cover
+no-op skipping, forward append, backdated dividend restatement, config-hash
+invalidation, forced full rebuild, and interrupted-build rollback/recovery on
+both backends. This establishes correctness only; a large-seed speedup has not
+been measured or claimed.
+
+**Next pickup:** run the Gold-only baseline against an isolated copy of the
+large SQLite/PostgreSQL seed when the host has enough memory. Compare the
+equity stage and end-to-end Gold medians, peak RSS, and row parity against a
+full rebuild. Keep the incremental path only if it improves the stage
+materially (Spec 010 suggests a 20% median gate) without increasing peak RSS or
+changing output. After that gate, continue with the `gold.recession_probability_daily`
+checkpoint integration. See `specs/spec010/README.md` and
+`docs/handoffs/pipeline_performance.md` for implementation details and caveats.
+
 ------------------------------------------------------------------------
 
 # Target Platform
@@ -870,7 +889,7 @@ both. ML-5 additionally requires `gold.equity_return_daily` (already built).
 
 ## Phase ML-0: ML Feature Matrix (~1 day)
 
-**New table: `gold.ml_feature_matrix`**  
+**New table: `gold.ml_feature_matrix`**
 **New config: `config/ml_features.yml`**
 
 A single wide table aligned to a daily date grid: one row per date, one
@@ -929,7 +948,7 @@ fraction of features are live vs. carried forward.
 
 ## Phase ML-1: Nelson-Siegel Yield Curve Fitting (~2 days)
 
-**New table: `gold.yield_curve_ns_factors`**  
+**New table: `gold.yield_curve_ns_factors`**
 **New module: `src/fred_pipeline/ns_model.py`**
 
 Fits the Nelson-Siegel (1987) parametric model to the Treasury curve each
@@ -986,7 +1005,7 @@ threshold. Emit `lambda_estimated = True/False`.
 
 ## Phase ML-2: Macro PCA Factor Scores (~3 days)
 
-**New tables: `gold.macro_factor_scores`, `gold.macro_factor_loadings`**  
+**New tables: `gold.macro_factor_scores`, `gold.macro_factor_loadings`**
 **New module: `src/fred_pipeline/macro_pca.py`**
 
 Extracts latent macro factors from the standardized feature matrix via
@@ -1046,7 +1065,7 @@ orthogonality], (c) promax [oblique, allows correlated factors]. Recommend
 
 ## Phase ML-3: Recession Probability Model (~3 days)
 
-**New table: `gold.recession_probability_daily`**  
+**New table: `gold.recession_probability_daily`**
 **New module: `src/fred_pipeline/recession_model.py`**
 
 Estimates the real-time probability of being in an NBER recession at each
@@ -1106,7 +1125,7 @@ table: `prob_recession_3m`, `prob_recession_6m`, `prob_recession_12m`.
 
 ## Phase ML-4: Macro Anomaly Detection (~2 days)
 
-**New table: `gold.macro_anomaly_scores`**  
+**New table: `gold.macro_anomaly_scores`**
 **New module: `src/fred_pipeline/anomaly.py`**
 
 Computes a multivariate outlier score for each date: the Mahalanobis
@@ -1159,7 +1178,7 @@ any scipy dependency.
 
 ## Phase ML-5: Equity Factor Attribution (~3 days)
 
-**New table: `gold.equity_factor_attribution`**  
+**New table: `gold.equity_factor_attribution`**
 **New module: `src/fred_pipeline/equity_factor.py`**
 
 Decomposes each equity ticker's realized daily returns into exposures to
@@ -1208,7 +1227,7 @@ One row per ticker per date (forward-filled betas, current factor scores).
 
 ## Phase ML-6: Short-Horizon Inflation Forecasting ✅ DONE
 
-**New table: `gold.inflation_forecast`**  
+**New table: `gold.inflation_forecast`**
 **New module: `src/fred_pipeline/inflation_model.py`**
 
 Generates 1m / 3m / 6m / 12m ahead CPI and PCE forecasts from
