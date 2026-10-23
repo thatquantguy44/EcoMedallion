@@ -587,6 +587,60 @@ returns in `gold.equity_return_daily`) because they're time-additive, which is
 what makes the square-root-of-time annualization scaling valid. A row is
 emitted only once its window is fully populated — no partial-window stats.
 
+### ECB eligible marketable assets (Spec 011)
+
+This is a dedicated security-universe model rather than a FRED observation
+series. Knowledge time is the ECB release publication timestamp.
+
+#### `bronze.ecb_eligible_asset_release`
+One row per RSS-linked MID release message. `release_id` is a deterministic
+hash of canonical release URL and publication time. It records source-local
+and UTC timestamps, discovery/retrieval audit, run id, lifecycle status, and
+quarantine detail.
+
+#### `bronze.ecb_eligible_asset_artifact`
+One row per release × artifact kind (`full_xml`, `full_csv`, `update_xml`,
+`update_csv`, `dictionary_xml`). The exact downloaded bytes are retained with
+SHA-256 storage identity, the ECB protocol's MD5 digest, PKCS#7 signature,
+signer, verification status, sizes, encoding, URL, and retrieval audit.
+
+#### `silver.ecb_eligible_asset_release`
+One accepted release per row. Includes prior-release lineage, full/update and
+N/U/D counts, parser/schema/dictionary identities, reconciliation and coverage
+status, accepted timestamp, and run id.
+
+#### `silver.ecb_eligible_asset_version`
+Half-open SCD2 security intervals. `asset_key` is `ISIN:<code>` when an ISIN
+exists and otherwise `OTHER:<registration-number>`. The grain is security ×
+`valid_from_release_id`; `[valid_from_utc, valid_to_utc)` is the interval in
+which that ECB-published state applies. Rows carry the published security
+attributes and haircuts, raw source fields, canonical row hash, change type,
+dictionary/schema lineage, and ineligible tombstones for deletions.
+
+#### `silver.ecb_eligible_asset_change`
+One changed security per accepted release, retaining both the ECB-declared and
+full-snapshot-computed N/U/D code, before/after hashes, reconciliation status,
+change origin, publication time, and run id.
+
+#### `silver.ecb_eligible_asset_dictionary`
+Versioned ECB code definitions keyed by dictionary hash × domain × code.
+
+#### `gold.ecb_eligible_security_history`
+Enriches every interval and tombstone with labels from the exact dictionary
+version attached to it.
+
+#### `gold.ecb_eligible_security_current`
+Contains only open, eligible intervals from the history view.
+
+#### `gold.ecb_eligible_security_change`
+Exposes the reconciled computed and ECB-declared release changes.
+
+#### `gold.ecb_eligible_security_coverage`
+Exposes accepted releases, source counts, continuity, and coverage quality.
+
+SQLite uses the equivalent flat names with underscores, such as
+`gold_ecb_eligible_security_history`.
+
 ### Point-in-time feature snapshot
 `gold.point_in_time_features_sql(as_of)` (Spark) / `LocalWarehouse.
 point_in_time_features(as_of)` return each series' value **as it was known** on

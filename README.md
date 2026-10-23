@@ -264,6 +264,7 @@ only the flags that differ in meaning are listed per command. (Full detail:
 | `price-constituents` | Dynamic Tiingo pricing batch: reads current ETF membership from `gold_index_constituents`, prices only missing/stale tickers (by weight rank), stops on a Tiingo quota hit. **Manual-only — not wired into any scheduled job**; run it yourself (or set up your own schedule) whenever you want constituent coverage refreshed. | `--index-etf`, `--max-symbols`, `--stale-days`, `--rate-limit-per-minute`, `--dry-run`, `--rebuild-gold` |
 | `discover` | Generates a new manifest from a FRED category/release/search — not a refresh, a discovery/authoring tool | `--category-id` / `--release-id` / `--search`, `--frequencies`, `--min-popularity`, `--max`, `--out`, `--dry-run` |
 | `discover-ecb` | Lists ECB SDMX dataflows for candidate manifest authoring | `--list-flows`, `--search`, `--max`, `--json` |
+| `ecb-assets` | `poll`/`ingest-release` discover signed ECB MID releases and advance the point-in-time eligible-securities history; `status`/`verify`/`as-of` inspect it | action, `--local --db-path`, `--release-url`, `--release-id`, `--as-of`, `--asset-key`, `--allow-gap` (operator override only) |
 
 ### Refresh (rebuilds from already-ingested data — no external API calls)
 
@@ -365,6 +366,7 @@ environments:
 | EIA API key | `eia_api_key` | `EIA_API_KEY` | required to activate `source: eia` series |
 | ECB API key | — | — | keyless |
 | ECB API base URL | `ecb_base_url` | `ECB_BASE_URL` | optional proxy/mirror override; default is official ECB endpoint |
+| ECB MID base URL | `ecb_mid_base_url` | `ECB_MID_BASE_URL` | optional proxy/mirror override for signed eligible-assets releases |
 | BEA API key | `bea_api_key` | `BEA_API_KEY` | required to activate `source: bea` series |
 | Census API key (optional) | `census_api_key` | `CENSUS_API_KEY` | keyless works at a lower quota |
 | SEC User-Agent | `sec_user_agent` | `SEC_USER_AGENT` | set to your contact; SEC 403s without a descriptive UA |

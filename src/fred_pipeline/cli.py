@@ -985,6 +985,83 @@ def _cmd_price_constituents(args: argparse.Namespace) -> int:
         warehouse.close()
 
 
+def _cmd_ecb_assets(args: argparse.Namespace) -> int:
+    """Run the dedicated spec011 ECB eligible-assets workflow."""
+    from fred_pipeline.ecb_eligible_assets import (
+        ECBEligibleAssetRepository,
+        ECBEligibleAssetsPipeline,
+        ECBMIDClient,
+    )
+    from fred_pipeline.io.warehouse_factory import (
+        WarehouseConfig,
+        WarehouseFactory,
+        WarehouseInitError,
+        load_warehouse_config,
+    )
+
+    config = PipelineConfig.resolve(
+        environment=Environment(args.env), config_file=args.config
+    )
+    warehouse_config = load_warehouse_config(environment=config.environment.value)
+    if args.local:
+        warehouse_config = WarehouseConfig(
+            primary_backend="local",
+            backends={"local": {"db_path": args.db_path}},
+        )
+    try:
+        warehouse = WarehouseFactory(config, warehouse_config).build()
+    except WarehouseInitError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 2
+    if warehouse is None:
+        print("ERROR: ecb-assets requires a durable warehouse", file=sys.stderr)
+        return 2
+
+    client = ECBMIDClient(
+        base_url=config.ecb_mid_base_url,
+        timeout=config.request_timeout_seconds,
+        max_retries=config.max_retries,
+        rate_limit_per_minute=min(config.rate_limit_per_minute, 60),
+    )
+    pipeline = ECBEligibleAssetsPipeline(warehouse, client=client)
+    repository = ECBEligibleAssetRepository(warehouse)
+    try:
+        if args.action == "poll":
+            result: object = [
+                row.to_dict() for row in pipeline.poll(allow_gap=args.allow_gap)
+            ]
+        elif args.action == "ingest-release":
+            if not args.release_url:
+                print("ERROR: ingest-release requires --release-url", file=sys.stderr)
+                return 2
+            result = pipeline.ingest_release(
+                args.release_url, allow_gap=args.allow_gap
+            ).to_dict()
+        elif args.action == "verify":
+            if not args.release_id:
+                print("ERROR: verify requires --release-id", file=sys.stderr)
+                return 2
+            result = pipeline.verify(args.release_id)
+        elif args.action == "as-of":
+            if not args.as_of:
+                print("ERROR: as-of requires --as-of TIMESTAMP", file=sys.stderr)
+                return 2
+            rows = repository.as_of(args.as_of)
+            if args.asset_key:
+                key = args.asset_key.strip().upper()
+                rows = [row for row in rows if row["asset_key"] == key]
+            result = rows[: args.limit] if args.limit else rows
+        else:
+            result = repository.status()
+        print(json.dumps(result, default=str, indent=2))
+        return 0
+    except Exception as exc:  # noqa: BLE001 - CLI reports source/quarantine errors
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 1
+    finally:
+        warehouse.close()
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="fred_pipeline", description=__doc__)
     parser.add_argument(
@@ -1498,6 +1575,30 @@ def build_parser() -> argparse.ArgumentParser:
         help="rebuild Silver only, skip the Gold refresh",
     )
     rp.set_defaults(func=_cmd_replay)
+
+    ea = sub.add_parser(
+        "ecb-assets",
+        help="ingest/query the point-in-time ECB eligible marketable-assets list",
+    )
+    ea.add_argument(
+        "action", choices=["poll", "ingest-release", "verify", "status", "as-of"]
+    )
+    ea.add_argument("--env", default="dev", choices=[e.value for e in Environment])
+    ea.add_argument("--config", default=None)
+    ea.add_argument("--local", action="store_true", help="use SQLite")
+    ea.add_argument("--db-path", default="fred_local.db")
+    ea.add_argument("--release-url", default=None)
+    ea.add_argument("--release-id", default=None)
+    ea.add_argument("--as-of", default=None, help="ISO-8601 UTC cutoff")
+    ea.add_argument("--asset-key", default=None, help="optional ISIN:/OTHER: key")
+    ea.add_argument("--limit", type=int, default=100)
+    ea.add_argument(
+        "--allow-gap",
+        action="store_true",
+        help="accept a full snapshot when its daily update cannot reconcile; "
+        "marks coverage gapped and derives the net diff",
+    )
+    ea.set_defaults(func=_cmd_ecb_assets)
     return parser
 
 

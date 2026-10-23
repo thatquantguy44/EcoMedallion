@@ -187,12 +187,77 @@ CREATE TABLE IF NOT EXISTS bronze_fred_api_response (
     response_payload TEXT, observation_count INTEGER, payload_bytes INTEGER,
     ingested_at TEXT
 );
+-- spec011: ECB MID eligible-market-assets release ledger and immutable
+-- attachments.  payload stores the exact downloaded bytes (compressed when
+-- the source attachment is compressed); sha256/md5 are over those bytes.
+CREATE TABLE IF NOT EXISTS bronze_ecb_eligible_asset_release (
+    release_id TEXT PRIMARY KEY, release_url TEXT UNIQUE,
+    release_type TEXT, release_title TEXT,
+    release_at_local TEXT, publication_at_local TEXT,
+    publication_at_utc TEXT, rss_pub_at TEXT,
+    discovered_at TEXT, retrieved_at TEXT, status TEXT,
+    run_id TEXT, error_detail TEXT
+);
+CREATE TABLE IF NOT EXISTS bronze_ecb_eligible_asset_artifact (
+    release_id TEXT, artifact_kind TEXT, file_name TEXT, source_url TEXT,
+    content_type TEXT, encoding TEXT, compressed_bytes INTEGER,
+    uncompressed_bytes INTEGER, sha256 TEXT, md5 TEXT,
+    signature_raw TEXT, signature_status TEXT, signer_subject TEXT,
+    verified_at TEXT, archive_path TEXT, payload BLOB,
+    retrieved_at TEXT, run_id TEXT,
+    PRIMARY KEY (release_id, artifact_kind)
+);
 CREATE TABLE IF NOT EXISTS silver_fred_observation (
     source TEXT NOT NULL DEFAULT 'fred',
     series_id TEXT, observation_date TEXT, realtime_start TEXT,
     realtime_end TEXT, value REAL, raw_value TEXT, is_missing INTEGER,
     row_hash TEXT, revision_number INTEGER, ingested_at TEXT, run_id TEXT,
     PRIMARY KEY (source, series_id, observation_date, realtime_start)
+);
+-- spec011: accepted release coverage, compact SCD2 security versions, and
+-- the independently inspectable per-release change set.
+CREATE TABLE IF NOT EXISTS silver_ecb_eligible_asset_release (
+    release_id TEXT PRIMARY KEY, release_url TEXT,
+    release_at_local TEXT, publication_at_local TEXT,
+    publication_at_utc TEXT, rss_pub_at TEXT,
+    prior_release_id TEXT, is_consecutive INTEGER,
+    full_count INTEGER, update_count INTEGER,
+    new_count INTEGER, updated_count INTEGER, deleted_count INTEGER,
+    parser_version TEXT, source_schema_hash TEXT, dictionary_hash TEXT,
+    reconciliation_status TEXT, coverage_status TEXT,
+    timestamp_precision TEXT, status TEXT,
+    accepted_at TEXT, run_id TEXT
+);
+CREATE TABLE IF NOT EXISTS silver_ecb_eligible_asset_version (
+    asset_key TEXT, isin_code TEXT, other_reg_number TEXT,
+    is_eligible INTEGER,
+    haircut_category TEXT, asset_type TEXT, reference_market TEXT,
+    denomination TEXT, issuance_date TEXT, maturity_date TEXT,
+    issuer_csd TEXT, coupon_definition TEXT, coupon_rate REAL,
+    issuer_name TEXT, issuer_group TEXT, issuer_residence TEXT,
+    guarantor_name TEXT, guarantor_group TEXT, guarantor_residence TEXT,
+    non_own_use_haircut REAL, own_use_haircut REAL,
+    potentially_own_usable_covered_bond TEXT, climate_factor TEXT,
+    source_fields_json TEXT, source_schema_version TEXT, dictionary_hash TEXT,
+    row_hash TEXT, change_type TEXT, change_origin TEXT,
+    valid_from_release_id TEXT, valid_from_utc TEXT,
+    valid_to_release_id TEXT, valid_to_utc TEXT,
+    ingested_at TEXT, run_id TEXT,
+    PRIMARY KEY (asset_key, valid_from_release_id)
+);
+CREATE TABLE IF NOT EXISTS silver_ecb_eligible_asset_change (
+    release_id TEXT, asset_key TEXT,
+    declared_change_type TEXT, computed_change_type TEXT,
+    prior_row_hash TEXT, new_row_hash TEXT,
+    reconciliation_status TEXT, change_origin TEXT,
+    publication_at_utc TEXT, run_id TEXT,
+    PRIMARY KEY (release_id, asset_key)
+);
+CREATE TABLE IF NOT EXISTS silver_ecb_eligible_asset_dictionary (
+    dictionary_hash TEXT, domain TEXT, code TEXT,
+    definition TEXT, short_definition TEXT, attributes_json TEXT,
+    release_id TEXT, ingested_at TEXT,
+    PRIMARY KEY (dictionary_hash, domain, code)
 );
 CREATE TABLE IF NOT EXISTS gold_fred_latest_observation (
     series_id TEXT, observation_date TEXT, value REAL, realtime_start TEXT,
@@ -649,6 +714,35 @@ SELECT cik, ratio_name, observation_date, value,
        ) AS rank_desc
 FROM gold_fred_company_ratios;
 
+-- spec011: consumer-facing ECB eligible-security history.  The history view
+-- intentionally retains ineligible tombstones; current filters them out.
+CREATE VIEW IF NOT EXISTS gold_ecb_eligible_security_history AS
+SELECT v.*,
+       at.definition AS asset_type_label,
+       hc.definition AS haircut_category_label,
+       rm.definition AS reference_market_label,
+       cd.definition AS coupon_definition_label
+FROM silver_ecb_eligible_asset_version v
+LEFT JOIN silver_ecb_eligible_asset_dictionary at
+  ON at.dictionary_hash = v.dictionary_hash
+ AND at.domain = 'assetTypes' AND at.code = v.asset_type
+LEFT JOIN silver_ecb_eligible_asset_dictionary hc
+  ON hc.dictionary_hash = v.dictionary_hash
+ AND hc.domain = 'assetHaircutCategories' AND hc.code = v.haircut_category
+LEFT JOIN silver_ecb_eligible_asset_dictionary rm
+  ON rm.dictionary_hash = v.dictionary_hash
+ AND rm.domain = 'assetReferenceMarkets' AND rm.code = v.reference_market
+LEFT JOIN silver_ecb_eligible_asset_dictionary cd
+  ON cd.dictionary_hash = v.dictionary_hash
+ AND cd.domain = 'assetCouponDefinitions' AND cd.code = v.coupon_definition;
+CREATE VIEW IF NOT EXISTS gold_ecb_eligible_security_current AS
+SELECT * FROM gold_ecb_eligible_security_history
+WHERE valid_to_utc IS NULL AND is_eligible = 1;
+CREATE VIEW IF NOT EXISTS gold_ecb_eligible_security_change AS
+SELECT * FROM silver_ecb_eligible_asset_change;
+CREATE VIEW IF NOT EXISTS gold_ecb_eligible_security_coverage AS
+SELECT * FROM silver_ecb_eligible_asset_release;
+
 -- Tier-7: indexes on the core query paths.
 --
 -- gold_v_latest_revised: ROW_NUMBER() OVER (PARTITION BY series_id ORDER BY realtime_start DESC)
@@ -706,6 +800,14 @@ CREATE INDEX IF NOT EXISTS ix_silver_obs_ingested_at
 -- ix_silver_obs_sid_date carries ingested_at at all.
 CREATE INDEX IF NOT EXISTS ix_silver_obs_sid_ingested
     ON silver_fred_observation(series_id, ingested_at);
+CREATE INDEX IF NOT EXISTS ix_ecb_asset_version_interval
+    ON silver_ecb_eligible_asset_version(asset_key, valid_from_utc, valid_to_utc);
+CREATE INDEX IF NOT EXISTS ix_ecb_asset_version_open
+    ON silver_ecb_eligible_asset_version(valid_to_utc, is_eligible);
+CREATE INDEX IF NOT EXISTS ix_ecb_asset_release_publication
+    ON silver_ecb_eligible_asset_release(publication_at_utc);
+CREATE INDEX IF NOT EXISTS ix_ecb_asset_change_publication
+    ON silver_ecb_eligible_asset_change(publication_at_utc, computed_change_type);
 """
 
 

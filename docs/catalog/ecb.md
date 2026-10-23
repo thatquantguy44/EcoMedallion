@@ -6,6 +6,11 @@ Upstream: European Central Bank Data Portal SDMX API.
 
 Authentication: keyless.
 
+The separate MID eligible-marketable-assets security history is specified in
+[`specs/spec011`](../../specs/spec011/README.md) and ingested with
+`fred_pipeline ecb-assets`. It does not use the SDMX series schema described
+below.
+
 Series id convention:
 
 ```text

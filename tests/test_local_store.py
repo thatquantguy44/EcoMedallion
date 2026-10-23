@@ -135,6 +135,11 @@ def test_local_backend_gold_views_exist_and_match_tables(
         "gold_v_series_revision_summary",
         "gold_v_source_coverage",
         "gold_v_company_ratio_ranks",
+        # spec011 ECB eligible-assets point-in-time consumer views.
+        "gold_ecb_eligible_security_history",
+        "gold_ecb_eligible_security_current",
+        "gold_ecb_eligible_security_change",
+        "gold_ecb_eligible_security_coverage",
         # gold_fred_point_in_time is itself a view now (spec003 section 7) --
         # a pure 1:1 mirror of Silver, identical to gold_v_point_in_time.
         "gold_fred_point_in_time",

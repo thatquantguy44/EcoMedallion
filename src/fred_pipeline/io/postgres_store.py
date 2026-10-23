@@ -64,6 +64,12 @@ _UPSERT_KEYS: dict[str, tuple[str, ...]] = {
         "realtime_start",
     ),
     "audit_etl_run": ("run_id",),
+    "bronze_ecb_eligible_asset_release": ("release_id",),
+    "bronze_ecb_eligible_asset_artifact": ("release_id", "artifact_kind"),
+    "silver_ecb_eligible_asset_release": ("release_id",),
+    "silver_ecb_eligible_asset_version": ("asset_key", "valid_from_release_id"),
+    "silver_ecb_eligible_asset_change": ("release_id", "asset_key"),
+    "silver_ecb_eligible_asset_dictionary": ("dictionary_hash", "domain", "code"),
 }
 
 
@@ -789,6 +795,22 @@ _POSTGRES_INDEX_SQL = (
     CREATE INDEX IF NOT EXISTS ix_silver_obs_sid_ingested
         ON silver.fred_observation(series_id, ingested_at)
     """,
+    """
+    CREATE INDEX IF NOT EXISTS ix_ecb_asset_version_interval
+        ON silver.ecb_eligible_asset_version(asset_key, valid_from_utc, valid_to_utc)
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS ix_ecb_asset_version_open
+        ON silver.ecb_eligible_asset_version(valid_to_utc, is_eligible)
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS ix_ecb_asset_release_publication
+        ON silver.ecb_eligible_asset_release(publication_at_utc)
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS ix_ecb_asset_change_publication
+        ON silver.ecb_eligible_asset_change(publication_at_utc, computed_change_type)
+    """,
 )
 
 _POSTGRES_VIEW_SQL = """
@@ -882,4 +904,34 @@ SELECT cik, ratio_name, observation_date, value,
            PARTITION BY ratio_name, observation_date ORDER BY value DESC
        ) AS rank_desc
 FROM gold.fred_company_ratios;
+
+CREATE OR REPLACE VIEW gold.ecb_eligible_security_history AS
+SELECT v.*,
+       at.definition AS asset_type_label,
+       hc.definition AS haircut_category_label,
+       rm.definition AS reference_market_label,
+       cd.definition AS coupon_definition_label
+FROM silver.ecb_eligible_asset_version v
+LEFT JOIN silver.ecb_eligible_asset_dictionary at
+  ON at.dictionary_hash = v.dictionary_hash
+ AND at.domain = 'assetTypes' AND at.code = v.asset_type
+LEFT JOIN silver.ecb_eligible_asset_dictionary hc
+  ON hc.dictionary_hash = v.dictionary_hash
+ AND hc.domain = 'assetHaircutCategories' AND hc.code = v.haircut_category
+LEFT JOIN silver.ecb_eligible_asset_dictionary rm
+  ON rm.dictionary_hash = v.dictionary_hash
+ AND rm.domain = 'assetReferenceMarkets' AND rm.code = v.reference_market
+LEFT JOIN silver.ecb_eligible_asset_dictionary cd
+  ON cd.dictionary_hash = v.dictionary_hash
+ AND cd.domain = 'assetCouponDefinitions' AND cd.code = v.coupon_definition;
+
+CREATE OR REPLACE VIEW gold.ecb_eligible_security_current AS
+SELECT * FROM gold.ecb_eligible_security_history
+WHERE valid_to_utc IS NULL AND is_eligible = 1;
+
+CREATE OR REPLACE VIEW gold.ecb_eligible_security_change AS
+SELECT * FROM silver.ecb_eligible_asset_change;
+
+CREATE OR REPLACE VIEW gold.ecb_eligible_security_coverage AS
+SELECT * FROM silver.ecb_eligible_asset_release;
 """
