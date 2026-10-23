@@ -3,8 +3,8 @@
 Status: **Phase 1 implemented for forward ingestion; Phase 2 archive bootstrap
 and Phase 3 Spark runtime/production scheduling remain open.**
 
-Last verified: 2026-10-22 (MID RSS, linked release message, signed full/update
-XML and CSV artifacts, dictionary, and a live SQLite ingestion)
+Last verified: 2026-10-23 (2026-10-22 MID release message, signed full/update
+XML and CSV artifacts, dictionary, and live SQLite/PostgreSQL ingestions)
 
 Primary owner: TBD
 
@@ -494,11 +494,14 @@ Delivered in Phase 1:
   release-aligned as-of queries; and
 - Delta Bronze/Silver DDL and Gold view definitions, without a Spark writer.
 
-The 2026-10-22 live release was ingested into a disposable SQLite database:
-all five signatures verified, XML/CSV parity held, and the full list contained
-31,331 securities. Historical archive inventory/backfill, PostgreSQL service
-parity execution, Spark runtime parity, production scheduling/alerts, and the
-named licensing review remain explicit open work.
+The 2026-10-22 live release was ingested independently into SQLite and an
+isolated PostgreSQL 16 database: all five signatures verified, XML/CSV parity
+held, the full list contained 31,331 securities, and dictionary-enriched as-of
+queries returned the same security state. A two-release fixture also proves
+SQLite/PostgreSQL parity across update, deletion, new-security, interval, and
+current-view behavior. Historical archive inventory/backfill, Spark runtime
+parity, production scheduling/alerts, and the named licensing review remain
+explicit open work.
 
 ### Phase 0 — source-contract and security proof
 
