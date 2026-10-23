@@ -125,14 +125,31 @@ The command writes only these new objects:
 
 A successful command returns `status: staged` after interval and final-state
 hash checks. It still does not publish rows to the live ECB tables or Gold.
-Promotion must wait for reconciliation to a signed live full snapshot at the
-same cutoff and an explicit atomic promotion implementation.
+After reviewing every quarantine and proving exact parity to the signed live
+full snapshot at the same cutoff, promote with the exact quarantine count:
+
+```bash
+PYTHONPATH=src python -m fred_pipeline ecb-assets backfill-promote \
+  --backfill-run-id ecb-history-2010-2026 \
+  --acknowledge-quarantines 8 \
+  --env dev
+```
+
+Promotion repeats the parity and interval checks, maps the final archive
+transition onto the matching signed live release ID and exact publication
+timestamp, and replaces the bootstrap-only Silver versions/changes in one
+transaction. A missing or incorrect acknowledgement fails before mutation. Any
+post-merge invariant failure rolls back the transaction. Repeating a successful
+promotion is an idempotent no-op.
 
 The development PostgreSQL proof run `ecb-history-2010-2026` completed through
 `2026-10-22`: 4,248 accepted snapshots, nine missing TARGET dates, eight
 duplicate-key quarantines, 1,964,303 compact versions/changes, and 31,331 final
 assets. Final staged/live key and row hashes matched exactly in both directions;
-duplicate-open and invalid-interval counts were zero.
+duplicate-open and invalid-interval counts were zero. Promotion produced 4,265
+live coverage rows and 1,964,303 live compact versions/changes. The signed
+boundary now records 88 new, 152 updated, and 102 deleted securities; Gold
+current remains 31,331.
 
 ## Health and point-in-time queries
 

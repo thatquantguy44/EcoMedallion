@@ -1177,6 +1177,29 @@ def _cmd_ecb_assets(args: argparse.Namespace) -> int:
         print("ERROR: ecb-assets requires a durable warehouse", file=sys.stderr)
         return 2
 
+    if args.action == "backfill-promote":
+        from fred_pipeline.ecb_archive_promotion import (
+            ECBArchivePromotionError,
+            ECBHistoricalPromoter,
+        )
+
+        if not args.backfill_run_id:
+            print("ERROR: backfill-promote requires --backfill-run-id", file=sys.stderr)
+            warehouse.close()
+            return 2
+        try:
+            result = ECBHistoricalPromoter(warehouse).promote(
+                args.backfill_run_id,
+                acknowledge_quarantines=args.acknowledge_quarantines,
+            )
+            print(json.dumps(result, default=str, indent=2))
+            return 0
+        except ECBArchivePromotionError as exc:
+            print(f"ERROR: {exc}", file=sys.stderr)
+            return 1
+        finally:
+            warehouse.close()
+
     if args.action == "backfill-stage":
         from fred_pipeline.ecb_archive_backfill import (
             ECBArchiveBackfillError,
@@ -1841,6 +1864,7 @@ def build_parser() -> argparse.ArgumentParser:
             "as-of",
             "inventory",
             "backfill-stage",
+            "backfill-promote",
         ],
     )
     ea.add_argument("--env", default="dev", choices=[e.value for e in Environment])
@@ -1899,6 +1923,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--backfill-run-id",
         default=None,
         help="stable staging run id used for resume (default: derived from years)",
+    )
+    ea.add_argument(
+        "--acknowledge-quarantines",
+        type=int,
+        default=None,
+        help="exact quarantined-release count explicitly accepted for promotion",
     )
     ea.add_argument(
         "--restart",

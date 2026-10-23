@@ -2,9 +2,9 @@
 
 Status: **Phase 1 implemented for forward ingestion; the Phase 2 archive
 inventory, reviewed schema registry, and historical row normalizer are
-implemented. The isolated resumable staging rebuild is implemented; boundary
-reconciliation/promotion and Phase 3 Spark runtime/production scheduling remain
-open.**
+implemented. The isolated resumable staging rebuild, exact boundary
+reconciliation, quarantine acknowledgement, and atomic PostgreSQL promotion are
+implemented; Phase 3 Spark runtime/production scheduling remains open.**
 
 Last verified: 2026-10-23 (2026-10-22 MID release message, signed full/update
 XML and CSV artifacts, dictionary, and live SQLite/PostgreSQL ingestions)
@@ -575,10 +575,10 @@ isolated PostgreSQL 16 database: all five signatures verified, XML/CSV parity
 held, the full list contained 31,331 securities, and dictionary-enriched as-of
 queries returned the same security state. A two-release fixture also proves
 SQLite/PostgreSQL parity across update, deletion, new-security, interval, and
-current-view behavior. Full PostgreSQL archive staging and boundary
-reconciliation are now complete. Atomic promotion, Spark runtime parity,
-production scheduling, live alert-delivery proof/runbook, and the named
-licensing review remain explicit open work.
+current-view behavior. Full PostgreSQL archive staging, boundary reconciliation,
+and atomic promotion are now complete. Spark runtime parity, production
+scheduling, live alert-delivery proof/runbook, and the named licensing review
+remain explicit open work.
 
 Live inventory validation found 190 snapshots and one legacy schema in 2010,
 255 snapshots and one modern schema in 2025, and 207 snapshots across two
@@ -622,9 +622,12 @@ and a cutoff before the second fixture release cannot see its changes.
 The annual/current-year inventory, reviewed schema registry, historical
 normalizer, isolated staging schema, resumable chronological rebuild, and gap
 ledger are implemented. The full PostgreSQL staging load and exact boundary
-reconciliation to the signed `2026-10-22` live full snapshot are complete.
-Next, implement the explicit atomic promotion into the live history tables,
-with the same parity and interval checks as transaction preconditions.
+reconciliation to the signed `2026-10-22` live full snapshot are complete. The
+promotion requires an exact quarantine-count acknowledgement, repeats parity
+and interval checks, maps the final date-precision archive transition onto the
+signed live release ID/timestamp, and commits all Silver mutations atomically.
+The promoted run contains 4,265 coverage rows and 1,964,303 compact
+versions/changes; Gold exposes 31,331 current securities.
 
 Exit: the entire available archive is queryable; a report lists accepted,
 missing, and quarantined dates and proves the final state equals the live full
@@ -653,7 +656,7 @@ Gold state live.
 | AC-006 | Tests cover new, update, delete, re-add, no-op, same-day correction, empty IDs, duplicate IDs, bad types, and interrupted transaction recovery |
 | AC-007 | Historical schemas before and after at least one real field addition load with correct null/schema semantics; unknown forward fields fail closed |
 | AC-008 | Archive gaps are visible in coverage output; carried-forward state always exposes the selected source release and gap/freshness status |
-| AC-009 | A full historical staging rebuild produces non-overlapping half-open intervals and reconciles its boundary state to the corresponding ECB full snapshot — staging engine implemented; full live run and boundary reconciliation remain open |
+| AC-009 | A full historical staging rebuild produces non-overlapping half-open intervals and reconciles its boundary state to the corresponding ECB full snapshot — PostgreSQL staging, exact boundary reconciliation, and atomic promotion live-proven through 2026-10-22 |
 | AC-010 | SQLite, PostgreSQL, and Delta return identical sorted row sets and canonical hashes for current, single-security-history, full-universe-as-of, and between-release change queries |
 | AC-011 | A tampered artifact, invalid signature, schema drift, or release/update mismatch is present in Bronze/audit but cannot advance Silver/Gold |
 | AC-012 | Missing RSS delivery can be recovered from the stable latest endpoints/download page without inventing a publication timestamp or duplicating a release |
