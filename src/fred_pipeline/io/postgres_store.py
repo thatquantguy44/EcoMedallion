@@ -683,13 +683,20 @@ def _convert_table_part(part: str) -> str:
     if upper.startswith("PRIMARY KEY"):
         cols = text[text.index("(") + 1 : text.rindex(")")]
         return f"PRIMARY KEY ({_pg_column_list([c.strip() for c in cols.split(',')])})"
+    if upper.startswith("UNIQUE"):
+        cols = text[text.index("(") + 1 : text.rindex(")")]
+        return f"UNIQUE ({_pg_column_list([c.strip() for c in cols.split(',')])})"
 
-    pieces = text.split(None, 2)
-    name = pieces[0]
-    sqlite_type = pieces[1] if len(pieces) > 1 else "TEXT"
-    rest = pieces[2] if len(pieces) > 2 else ""
-    pieces = (_pg_ident(name), _pg_type(sqlite_type), _quote_inline_constraints(rest))
-    return " ".join(p for p in pieces if p)
+    source_parts = text.split(None, 2)
+    name = source_parts[0]
+    sqlite_type = source_parts[1] if len(source_parts) > 1 else "TEXT"
+    rest = source_parts[2] if len(source_parts) > 2 else ""
+    converted_parts = (
+        _pg_ident(name),
+        _pg_type(sqlite_type),
+        _quote_inline_constraints(rest),
+    )
+    return " ".join(part for part in converted_parts if part)
 
 
 def _quote_inline_constraints(rest: str) -> str:

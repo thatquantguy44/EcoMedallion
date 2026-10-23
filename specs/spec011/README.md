@@ -557,15 +557,28 @@ and key/hash parity with zero quarantines. Re-running the completed run returned
 the stored result without downloading or duplicating rows. The proof used a
 temporary SQLite database and did not modify live ECB tables.
 
+The complete 2010-04-08 through 2026-10-22 archive was subsequently staged in
+the development PostgreSQL database under run ID `ecb-history-2010-2026`. The
+55-minute resumable run accepted 4,248 snapshots, recorded nine missing TARGET
+dates, quarantined eight source snapshots with duplicate identifiers, and
+produced 1,964,303 compact versions/changes. The quarantines comprise one
+conflicting-case ISIN on `2012-11-07` and seven `OTHER:MULTI CEDULAS` duplicate
+keys from `2013-03-04` through `2013-03-12`; none advanced the carried state,
+and each later authoritative full snapshot was marked as crossing a gap. The
+final `2026-10-22` staged state contains 31,331 securities, has zero duplicate
+open intervals and zero invalid endpoints, and has exact key/row-hash parity
+with the independently signed live full release (zero rows on either side of
+the bidirectional comparison).
+
 The 2026-10-22 live release was ingested independently into SQLite and an
 isolated PostgreSQL 16 database: all five signatures verified, XML/CSV parity
 held, the full list contained 31,331 securities, and dictionary-enriched as-of
 queries returned the same security state. A two-release fixture also proves
 SQLite/PostgreSQL parity across update, deletion, new-security, interval, and
-current-view behavior. Full live archive staging, boundary reconciliation and
-atomic promotion, Spark runtime parity, production scheduling, live
-alert-delivery proof/runbook, and the named licensing review remain explicit
-open work.
+current-view behavior. Full PostgreSQL archive staging and boundary
+reconciliation are now complete. Atomic promotion, Spark runtime parity,
+production scheduling, live alert-delivery proof/runbook, and the named
+licensing review remain explicit open work.
 
 Live inventory validation found 190 snapshots and one legacy schema in 2010,
 255 snapshots and one modern schema in 2025, and 207 snapshots across two
@@ -608,9 +621,10 @@ and a cutoff before the second fixture release cannot see its changes.
 
 The annual/current-year inventory, reviewed schema registry, historical
 normalizer, isolated staging schema, resumable chronological rebuild, and gap
-ledger are implemented. Next, run the full April 2010 archive staging load,
-reconcile its final state to the signed live full snapshot at the same cutoff,
-and implement the explicit atomic promotion into the live history tables.
+ledger are implemented. The full PostgreSQL staging load and exact boundary
+reconciliation to the signed `2026-10-22` live full snapshot are complete.
+Next, implement the explicit atomic promotion into the live history tables,
+with the same parity and interval checks as transaction preconditions.
 
 Exit: the entire available archive is queryable; a report lists accepted,
 missing, and quarantined dates and proves the final state equals the live full

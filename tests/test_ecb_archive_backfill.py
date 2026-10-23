@@ -219,6 +219,47 @@ def test_unknown_schema_is_quarantined_without_live_or_stage_versions(tmp_path):
         warehouse.close()
 
 
+def test_middle_quarantine_is_bridged_by_next_authoritative_full_snapshot(tmp_path):
+    warehouse = _warehouse(tmp_path)
+    columns = load_schema_registry().schemas[-1].columns
+    bad_columns = [*columns, "SURPRISE"]
+    snapshots = [
+        _snapshot(date(2026, 6, 12), columns, [_row("DE0001")]),
+        _snapshot(date(2026, 6, 15), bad_columns, [_row("DE0001")]),
+        _snapshot(
+            date(2026, 6, 16),
+            columns,
+            [_row("DE0001"), _row("DE0002")],
+        ),
+    ]
+    try:
+        result = ECBHistoricalStagingRebuilder(warehouse).rebuild(
+            snapshots,
+            run_id="quarantine-gap-history",
+            from_date=date(2026, 6, 12),
+            to_date=date(2026, 6, 16),
+        )
+
+        assert result["status"] == "staged"
+        assert result["snapshot_count"] == 2
+        assert result["quarantined_count"] == 1
+        releases = warehouse.query(
+            "SELECT snapshot_date, status, coverage_status, is_consecutive "
+            "FROM silver_ecb_eligible_asset_release_stage WHERE run_id = ? "
+            "ORDER BY snapshot_date",
+            ("quarantine-gap-history",),
+        )
+        assert [(row["snapshot_date"], row["status"]) for row in releases] == [
+            ("2026-06-12", "accepted"),
+            ("2026-06-15", "quarantined"),
+            ("2026-06-16", "accepted"),
+        ]
+        assert releases[-1]["coverage_status"] == "gapped"
+        assert releases[-1]["is_consecutive"] == 0
+    finally:
+        warehouse.close()
+
+
 def test_resume_rejects_changed_bytes_for_an_accepted_snapshot(tmp_path):
     warehouse = _warehouse(tmp_path)
     snapshots = _three_snapshots()

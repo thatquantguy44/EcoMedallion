@@ -602,6 +602,19 @@ def test_upsert_keys_match_the_primary_keys_the_ddl_declares():
         assert declared == columns, flat
 
 
+def test_postgres_ddl_preserves_composite_unique_constraints():
+    from fred_pipeline.io.postgres_store import _postgres_create_table_sql
+
+    sql = _postgres_create_table_sql(
+        "silver",
+        "example",
+        "run_id TEXT, snapshot_date TEXT, UNIQUE (run_id, snapshot_date)",
+    )
+
+    assert 'UNIQUE ("run_id", "snapshot_date")' in sql
+    assert '"UNIQUE" TEXT' not in sql
+
+
 def test_a_database_without_keys_gets_them_back_and_can_upsert(postgres_dsn):
     PostgresWarehouse(_config(), dsn=postgres_dsn).close()
     _drop_all_keys(postgres_dsn)

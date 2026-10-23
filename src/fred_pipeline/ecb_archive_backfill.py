@@ -834,7 +834,25 @@ class ECBHistoricalStagingRebuilder:
                 except Exception as exc:
                     detail = f"{type(exc).__name__}: {exc}"
                     self.repository.quarantine(run_id, snapshot, detail)
-                    raise ECBArchiveBackfillError(detail) from exc
+                    processed[snapshot.snapshot_date.isoformat()] = {
+                        "status": "quarantined",
+                        "release_id": f"archive:{snapshot.snapshot_date.isoformat()}",
+                        "source_entry_sha256": snapshot.entry_sha256,
+                    }
+                    # A later historical full snapshot is authoritative, so a
+                    # malformed snapshot after the initial accepted state can
+                    # be represented as an explicit coverage gap and safely
+                    # bridged by the next valid full diff.  Never guess which
+                    # duplicate/conflicting row to keep.  The first snapshot
+                    # is still fatal because there is no prior state to carry.
+                    if prior_release is None:
+                        raise ECBArchiveBackfillError(detail) from exc
+                    log.warning(
+                        "Quarantined ECB snapshot %s without advancing state: %s",
+                        snapshot.snapshot_date,
+                        detail,
+                    )
+                    continue
                 changes = diff_assets(prior, parsed.rows)
                 self.repository.publish(
                     run_id=run_id,

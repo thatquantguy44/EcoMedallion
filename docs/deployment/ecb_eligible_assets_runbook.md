@@ -108,6 +108,14 @@ snapshot commits independently, so repeating the same command resumes from its
 last staged release. If reviewed inputs or the requested start change, use a
 new run ID. `--restart` deletes only that run's staging rows and rebuilds it.
 
+A malformed snapshot after the first accepted full state is persisted as
+`quarantined` and does not advance security state. Processing continues with
+the next valid authoritative full snapshot, whose release is marked `gapped`
+and non-consecutive. A malformed initial snapshot still fails closed because
+there is no prior state to carry. Never resolve a conflicting duplicate by
+arbitrarily selecting one row; review the quarantine and require exact final
+boundary parity before promotion.
+
 The command writes only these new objects:
 
 - `silver.ecb_eligible_asset_backfill_run`;
@@ -119,6 +127,12 @@ A successful command returns `status: staged` after interval and final-state
 hash checks. It still does not publish rows to the live ECB tables or Gold.
 Promotion must wait for reconciliation to a signed live full snapshot at the
 same cutoff and an explicit atomic promotion implementation.
+
+The development PostgreSQL proof run `ecb-history-2010-2026` completed through
+`2026-10-22`: 4,248 accepted snapshots, nine missing TARGET dates, eight
+duplicate-key quarantines, 1,964,303 compact versions/changes, and 31,331 final
+assets. Final staged/live key and row hashes matched exactly in both directions;
+duplicate-open and invalid-interval counts were zero.
 
 ## Health and point-in-time queries
 
