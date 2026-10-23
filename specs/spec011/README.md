@@ -494,7 +494,9 @@ Delivered in Phase 1:
   release-aligned as-of queries;
 - default polling after `fred_pipeline run` on SQLite/PostgreSQL, with a
   `--no-ecb-assets` operator escape hatch and combined non-zero failure status;
-  and
+- ECB-specific health alerts, using the shared alert routes/transports, for
+  failed or quarantined releases, invalid verification, late publication after
+  a configurable grace period, coverage gaps, and unusual N/U/D volume; and
 - Delta Bronze/Silver DDL and Gold view definitions, without a Spark writer.
 
 The 2026-10-22 live release was ingested independently into SQLite and an
@@ -503,8 +505,8 @@ held, the full list contained 31,331 securities, and dictionary-enriched as-of
 queries returned the same security state. A two-release fixture also proves
 SQLite/PostgreSQL parity across update, deletion, new-security, interval, and
 current-view behavior. Historical archive inventory/backfill, Spark runtime
-parity, production scheduling/alerts, and the named licensing review remain
-explicit open work.
+parity, production scheduling, live alert-delivery proof/runbook, and the named
+licensing review remain explicit open work.
 
 The combined `fred_pipeline run` path was also live-verified against the
 isolated PostgreSQL database: one ECB SDMX series persisted 7,182 observations
@@ -551,9 +553,9 @@ snapshot at the same cutoff.
 ### Phase 3 — Delta parity and production operations
 
 Add Delta DDL/MERGE behavior, partitioning/clustering chosen from measurements,
-Spark parity tests, scheduled RSS polling, alerts, runbook, replay, backup, and
-restore. Benchmark archive rebuild and common point-in-time queries on all
-three backends before choosing optimization layout.
+Spark parity tests, scheduled RSS polling, live alert-delivery proof, runbook,
+replay, backup, and restore. Benchmark archive rebuild and common point-in-time
+queries on all three backends before choosing optimization layout.
 
 Exit: SQLite, PostgreSQL, and Delta return identical ordered rows and hashes for
 the same fixture cutoffs, and a failed/quarantined release leaves the prior

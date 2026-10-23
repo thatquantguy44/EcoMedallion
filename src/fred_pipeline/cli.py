@@ -33,6 +33,7 @@ import datetime as _dt
 import json
 import logging
 import sys
+from typing import Any
 
 from fred_pipeline.config import Environment, PipelineConfig
 from fred_pipeline.manifest import all_series, load_manifests
@@ -831,11 +832,23 @@ def _cmd_run(args: argparse.Namespace) -> int:
                     "status": "succeeded",
                     "releases": releases,
                 }
+                _send_ecb_assets_health_alert(
+                    config,
+                    warehouse,
+                    action="poll",
+                    results=releases,
+                )
             except Exception as exc:  # noqa: BLE001 - reflected in run exit/status
                 ecb_assets_result = {
                     "status": "failed",
                     "error": str(exc),
                 }
+                _send_ecb_assets_health_alert(
+                    config,
+                    warehouse,
+                    action="poll",
+                    error=str(exc),
+                )
     finally:
         if warehouse is not None:
             warehouse.close()
@@ -872,6 +885,34 @@ def _poll_ecb_assets_for_run(config: PipelineConfig, warehouse) -> list[dict]:
     )
     pipeline = ECBEligibleAssetsPipeline(warehouse, client=client)
     return [result.to_dict() for result in pipeline.poll()]
+
+
+def _send_ecb_assets_health_alert(
+    config: PipelineConfig,
+    warehouse,
+    *,
+    action: str,
+    results: list[dict] | None = None,
+    error: str = "",
+) -> bool:
+    """Send the ECB-specific health alert without affecting ingestion."""
+    from fred_pipeline.ecb_eligible_assets import ECBEligibleAssetRepository
+    from fred_pipeline.governance.ecb_alerting import send_ecb_assets_alert
+
+    status: dict[str, object] = {}
+    health_error = error
+    try:
+        status = ECBEligibleAssetRepository(warehouse).status()
+    except Exception as exc:  # noqa: BLE001 - alerting must not fail the run
+        if not health_error:
+            health_error = f"could not read ECB health status: {exc}"
+    return send_ecb_assets_alert(
+        action=action,
+        results=results or [],
+        status=status,
+        error=health_error,
+        environment=config.environment.value,
+    )
 
 
 def _cmd_gold(args: argparse.Namespace) -> int:
@@ -1108,8 +1149,30 @@ def _cmd_ecb_assets(args: argparse.Namespace) -> int:
         else:
             result = repository.status()
         print(json.dumps(result, default=str, indent=2))
+        if args.action in {"poll", "ingest-release", "verify"}:
+            if isinstance(result, list):
+                alert_rows: list[dict[str, Any]] = [
+                    row for row in result if isinstance(row, dict)
+                ]
+            elif isinstance(result, dict):
+                alert_rows = [result]
+            else:
+                alert_rows = []
+            _send_ecb_assets_health_alert(
+                config,
+                warehouse,
+                action=args.action,
+                results=alert_rows,
+            )
         return 0
     except Exception as exc:  # noqa: BLE001 - CLI reports source/quarantine errors
+        if args.action in {"poll", "ingest-release", "verify"}:
+            _send_ecb_assets_health_alert(
+                config,
+                warehouse,
+                action=args.action,
+                error=str(exc),
+            )
         print(f"ERROR: {exc}", file=sys.stderr)
         return 1
     finally:

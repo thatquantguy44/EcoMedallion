@@ -629,7 +629,11 @@ CI**, green on the latest commit). Highlights: **thirteen pluggable sources**
 `source` in the natural key and source-aware Bronze lineage + replay;
 **API-driven FRED discovery**; **metadata governance** (drift + lifecycle vs.
 live FRED); **incremental loads** (full-on-first-run, then restate last N);
-**replay-from-Bronze** rebuild; **stage tracking + run-summary email alerting** (Outlook/Microsoft 365 SMTP, Microsoft Graph, or a Slack-compatible webhook — reports *which phase* failed, so a run whose Gold rebuild broke is no longer reported as a success); richer **data quality**
+**replay-from-Bronze** rebuild; **stage tracking + run-summary email alerting**
+(Outlook/Microsoft 365 SMTP, Microsoft Graph, or a Slack-compatible webhook —
+reports *which phase* failed, so a run whose Gold rebuild broke is no longer
+reported as a success); **ECB eligible-assets health alerts** for late, gapped,
+quarantined, failed, signature-invalid, or unusually large releases; richer **data quality**
 (freshness + value bounds); **quant Gold features** (MoM/YoY/diff/z-score, curve
 spreads, **frequency-aware N-leg cross-series features** — `config/cross_series.yml`,
 as-of alignment for cross-source/cross-frequency spreads/ratios/composites,

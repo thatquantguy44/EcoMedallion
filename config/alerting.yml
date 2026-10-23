@@ -44,6 +44,17 @@ attach_run_json: false
 # Cap on failing series listed in the body before it truncates.
 max_failures_listed: 25
 
+# ECB eligible-assets health rules. Delivery still obeys the master `enabled`,
+# `policy`, `environments`, transport, and routes above. A late or gapped feed
+# is PARTIAL; a failed/quarantined release or invalid signature is FAILURE.
+ecb_assets:
+  enabled: true
+  expected_release_time_local: "18:15"
+  grace_period_minutes: 180
+  max_change_percent: 20.0
+  alert_on_gap: true
+  alert_on_quarantine: true
+
 # ---------------------------------------------------------------------------
 # TRANSPORT — pick one `kind`.
 #

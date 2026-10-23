@@ -55,7 +55,22 @@ The existing Slack webhook in `governance/notify.py` is **unchanged** and still
 fires independently. This is an additional channel with a richer payload, not a
 replacement — a team already reading the webhook loses nothing.
 
-### 2.1 Stages
+### 2.1 ECB eligible-assets alerts
+
+The eligible-assets poll runs after the observation pipeline, so it has a
+dedicated health assessment in `governance/ecb_alerting.py`. It reuses this
+file's master switch, policy, environments, routes, and transport, while adding
+an `[ECB]` subject tag and ECB-specific details. Both the default `run` command
+and standalone `ecb-assets poll`, `ingest-release`, and `verify` commands invoke
+it.
+
+The `ecb_assets` block controls the expected 18:15 Europe/Berlin publication
+time, grace period, large-change threshold, and gap/quarantine alerts. TARGET
+weekends and closing days are excluded from freshness expectations. A late,
+gapped, or unusually large release is `partial`; a failed/quarantined release,
+invalid signature, or missing accepted baseline is `failure`.
+
+### 2.2 Stages
 
 `EXPECTED_STAGES` declares the phases `run()` actually has:
 
@@ -77,7 +92,7 @@ only read the stages that reported.
 does not discard a run whose ingestion succeeded — but the failure is now
 *recorded* rather than only logged.
 
-### 2.2 The verdict
+### 2.3 The verdict
 
 `overall_verdict(records, series_failed, series_total)` returns
 `(verdict, reason)`:

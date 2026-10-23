@@ -69,16 +69,25 @@ def test_run_parser_enables_ecb_assets_by_default_and_allows_opt_out():
 def test_run_polls_ecb_assets_by_default(monkeypatch, capsys):
     warehouse = _install_run_fakes(monkeypatch)
     calls = []
+    alerts = []
 
     def poll(config, selected_warehouse):
         calls.append((config, selected_warehouse))
         return [{"release_id": "release-one", "status": "accepted"}]
 
     monkeypatch.setattr(cli, "_poll_ecb_assets_for_run", poll)
+    monkeypatch.setattr(
+        cli,
+        "_send_ecb_assets_health_alert",
+        lambda *args, **kwargs: alerts.append((args, kwargs)),
+    )
     args = cli.build_parser().parse_args(["run"])
 
     assert cli._cmd_run(args) == 0
     assert len(calls) == 1
+    assert len(alerts) == 1
+    assert alerts[0][1]["action"] == "poll"
+    assert alerts[0][1]["results"][0]["release_id"] == "release-one"
     assert calls[0][1] is warehouse
     assert warehouse.closed
     output = capsys.readouterr().out
@@ -88,15 +97,23 @@ def test_run_polls_ecb_assets_by_default(monkeypatch, capsys):
 
 def test_run_reports_ecb_poll_failure_and_closes_warehouse(monkeypatch, capsys):
     warehouse = _install_run_fakes(monkeypatch)
+    alerts = []
 
     def fail(_config, _warehouse):
         raise RuntimeError("MID unavailable")
 
     monkeypatch.setattr(cli, "_poll_ecb_assets_for_run", fail)
+    monkeypatch.setattr(
+        cli,
+        "_send_ecb_assets_health_alert",
+        lambda *args, **kwargs: alerts.append((args, kwargs)),
+    )
     args = cli.build_parser().parse_args(["run"])
 
     assert cli._cmd_run(args) == 1
     assert warehouse.closed
+    assert len(alerts) == 1
+    assert alerts[0][1]["error"] == "MID unavailable"
     output = capsys.readouterr().out
     assert '"status": "failed"' in output
     assert "MID unavailable" in output
