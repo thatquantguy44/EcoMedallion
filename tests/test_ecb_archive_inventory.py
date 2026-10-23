@@ -78,6 +78,10 @@ def test_inventory_reads_legacy_tgz_schema_and_target_date_gaps(tmp_path):
     assert report["snapshots"][0]["entry_format"] == "tgz"
     assert report["snapshots"][0]["encoding"] == "utf-16"
     assert report["snapshots"][0]["row_count"] == 2
+    assert report["row_count_snapshot_count"] == 3
+    assert report["row_count_total"] == 6
+    assert report["schemas"][0]["row_count_min"] == 2
+    assert report["schemas"][0]["row_count_max"] == 2
     assert report["missing_expected_dates"] == ["2010-04-12"]
 
 
@@ -114,6 +118,7 @@ def test_inventory_reads_modern_csv_gzip_and_groups_schema_versions(tmp_path):
     assert report["schema_count"] == 2
     assert report["unsupported_members"] == ["2025/readme.txt"]
     assert "snapshots" not in report
+    assert report["row_count_total"] is None
     assert all(schema["encodings"] == ["utf-16"] for schema in report["schemas"])
 
 

@@ -281,16 +281,24 @@ def _build_year_report(
                 "snapshot_count": 0,
                 "first_snapshot_date": row["snapshot_date"],
                 "last_snapshot_date": row["snapshot_date"],
+                "_row_counts": [],
             },
         )
         group["encodings"].add(row["encoding"])
         group["formats"].add(row["entry_format"])
         group["snapshot_count"] += 1
         group["last_snapshot_date"] = row["snapshot_date"]
+        if row.get("row_count") is not None:
+            group["_row_counts"].append(int(row["row_count"]))
     schemas = []
     for group in schema_groups.values():
         group["encodings"] = sorted(group["encodings"])
         group["formats"] = sorted(group["formats"])
+        row_counts = group.pop("_row_counts")
+        group["row_count_snapshot_count"] = len(row_counts)
+        group["row_count_min"] = min(row_counts) if row_counts else None
+        group["row_count_max"] = max(row_counts) if row_counts else None
+        group["row_count_total"] = sum(row_counts) if row_counts else None
         schemas.append(group)
     schemas.sort(key=lambda row: (row["first_snapshot_date"], row["schema_hash"]))
 
@@ -314,6 +322,12 @@ def _build_year_report(
         "schema_count": len(schemas),
         "schemas": schemas,
         "snapshot_error_count": len(errors),
+        "row_count_snapshot_count": sum(
+            row.get("row_count") is not None for row in snapshots
+        ),
+        "row_count_total": sum(int(row.get("row_count") or 0) for row in snapshots)
+        if any(row.get("row_count") is not None for row in snapshots)
+        else None,
     }
     if include_snapshots:
         report["snapshots"] = snapshots
@@ -756,6 +770,14 @@ class ECBArchiveInventoryClient:
                 "missing_expected_date_count": sum(
                     len(row.get("missing_expected_dates") or []) for row in years
                 ),
+                "row_count_snapshot_count": sum(
+                    int(row.get("row_count_snapshot_count") or 0) for row in years
+                ),
+                "row_count_total": sum(
+                    int(row.get("row_count_total") or 0) for row in years
+                )
+                if any(row.get("row_count_total") is not None for row in years)
+                else None,
             },
             "years": years,
         }
