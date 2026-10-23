@@ -1103,18 +1103,23 @@ def _cmd_ecb_assets(args: argparse.Namespace) -> int:
             ECBArchiveInventoryClient,
             ECBArchiveInventoryError,
         )
+        from fred_pipeline.ecb_asset_schema_registry import (
+            ECBHistoricalSchemaError,
+            load_schema_registry,
+            validate_inventory_report,
+        )
 
         if args.max_archive_mb <= 0:
             print("ERROR: --max-archive-mb must be greater than zero", file=sys.stderr)
             return 2
-        client = ECBArchiveInventoryClient(
+        inventory_client = ECBArchiveInventoryClient(
             timeout=config.request_timeout_seconds,
             max_retries=config.max_retries,
             max_archive_bytes=int(args.max_archive_mb * 1024 * 1024),
             rate_limit_per_minute=min(config.rate_limit_per_minute, 60),
         )
         try:
-            report = client.inventory(
+            report = inventory_client.inventory(
                 from_year=args.from_year,
                 to_year=args.to_year,
                 deep=args.deep,
@@ -1123,6 +1128,17 @@ def _cmd_ecb_assets(args: argparse.Namespace) -> int:
         except ECBArchiveInventoryError as exc:
             print(f"ERROR: {exc}", file=sys.stderr)
             return 2
+        try:
+            registry = load_schema_registry(args.schema_registry)
+            report["schema_registry_validation"] = validate_inventory_report(
+                report, registry
+            )
+        except ECBHistoricalSchemaError as exc:
+            report["schema_registry_validation"] = {
+                "status": "failed",
+                "registry_path": args.schema_registry,
+                "error": str(exc),
+            }
         rendered = json.dumps(report, default=str, indent=2)
         if args.output:
             output_path = Path(args.output)
@@ -1142,6 +1158,7 @@ def _cmd_ecb_assets(args: argparse.Namespace) -> int:
         unhealthy = (
             report["summary"]["failed_year_count"]
             or report["summary"]["partial_year_count"]
+            or report["schema_registry_validation"]["status"] != "valid"
         )
         return 1 if unhealthy else 0
 
@@ -1807,6 +1824,11 @@ def build_parser() -> argparse.ArgumentParser:
         type=float,
         default=1024.0,
         help="compressed size safety limit for one annual ZIP (default: 1024)",
+    )
+    ea.add_argument(
+        "--schema-registry",
+        default="config/ecb_eligible_asset_schemas.yml",
+        help="reviewed historical schema registry used to validate inventory output",
     )
     ea.add_argument(
         "--allow-gap",

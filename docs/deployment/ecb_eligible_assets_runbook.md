@@ -6,9 +6,10 @@ point-in-time history of securities appearing on the ECB's List of eligible
 marketable assets. It does not independently determine legal collateral
 eligibility.
 
-Phase 1 supports SQLite and PostgreSQL forward ingestion. Historical archive
-bootstrap and the Spark/Delta writer remain later phases; the checked-in Delta
-DDL is a schema contract, not a production writer.
+Phase 1 supports SQLite and PostgreSQL forward ingestion. Phase 2 can inventory
+and normalize registered historical archive schemas, but the atomic staging
+backfill is not implemented yet. The Spark/Delta writer also remains a later
+phase; the checked-in Delta DDL is a schema contract, not a production writer.
 
 ## Prerequisites
 
@@ -70,6 +71,28 @@ Phase 3 replaces that skip with the Delta writer.
 
 The repository does not ship a separate enabled ECB schedule: deployment
 owners must choose any additional retry cadence and alert destination.
+
+## Historical archive inventory and schema review
+
+Inventorying is read-only and does not initialize or modify a warehouse:
+
+```bash
+PYTHONPATH=src python -m fred_pipeline ecb-assets inventory \
+  --from-year 2010 --summary-only \
+  --output /path/to/ecb_archive_inventory.json
+```
+
+The command checks every observed column set against
+`config/ecb_eligible_asset_schemas.yml`. It exits non-zero if a header is
+unknown, its registered validity range drifts, or the registry itself is
+invalid. The JSON output retains `schema_registry_validation` even on failure
+so an operator can review the new source schema before changing mappings.
+Use `--schema-registry PATH` only to test a separately reviewed candidate.
+
+The checked-in historical parser normalizes registered snapshots and preserves
+every original source field in `source_fields_json`. It does not publish rows
+to PostgreSQL yet; production history must wait for the chronological staging
+rebuild and atomic parity checks required by Spec 011.
 
 ## Health and point-in-time queries
 

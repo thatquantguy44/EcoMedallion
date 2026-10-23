@@ -1,8 +1,9 @@
 # Spec 011: Point-in-Time ECB Eligible Marketable Securities
 
 Status: **Phase 1 implemented for forward ingestion; the Phase 2 archive
-inventory is implemented, while historical normalization/backfill and Phase 3
-Spark runtime/production scheduling remain open.**
+inventory, reviewed schema registry, and historical row normalizer are
+implemented, while staged historical backfill and Phase 3 Spark
+runtime/production scheduling remain open.**
 
 Last verified: 2026-10-23 (2026-10-22 MID release message, signed full/update
 XML and CSV artifacts, dictionary, and live SQLite/PostgreSQL ingestions)
@@ -476,8 +477,9 @@ python -m fred_pipeline ecb-assets as-of --as-of <ISO-8601 UTC timestamp>
 stored attachment signatures and signed MD5 comparison without mutating
 accepted data. `status` emits JSON with the latest accepted release,
 quarantine reasons, and current row count. Phase 2 now provides the read-only
-`inventory` command; archive `backfill` and resumable content-hash checkpoints
-remain to be added. Phase 3 expands
+`inventory` command and validates every observed header against the checked-in
+registry; archive `backfill` and resumable content-hash checkpoints remain to
+be added. Phase 3 expands
 `verify` to replay parsing, reconciliation, and interval invariants.
 
 ## 9. Phased implementation plan
@@ -514,14 +516,29 @@ Delivered as the first Phase 2 slice:
   does not publish `/archive/YYYY.zip` until the year is complete; and
 - JSON stdout/file output with summary-only and deep-inventory modes.
 
+Delivered as the second Phase 2 slice:
+
+- a checked-in, order-sensitive registry for all seven schemas observed across
+  the 4,256 snapshots available from 2010-04-08 through 2026-10-22;
+- explicit first/last-seen ranges, source-to-canonical mappings, intentionally
+  unmapped fields, and raw-field preservation for every schema;
+- boundary evidence for the legacy `COUNTRY_OF_LOCATION`/`ISSUER_CSD` and
+  `LIQUIDITY_CLASS`/`HAIRCUT_CATEGORY` transitions;
+- a historical UTF-16/gzip CSV normalizer that applies the same canonical
+  date, numeric, code, identifier, and row-hash rules as forward ingestion;
+- fail-closed rejection of unknown headers, header-hash drift, range drift,
+  duplicate identifiers, and incomplete/ambiguous registry mappings; and
+- automatic registry validation in `ecb-assets inventory`, with a non-zero
+  result when an observed schema is not reviewed.
+
 The 2026-10-22 live release was ingested independently into SQLite and an
 isolated PostgreSQL 16 database: all five signatures verified, XML/CSV parity
 held, the full list contained 31,331 securities, and dictionary-enriched as-of
 queries returned the same security state. A two-release fixture also proves
 SQLite/PostgreSQL parity across update, deletion, new-security, interval, and
-current-view behavior. Historical schema registration/parsing and backfill,
-Spark runtime parity, production scheduling, live alert-delivery proof/runbook,
-and the named licensing review remain explicit open work.
+current-view behavior. Historical staging/backfill, Spark runtime parity,
+production scheduling, live alert-delivery proof/runbook, and the named
+licensing review remain explicit open work.
 
 Live inventory validation found 190 snapshots and one legacy schema in 2010,
 255 snapshots and one modern schema in 2025, and 207 snapshots across two
@@ -562,11 +579,11 @@ and a cutoff before the second fixture release cannot see its changes.
 
 ### Phase 2 — archive bootstrap and gap semantics
 
-The annual/current-year inventory is implemented. Next, implement the reviewed
-schema registry, historical parsers, staging rebuild, coverage ledger, schema
-migrations, and reconciliation to a live full snapshot. Backfill from April
-2010 through the forward-ingestion boundary, with every gap and date-precision
-timestamp explicit.
+The annual/current-year inventory, reviewed schema registry, and historical
+normalizer are implemented. Next, implement the staging rebuild, coverage
+ledger, schema migrations, and reconciliation to a live full snapshot.
+Backfill from April 2010 through the forward-ingestion boundary, with every gap
+and date-precision timestamp explicit.
 
 Exit: the entire available archive is queryable; a report lists accepted,
 missing, and quarantined dates and proves the final state equals the live full

@@ -1,0 +1,374 @@
+version: 1
+
+inventory:
+  generated_at_utc: "2026-10-23T05:26:17.866237+00:00"
+  source: "ECB eligible marketable assets annual archives"
+  from_year: 2010
+  to_year: 2026
+  snapshot_count: 4256
+  schema_count: 7
+
+canonical_fields:
+  - isin_code
+  - other_reg_number
+  - haircut_category
+  - asset_type
+  - reference_market
+  - denomination
+  - issuance_date
+  - maturity_date
+  - issuer_csd
+  - coupon_definition
+  - coupon_rate
+  - issuer_name
+  - issuer_group
+  - issuer_residence
+  - guarantor_name
+  - guarantor_group
+  - guarantor_residence
+  - non_own_use_haircut
+  - own_use_haircut
+  - potentially_own_usable_covered_bond
+  - climate_factor
+
+schemas:
+  - schema_id: ecb_mid_history_v1_20100408
+    source_schema_hash: 7e7f9310994b8ef0dccf2a76946285648ccf47a916b8236833014989f009f330
+    observed_from: 2010-04-08
+    observed_through: 2013-07-26
+    valid_to: 2013-07-26
+    formats: [tgz, csv.gz]
+    encodings: [utf-16]
+    columns: &legacy_v1_columns
+      - ISIN_CODE
+      - OTHER_REG_NUMBER
+      - LIQUIDITY_CLASS
+      - TYPE
+      - REFERENCE_MARKET
+      - PRICE_SPECIFICATION
+      - DENOMINATION
+      - ISSUANCE_DATE
+      - MATURITY_DATE
+      - COUNTRY_OF_LOCATION
+      - COUPON_RATE (%)
+      - ISSUER_NAME
+      - ISSUER_OTHER_NAME
+      - ISSUER_RESIDENCE
+      - ISSUER_GROUP
+      - GUARANTOR_NAME
+      - GUARANTOR_OTHER_NAME
+      - GUARANTOR_RESIDENCE
+      - GUARANTOR_GROUP
+      - COUPON_DEFINITION
+      - VALUATION_HAIRCUT
+      - UCITS_COMPLIANT
+    mappings: &legacy_country_mappings
+      ISIN_CODE: isin_code
+      OTHER_REG_NUMBER: other_reg_number
+      LIQUIDITY_CLASS: haircut_category
+      TYPE: asset_type
+      REFERENCE_MARKET: reference_market
+      DENOMINATION: denomination
+      ISSUANCE_DATE: issuance_date
+      MATURITY_DATE: maturity_date
+      COUNTRY_OF_LOCATION: issuer_csd
+      COUPON_RATE (%): coupon_rate
+      ISSUER_NAME: issuer_name
+      ISSUER_RESIDENCE: issuer_residence
+      ISSUER_GROUP: issuer_group
+      GUARANTOR_NAME: guarantor_name
+      GUARANTOR_RESIDENCE: guarantor_residence
+      GUARANTOR_GROUP: guarantor_group
+      COUPON_DEFINITION: coupon_definition
+      VALUATION_HAIRCUT: non_own_use_haircut
+    intentionally_unmapped:
+      PRICE_SPECIFICATION: "No current canonical equivalent; retained in source_fields_json."
+      ISSUER_OTHER_NAME: "No current canonical equivalent; retained in source_fields_json."
+      GUARANTOR_OTHER_NAME: "No current canonical equivalent; retained in source_fields_json."
+      UCITS_COMPLIANT: "Retired eligibility attribute; retained in source_fields_json."
+    notes: >-
+      Initial archive schema. LIQUIDITY_CLASS and VALUATION_HAIRCUT are the
+      observed predecessors of HAIRCUT_CATEGORY and HAIRCUT. The exact
+      COUNTRY_OF_LOCATION values continue in ISSUER_CSD at the 2014-05-21
+      boundary; the original field remains preserved in source_fields_json.
+
+  - schema_id: ecb_mid_history_v2_20130729
+    source_schema_hash: c1f2b44efbad7a594d47dc337095ce60c6c122f8c3c293f8131c494d76fc5cf8
+    observed_from: 2013-07-29
+    observed_through: 2014-05-20
+    valid_to: 2014-05-20
+    formats: [csv.gz]
+    encodings: [utf-16]
+    columns:
+      - ISIN_CODE
+      - OTHER_REG_NUMBER
+      - LIQUIDITY_CLASS
+      - TYPE
+      - REFERENCE_MARKET
+      - PRICE_SPECIFICATION
+      - DENOMINATION
+      - ISSUANCE_DATE
+      - MATURITY_DATE
+      - COUNTRY_OF_LOCATION
+      - COUPON_RATE (%)
+      - ISSUER_NAME
+      - ISSUER_OTHER_NAME
+      - ISSUER_RESIDENCE
+      - ISSUER_GROUP
+      - GUARANTOR_NAME
+      - GUARANTOR_OTHER_NAME
+      - GUARANTOR_RESIDENCE
+      - GUARANTOR_GROUP
+      - COUPON_DEFINITION
+      - VALUATION_HAIRCUT
+      - CRD_OR_EQUIVALENT
+    mappings: *legacy_country_mappings
+    intentionally_unmapped:
+      PRICE_SPECIFICATION: "No current canonical equivalent; retained in source_fields_json."
+      ISSUER_OTHER_NAME: "No current canonical equivalent; retained in source_fields_json."
+      GUARANTOR_OTHER_NAME: "No current canonical equivalent; retained in source_fields_json."
+      CRD_OR_EQUIVALENT: "Retired eligibility attribute; retained in source_fields_json."
+    notes: "UCITS_COMPLIANT was replaced by CRD_OR_EQUIVALENT."
+
+  - schema_id: ecb_mid_history_v3_20140521
+    source_schema_hash: 00ab0f979facc7d7808af7751e5ab7c9f50dda9137fee00ec771cbbaffc39a72
+    observed_from: 2014-05-21
+    observed_through: 2014-09-16
+    valid_to: 2014-09-16
+    formats: [csv.gz]
+    encodings: [utf-16]
+    columns: &legacy_csd_columns
+      - ISIN_CODE
+      - OTHER_REG_NUMBER
+      - LIQUIDITY_CLASS
+      - TYPE
+      - REFERENCE_MARKET
+      - DENOMINATION
+      - ISSUANCE_DATE
+      - MATURITY_DATE
+      - ISSUER_CSD
+      - COUPON_RATE (%)
+      - ISSUER_NAME
+      - ISSUER_OTHER_NAME
+      - ISSUER_RESIDENCE
+      - ISSUER_GROUP
+      - GUARANTOR_NAME
+      - GUARANTOR_OTHER_NAME
+      - GUARANTOR_RESIDENCE
+      - GUARANTOR_GROUP
+      - COUPON_DEFINITION
+      - VALUATION_HAIRCUT
+      - CRD_OR_EQUIVALENT
+    mappings: &legacy_csd_mappings
+      ISIN_CODE: isin_code
+      OTHER_REG_NUMBER: other_reg_number
+      LIQUIDITY_CLASS: haircut_category
+      TYPE: asset_type
+      REFERENCE_MARKET: reference_market
+      DENOMINATION: denomination
+      ISSUANCE_DATE: issuance_date
+      MATURITY_DATE: maturity_date
+      ISSUER_CSD: issuer_csd
+      COUPON_RATE (%): coupon_rate
+      ISSUER_NAME: issuer_name
+      ISSUER_RESIDENCE: issuer_residence
+      ISSUER_GROUP: issuer_group
+      GUARANTOR_NAME: guarantor_name
+      GUARANTOR_RESIDENCE: guarantor_residence
+      GUARANTOR_GROUP: guarantor_group
+      COUPON_DEFINITION: coupon_definition
+      VALUATION_HAIRCUT: non_own_use_haircut
+    intentionally_unmapped: &legacy_other_names_crd
+      ISSUER_OTHER_NAME: "No current canonical equivalent; retained in source_fields_json."
+      GUARANTOR_OTHER_NAME: "No current canonical equivalent; retained in source_fields_json."
+      CRD_OR_EQUIVALENT: "Retired eligibility attribute; retained in source_fields_json."
+    notes: >-
+      PRICE_SPECIFICATION was removed and COUNTRY_OF_LOCATION became ISSUER_CSD;
+      matching securities retain the same values at the transition boundary.
+
+  - schema_id: ecb_mid_history_v4_20140917
+    source_schema_hash: 1d435dcc1e88f1309803cf9fb00ecb59e47d0bfcee29276a1aabf95ba37e7e7c
+    observed_from: 2014-09-17
+    observed_through: 2015-09-21
+    valid_to: 2015-09-21
+    formats: [csv.gz]
+    encodings: [utf-16]
+    columns:
+      - ISIN_CODE
+      - OTHER_REG_NUMBER
+      - LIQUIDITY_CLASS
+      - TYPE
+      - REFERENCE_MARKET
+      - DENOMINATION
+      - ISSUANCE_DATE
+      - MATURITY_DATE
+      - ISSUER_CSD
+      - COUPON_RATE (%)
+      - ISSUER_NAME
+      - ISSUER_OTHER_NAME
+      - ISSUER_RESIDENCE
+      - ISSUER_GROUP
+      - GUARANTOR_NAME
+      - GUARANTOR_OTHER_NAME
+      - GUARANTOR_RESIDENCE
+      - GUARANTOR_GROUP
+      - COUPON_DEFINITION
+      - VALUATION_HAIRCUT
+      - OWN_USE_COVERED_BONDS
+    mappings:
+      <<: *legacy_csd_mappings
+      OWN_USE_COVERED_BONDS: potentially_own_usable_covered_bond
+    intentionally_unmapped:
+      ISSUER_OTHER_NAME: "No current canonical equivalent; retained in source_fields_json."
+      GUARANTOR_OTHER_NAME: "No current canonical equivalent; retained in source_fields_json."
+    notes: >-
+      CRD_OR_EQUIVALENT was replaced by OWN_USE_COVERED_BONDS. ISSUER_CSD codes
+      became more granular at this boundary, so original values remain preserved.
+
+  - schema_id: ecb_mid_history_v5_20150922
+    source_schema_hash: 708648716d356f14af3f91e40dea6fb1832fe1f99f080578ee34102a921b7ee7
+    observed_from: 2015-09-22
+    observed_through: 2020-01-30
+    valid_to: 2020-01-30
+    formats: [csv.gz]
+    encodings: [utf-16]
+    columns:
+      - ISIN_CODE
+      - OTHER_REG_NUMBER
+      - HAIRCUT_CATEGORY
+      - TYPE
+      - REFERENCE_MARKET
+      - DENOMINATION
+      - ISSUANCE_DATE
+      - MATURITY_DATE
+      - ISSUER_CSD
+      - COUPON_RATE (%)
+      - ISSUER_NAME
+      - ISSUER_OTHER_NAME
+      - ISSUER_RESIDENCE
+      - ISSUER_GROUP
+      - GUARANTOR_NAME
+      - GUARANTOR_OTHER_NAME
+      - GUARANTOR_RESIDENCE
+      - GUARANTOR_GROUP
+      - COUPON_DEFINITION
+      - HAIRCUT
+      - HAIRCUT_OWN_USE
+      - OWN_USE_COVERED_BONDS
+    mappings: &modern_with_other_names_mappings
+      ISIN_CODE: isin_code
+      OTHER_REG_NUMBER: other_reg_number
+      HAIRCUT_CATEGORY: haircut_category
+      TYPE: asset_type
+      REFERENCE_MARKET: reference_market
+      DENOMINATION: denomination
+      ISSUANCE_DATE: issuance_date
+      MATURITY_DATE: maturity_date
+      ISSUER_CSD: issuer_csd
+      COUPON_RATE (%): coupon_rate
+      ISSUER_NAME: issuer_name
+      ISSUER_RESIDENCE: issuer_residence
+      ISSUER_GROUP: issuer_group
+      GUARANTOR_NAME: guarantor_name
+      GUARANTOR_RESIDENCE: guarantor_residence
+      GUARANTOR_GROUP: guarantor_group
+      COUPON_DEFINITION: coupon_definition
+      HAIRCUT: non_own_use_haircut
+      HAIRCUT_OWN_USE: own_use_haircut
+      OWN_USE_COVERED_BONDS: potentially_own_usable_covered_bond
+    intentionally_unmapped:
+      ISSUER_OTHER_NAME: "No current canonical equivalent; retained in source_fields_json."
+      GUARANTOR_OTHER_NAME: "No current canonical equivalent; retained in source_fields_json."
+    notes: >-
+      LIQUIDITY_CLASS became HAIRCUT_CATEGORY and VALUATION_HAIRCUT became
+      HAIRCUT. All 31,571 securities common to the boundary snapshots kept the
+      same category value. HAIRCUT_OWN_USE was added.
+
+  - schema_id: ecb_mid_history_v6_20200131
+    source_schema_hash: ff756d8f42287581283c839a530ee52b113f4e49041959de5128ff7a1df1ab76
+    observed_from: 2020-01-31
+    observed_through: 2026-06-11
+    valid_to: 2026-06-11
+    formats: [csv.gz]
+    encodings: [utf-16]
+    columns: &modern_columns
+      - ISIN_CODE
+      - OTHER_REG_NUMBER
+      - HAIRCUT_CATEGORY
+      - TYPE
+      - REFERENCE_MARKET
+      - DENOMINATION
+      - ISSUANCE_DATE
+      - MATURITY_DATE
+      - ISSUER_CSD
+      - COUPON_RATE (%)
+      - ISSUER_NAME
+      - ISSUER_RESIDENCE
+      - ISSUER_GROUP
+      - GUARANTOR_NAME
+      - GUARANTOR_RESIDENCE
+      - GUARANTOR_GROUP
+      - COUPON_DEFINITION
+      - HAIRCUT
+      - HAIRCUT_OWN_USE
+      - POTENTIALLY_OWN_USABLE_COVERED_BOND
+    mappings: &modern_mappings
+      ISIN_CODE: isin_code
+      OTHER_REG_NUMBER: other_reg_number
+      HAIRCUT_CATEGORY: haircut_category
+      TYPE: asset_type
+      REFERENCE_MARKET: reference_market
+      DENOMINATION: denomination
+      ISSUANCE_DATE: issuance_date
+      MATURITY_DATE: maturity_date
+      ISSUER_CSD: issuer_csd
+      COUPON_RATE (%): coupon_rate
+      ISSUER_NAME: issuer_name
+      ISSUER_RESIDENCE: issuer_residence
+      ISSUER_GROUP: issuer_group
+      GUARANTOR_NAME: guarantor_name
+      GUARANTOR_RESIDENCE: guarantor_residence
+      GUARANTOR_GROUP: guarantor_group
+      COUPON_DEFINITION: coupon_definition
+      HAIRCUT: non_own_use_haircut
+      HAIRCUT_OWN_USE: own_use_haircut
+      POTENTIALLY_OWN_USABLE_COVERED_BOND: potentially_own_usable_covered_bond
+    intentionally_unmapped: {}
+    notes: >-
+      ISSUER_OTHER_NAME and GUARANTOR_OTHER_NAME were removed; the own-use flag
+      was renamed to POTENTIALLY_OWN_USABLE_COVERED_BOND.
+
+  - schema_id: ecb_mid_history_v7_20260612
+    source_schema_hash: 3f7ff3034e50519b4f763a25b55563c29110f7ce5ebfb54523593156dde5dfcb
+    observed_from: 2026-06-12
+    observed_through: 2026-10-22
+    valid_to: null
+    formats: [csv.gz]
+    encodings: [utf-16]
+    columns:
+      - ISIN_CODE
+      - OTHER_REG_NUMBER
+      - HAIRCUT_CATEGORY
+      - TYPE
+      - REFERENCE_MARKET
+      - DENOMINATION
+      - ISSUANCE_DATE
+      - MATURITY_DATE
+      - ISSUER_CSD
+      - COUPON_RATE (%)
+      - ISSUER_NAME
+      - ISSUER_RESIDENCE
+      - ISSUER_GROUP
+      - GUARANTOR_NAME
+      - GUARANTOR_RESIDENCE
+      - GUARANTOR_GROUP
+      - COUPON_DEFINITION
+      - HAIRCUT
+      - HAIRCUT_OWN_USE
+      - POTENTIALLY_OWN_USABLE_COVERED_BOND
+      - CLIMATE_FACTOR
+    mappings:
+      <<: *modern_mappings
+      CLIMATE_FACTOR: climate_factor
+    intentionally_unmapped: {}
+    notes: "CLIMATE_FACTOR was added; absent historical values normalize to NULL."

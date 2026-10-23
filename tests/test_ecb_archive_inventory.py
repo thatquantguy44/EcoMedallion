@@ -263,5 +263,7 @@ def test_inventory_cli_does_not_initialize_a_warehouse(monkeypatch, tmp_path, ca
     )
 
     assert cli._cmd_ecb_assets(args) == 0
-    assert json.loads(output_path.read_text())["summary"]["snapshot_count"] == 190
+    written = json.loads(output_path.read_text())
+    assert written["summary"]["snapshot_count"] == 190
+    assert written["schema_registry_validation"]["status"] == "valid"
     assert json.loads(capsys.readouterr().out)["output"] == str(output_path)
