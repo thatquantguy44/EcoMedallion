@@ -1,7 +1,8 @@
 # Spec 011: Point-in-Time ECB Eligible Marketable Securities
 
-Status: **Phase 1 implemented for forward ingestion; Phase 2 archive bootstrap
-and Phase 3 Spark runtime/production scheduling remain open.**
+Status: **Phase 1 implemented for forward ingestion; the Phase 2 archive
+inventory is implemented, while historical normalization/backfill and Phase 3
+Spark runtime/production scheduling remain open.**
 
 Last verified: 2026-10-23 (2026-10-22 MID release message, signed full/update
 XML and CSV artifacts, dictionary, and live SQLite/PostgreSQL ingestions)
@@ -48,7 +49,8 @@ observation or overwrite yesterday's row with today's state.
 | Latest full XML fallback | `https://mid.ecb.europa.eu/app/ea/ea.xml.gz` |
 | Latest update XML fallback | `https://mid.ecb.europa.eu/app/ea/ea_update.xml.gz` |
 | Latest dictionary fallback | `https://mid.ecb.europa.eu/app/ea/ea_dictionary.xml.gz` |
-| Annual archives | `https://www.ecb.europa.eu/paym/coll/assets/shared/data/archive/YYYY.zip` |
+| Completed-year archives | `https://www.ecb.europa.eu/paym/coll/assets/shared/data/archive/YYYY.zip` |
+| Current-year daily snapshots | `https://www.ecb.europa.eu/paym/coll/assets/shared/data/EMA/YYYY/MM/ea_csv_YYMMDD.csv.gz` |
 | User guide | `https://www.ecb.europa.eu/mopo/coll/assets/guide/html/index.en.html` |
 | MID integration guide | `https://www.ecb.europa.eu/press/shared/pdf/MID-Catalogue-and-Integration-Guide.en.pdf` |
 
@@ -473,8 +475,9 @@ python -m fred_pipeline ecb-assets as-of --as-of <ISO-8601 UTC timestamp>
 `poll` and `ingest-release` are safe to repeat. `verify` currently re-runs the
 stored attachment signatures and signed MD5 comparison without mutating
 accepted data. `status` emits JSON with the latest accepted release,
-quarantine reasons, and current row count. Phase 2 adds archive `backfill` with
-a dry-run inventory and resumable content-hash checkpoints; Phase 3 expands
+quarantine reasons, and current row count. Phase 2 now provides the read-only
+`inventory` command; archive `backfill` and resumable content-hash checkpoints
+remain to be added. Phase 3 expands
 `verify` to replay parsing, reconciliation, and interval invariants.
 
 ## 9. Phased implementation plan
@@ -499,14 +502,32 @@ Delivered in Phase 1:
   a configurable grace period, coverage gaps, and unusual N/U/D volume; and
 - Delta Bronze/Silver DDL and Gold view definitions, without a Spark writer.
 
+Delivered as the first Phase 2 slice:
+
+- read-only `ecb-assets inventory` for 2010 through the current year;
+- bounded, one-year-at-a-time downloads with ZIP path and size protections;
+- legacy daily TGZ and modern daily gzip-CSV inspection without extracting to
+  the filesystem;
+- archive SHA-256, ZIP CRC, filenames, dates, formats, encodings, column-set
+  hashes, schema ranges, duplicates, TARGET-day gaps, and optional row counts;
+- current-year discovery through the official daily-file path because the ECB
+  does not publish `/archive/YYYY.zip` until the year is complete; and
+- JSON stdout/file output with summary-only and deep-inventory modes.
+
 The 2026-10-22 live release was ingested independently into SQLite and an
 isolated PostgreSQL 16 database: all five signatures verified, XML/CSV parity
 held, the full list contained 31,331 securities, and dictionary-enriched as-of
 queries returned the same security state. A two-release fixture also proves
 SQLite/PostgreSQL parity across update, deletion, new-security, interval, and
-current-view behavior. Historical archive inventory/backfill, Spark runtime
-parity, production scheduling, live alert-delivery proof/runbook, and the named
-licensing review remain explicit open work.
+current-view behavior. Historical schema registration/parsing and backfill,
+Spark runtime parity, production scheduling, live alert-delivery proof/runbook,
+and the named licensing review remain explicit open work.
+
+Live inventory validation found 190 snapshots and one legacy schema in 2010,
+255 snapshots and one modern schema in 2025, and 207 snapshots across two
+schemas through 2026-10-22. The 2026 boundary is the documented addition of
+`CLIMATE_FACTOR`: the old schema ends 2026-06-11 and the new schema begins
+2026-06-12.
 
 The combined `fred_pipeline run` path was also live-verified against the
 isolated PostgreSQL database: one ECB SDMX series persisted 7,182 observations
@@ -541,10 +562,11 @@ and a cutoff before the second fixture release cannot see its changes.
 
 ### Phase 2 — archive bootstrap and gap semantics
 
-Implement annual ZIP inventory, historical parsers, staging rebuild, coverage
-ledger, schema migrations, and reconciliation to a live full snapshot. Backfill
-from April 2010 through the forward-ingestion boundary, with every gap and
-date-precision timestamp explicit.
+The annual/current-year inventory is implemented. Next, implement the reviewed
+schema registry, historical parsers, staging rebuild, coverage ledger, schema
+migrations, and reconciliation to a live full snapshot. Backfill from April
+2010 through the forward-ingestion boundary, with every gap and date-precision
+timestamp explicit.
 
 Exit: the entire available archive is queryable; a report lists accepted,
 missing, and quarantined dates and proves the final state equals the live full

@@ -33,6 +33,7 @@ import datetime as _dt
 import json
 import logging
 import sys
+from pathlib import Path
 from typing import Any
 
 from fred_pipeline.config import Environment, PipelineConfig
@@ -1097,6 +1098,53 @@ def _cmd_ecb_assets(args: argparse.Namespace) -> int:
     config = PipelineConfig.resolve(
         environment=Environment(args.env), config_file=args.config
     )
+    if args.action == "inventory":
+        from fred_pipeline.ecb_archive_inventory import (
+            ECBArchiveInventoryClient,
+            ECBArchiveInventoryError,
+        )
+
+        if args.max_archive_mb <= 0:
+            print("ERROR: --max-archive-mb must be greater than zero", file=sys.stderr)
+            return 2
+        client = ECBArchiveInventoryClient(
+            timeout=config.request_timeout_seconds,
+            max_retries=config.max_retries,
+            max_archive_bytes=int(args.max_archive_mb * 1024 * 1024),
+            rate_limit_per_minute=min(config.rate_limit_per_minute, 60),
+        )
+        try:
+            report = client.inventory(
+                from_year=args.from_year,
+                to_year=args.to_year,
+                deep=args.deep,
+                include_snapshots=not args.summary_only,
+            )
+        except ECBArchiveInventoryError as exc:
+            print(f"ERROR: {exc}", file=sys.stderr)
+            return 2
+        rendered = json.dumps(report, default=str, indent=2)
+        if args.output:
+            output_path = Path(args.output)
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            output_path.write_text(rendered + "\n", encoding="utf-8")
+            print(
+                json.dumps(
+                    {
+                        "output": str(output_path),
+                        "summary": report["summary"],
+                    },
+                    indent=2,
+                )
+            )
+        else:
+            print(rendered)
+        unhealthy = (
+            report["summary"]["failed_year_count"]
+            or report["summary"]["partial_year_count"]
+        )
+        return 1 if unhealthy else 0
+
     warehouse_config = load_warehouse_config(environment=config.environment.value)
     if args.local:
         warehouse_config = WarehouseConfig(
@@ -1708,7 +1756,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="ingest/query the point-in-time ECB eligible marketable-assets list",
     )
     ea.add_argument(
-        "action", choices=["poll", "ingest-release", "verify", "status", "as-of"]
+        "action",
+        choices=[
+            "poll",
+            "ingest-release",
+            "verify",
+            "status",
+            "as-of",
+            "inventory",
+        ],
     )
     ea.add_argument("--env", default="dev", choices=[e.value for e in Environment])
     ea.add_argument("--config", default=None)
@@ -1719,6 +1775,39 @@ def build_parser() -> argparse.ArgumentParser:
     ea.add_argument("--as-of", default=None, help="ISO-8601 UTC cutoff")
     ea.add_argument("--asset-key", default=None, help="optional ISIN:/OTHER: key")
     ea.add_argument("--limit", type=int, default=100)
+    ea.add_argument(
+        "--from-year",
+        type=int,
+        default=2010,
+        help="first annual archive to inventory (default: 2010)",
+    )
+    ea.add_argument(
+        "--to-year",
+        type=int,
+        default=None,
+        help="last annual archive to inventory (default: current year)",
+    )
+    ea.add_argument(
+        "--deep",
+        action="store_true",
+        help="fully decompress every snapshot to count records",
+    )
+    ea.add_argument(
+        "--summary-only",
+        action="store_true",
+        help="omit per-snapshot rows while retaining schema and gap summaries",
+    )
+    ea.add_argument(
+        "--output",
+        default=None,
+        help="write the inventory JSON to this path instead of stdout",
+    )
+    ea.add_argument(
+        "--max-archive-mb",
+        type=float,
+        default=1024.0,
+        help="compressed size safety limit for one annual ZIP (default: 1024)",
+    )
     ea.add_argument(
         "--allow-gap",
         action="store_true",

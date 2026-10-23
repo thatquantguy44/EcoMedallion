@@ -16,6 +16,7 @@ from datetime import date, datetime, time, timedelta, timezone
 from typing import Any, Mapping, Sequence
 from zoneinfo import ZoneInfo
 
+from fred_pipeline.ecb_calendar import is_target_operating_day
 from fred_pipeline.governance.alerting_config import (
     AlertingConfig,
     ECBAssetsAlertConfig,
@@ -38,43 +39,6 @@ class ECBAssetsAssessment:
     verdict: str
     reason: str
     details: Mapping[str, Any] = field(default_factory=dict)
-
-
-def _easter_sunday(year: int) -> date:
-    """Return Gregorian Easter Sunday without an optional calendar package."""
-    a = year % 19
-    b, c = divmod(year, 100)
-    d, e = divmod(b, 4)
-    f = (b + 8) // 25
-    g = (b - f + 1) // 3
-    h = (19 * a + b - d - g + 15) % 30
-    i, k = divmod(c, 4)
-    weekday_adjustment = (32 + 2 * e + 2 * i - h - k) % 7
-    correction = (a + 11 * h + 22 * weekday_adjustment) // 451
-    shifted = h + weekday_adjustment - 7 * correction + 114
-    month = shifted // 31
-    day = shifted % 31 + 1
-    return date(year, month, day)
-
-
-def is_target_operating_day(day: date) -> bool:
-    """Whether TARGET is normally open on ``day``.
-
-    ECB eligible-assets publication is Monday-Friday excluding the six TARGET
-    closing days: New Year, Good Friday, Easter Monday, 1 May, and 25/26 Dec.
-    """
-    if day.weekday() >= 5:
-        return False
-    easter = _easter_sunday(day.year)
-    holidays = {
-        date(day.year, 1, 1),
-        easter - timedelta(days=2),
-        easter + timedelta(days=1),
-        date(day.year, 5, 1),
-        date(day.year, 12, 25),
-        date(day.year, 12, 26),
-    }
-    return day not in holidays
 
 
 def expected_release_date(now: datetime, settings: ECBAssetsAlertConfig) -> date:
