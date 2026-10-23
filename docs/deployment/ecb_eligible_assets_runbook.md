@@ -50,16 +50,26 @@ tables.
 
 ## Routine polling
 
-Schedule `ecb-assets poll` on ECB publication days after the normal release
-window, with the scheduler timezone set to `Europe/Frankfurt`. The ECB states
-that the list is normally published on weekdays except TARGET closing days.
-Run a later retry so a delayed release can still be discovered. Keep this job
-independent from the observation-series pipeline so a quarantined ECB release
-does not block unrelated sources.
+`python -m fred_pipeline run --env dev` polls eligible-assets releases by
+default after the observation pipeline finishes on SQLite or PostgreSQL. The
+observation writes are already committed if ECB polling fails, but the combined
+command exits non-zero and reports `ecb_assets.status=failed` so operations do
+not mistake a partial refresh for complete success. Use `--no-ecb-assets` only
+for a deliberate observation-only run; `--dry-run` skips ECB because it has no
+durable warehouse.
 
-The repository does not ship an enabled schedule: deployment owners must
-choose the runtime, durable backend, secret/config injection, retry policy,
-and alert destination before enabling one.
+The standalone `ecb-assets poll` command remains available for targeted retry
+and for a separately scheduled check after the normal ECB publication window.
+The ECB states that the list is normally published on weekdays except TARGET
+closing days. If scheduled separately, use the `Europe/Frankfurt` timezone and
+run a later retry so a delayed release can still be discovered.
+
+Spark/Delta currently has schema DDL but no ECB writer. A Databricks-backed
+`run` reports ECB polling as skipped rather than failing the observation run;
+Phase 3 replaces that skip with the Delta writer.
+
+The repository does not ship a separate enabled ECB schedule: deployment
+owners must choose any additional retry cadence and alert destination.
 
 ## Health and point-in-time queries
 

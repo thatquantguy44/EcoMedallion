@@ -205,7 +205,7 @@ flags that differ in meaning are listed per command.
 
 | Command | What it does | Key flags |
 |---|---|---|
-| `run` | Full Bronze → Silver → Gold: extracts active series from every source with an active manifest entry, then rebuilds Gold (unless `--no-gold`) | `--local --db-path`, `--series`, `--source` / `--exclude-source`, `--full`, `--dry-run`, `--no-gold`, `--extract-workers`, `--source-workers`, `--rate-limit-per-minute`, `--source-rate-limits` |
+| `run` | Full Bronze → Silver → Gold, followed by signed ECB eligible-assets polling by default on SQLite/PostgreSQL. Observation writes remain committed if ECB fails, while the combined command exits non-zero | `--local --db-path`, `--series`, `--source` / `--exclude-source`, `--full`, `--dry-run`, `--no-gold`, `--no-ecb-assets`, `--extract-workers`, `--source-workers`, `--rate-limit-per-minute`, `--source-rate-limits` |
 | `price-constituents` | Dynamic Tiingo pricing batch: reads current ETF membership from `gold_index_constituents`, prices only missing/stale tickers (by weight rank), stops on a Tiingo quota hit | `--index-etf`, `--max-symbols`, `--stale-days`, `--rate-limit-per-minute`, `--dry-run`, `--rebuild-gold` |
 | `discover` | Generates a new manifest from a FRED category/release/search — not a refresh, a discovery/authoring tool | `--category-id` / `--release-id` / `--search`, `--frequencies`, `--min-popularity`, `--max`, `--out`, `--dry-run` |
 
@@ -229,7 +229,7 @@ flags that differ in meaning are listed per command.
 | Goal | Sequence |
 |---|---|
 | First-ever local run | `validate` → `run --dry-run --series <one id>` (confirm a key/id works cheaply) → `run --local --db-path fred_local.db` |
-| Routine daily refresh | `run --local --db-path fred_local.db` (incremental restate-last-N + full Gold rebuild + release calendar, all in one) |
+| Routine daily refresh | `run --local --db-path fred_local.db` (incremental restate-last-N + full Gold rebuild + release calendar + ECB eligible-assets poll, all in one) |
 | Large first-time load, rate-limit-safe | `run --local --db-path f.db --full --no-gold --source-workers fred=8,tiingo=1 --source-rate-limits fred=60,tiingo=5` → `gold --local --db-path f.db` (separates slow extraction retries from the one-shot Gold rebuild) |
 | Add a brand-new source/series | edit the manifest (`active: true`) → `validate` → `run --dry-run --series <new id>` → `run --local --db-path fred_local.db` |
 | Grow ETF constituent coverage | `run --local --db-path f.db --series <ETF ticker>` (refresh holdings **and** rebuild Gold, so `gold_index_constituents` reflects today's snapshot before you plan against it) → `price-constituents --db-path f.db --index-etf <ETF> --dry-run` (preview the next batch) → `price-constituents --db-path f.db --index-etf <ETF> --rate-limit-per-minute 5` (pull it) → `gold --local --db-path f.db` (rebuild once more so price-derived tables pick up the new prices) |

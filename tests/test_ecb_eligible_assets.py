@@ -310,6 +310,32 @@ def test_two_releases_build_point_in_time_history_and_are_idempotent(tmp_path):
         warehouse.close()
 
 
+def test_poll_resumes_after_latest_release_instead_of_replaying_older_items(tmp_path):
+    client, release_1_url, release_2_url = _fixture_client()
+    client.rss = f"""<rss><channel>
+      <item><title>List of eligible marketable assets</title>
+        <link>{release_2_url}</link><pubDate>Tue, 02 Jan 2024 17:56:07 +0100</pubDate></item>
+      <item><title>List of eligible marketable assets</title>
+        <link>{release_1_url}</link><pubDate>Mon, 01 Jan 2024 17:56:07 +0100</pubDate></item>
+    </channel></rss>""".encode()
+    warehouse = _warehouse(tmp_path)
+    pipeline = ECBEligibleAssetsPipeline(
+        warehouse, client=client, signature_verifier=_verified
+    )
+    try:
+        pipeline.ingest_release(release_1_url)
+        results = pipeline.poll()
+        assert [result.release_id for result in results] == [
+            parse_release_message(
+                client.releases[release_2_url], url=release_2_url
+            ).release_id
+        ]
+        assert results[0].status == "accepted"
+        assert pipeline.poll() == []
+    finally:
+        warehouse.close()
+
+
 def test_update_mismatch_quarantines_without_advancing_current_state(tmp_path):
     bad_update = _update(_asset("DE0000000003", change="N"))
     client, release_1_url, release_2_url = _fixture_client(bad_update)

@@ -793,6 +793,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
     pipeline = FredPipeline(
         config, spark=spark, warehouse=warehouse, persist_audit=persist
     )
+    ecb_assets_result: dict[str, object]
     try:
         run = pipeline.run_from_manifest(
             args.manifests,
@@ -805,11 +806,43 @@ def _cmd_run(args: argparse.Namespace) -> int:
             skip_not_due=args.skip_not_due,
             refresh_fomc_calendar=args.refresh_fomc_calendar,
         )
+        if args.dry_run:
+            ecb_assets_result = {
+                "status": "skipped",
+                "reason": "dry-run has no durable warehouse",
+            }
+        elif not getattr(args, "ecb_assets", True):
+            ecb_assets_result = {
+                "status": "skipped",
+                "reason": "disabled by --no-ecb-assets",
+            }
+        elif not (hasattr(warehouse, "conn") and hasattr(warehouse, "_insert")):
+            ecb_assets_result = {
+                "status": "skipped",
+                "reason": (
+                    f"{warehouse.__class__.__name__} has no ECB eligible-assets "
+                    "writer; SQLite and PostgreSQL are currently supported"
+                ),
+            }
+        else:
+            try:
+                releases = _poll_ecb_assets_for_run(config, warehouse)
+                ecb_assets_result = {
+                    "status": "succeeded",
+                    "releases": releases,
+                }
+            except Exception as exc:  # noqa: BLE001 - reflected in run exit/status
+                ecb_assets_result = {
+                    "status": "failed",
+                    "error": str(exc),
+                }
     finally:
         if warehouse is not None:
             warehouse.close()
 
-    print(json.dumps(run.to_row(), default=str, indent=2))
+    output = run.to_row()
+    output["ecb_assets"] = ecb_assets_result
+    print(json.dumps(output, default=str, indent=2))
     if args.local and not args.dry_run:
         print(
             f"\nSaved to {args.db_path}. Inspect with e.g.:\n"
@@ -817,7 +850,28 @@ def _cmd_run(args: argparse.Namespace) -> int:
             f"'SELECT series_id, observation_date, value "
             f"FROM gold_fred_latest_observation LIMIT 10;'"
         )
-    return 0 if run.status.value in ("succeeded", "partial") else 1
+    pipeline_succeeded = run.status.value in ("succeeded", "partial")
+    ecb_succeeded = ecb_assets_result["status"] != "failed"
+    return 0 if pipeline_succeeded and ecb_succeeded else 1
+
+
+def _poll_ecb_assets_for_run(config: PipelineConfig, warehouse) -> list[dict]:
+    """Poll signed MID releases after the observation pipeline has persisted."""
+    from fred_pipeline.ecb_eligible_assets import (
+        ECBEligibleAssetsPipeline,
+        ECBMIDClient,
+    )
+
+    if warehouse is None:
+        raise RuntimeError("ECB eligible-assets polling requires a durable warehouse")
+    client = ECBMIDClient(
+        base_url=config.ecb_mid_base_url,
+        timeout=config.request_timeout_seconds,
+        max_retries=config.max_retries,
+        rate_limit_per_minute=min(config.rate_limit_per_minute, 60),
+    )
+    pipeline = ECBEligibleAssetsPipeline(warehouse, client=client)
+    return [result.to_dict() for result in pipeline.poll()]
 
 
 def _cmd_gold(args: argparse.Namespace) -> int:
@@ -1149,6 +1203,16 @@ def build_parser() -> argparse.ArgumentParser:
         "--no-gold",
         action="store_true",
         help="skip the Gold refresh after extracting/writing Silver",
+    )
+    r.add_argument(
+        "--ecb-assets",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help=(
+            "poll signed ECB eligible-assets releases after the observation "
+            "pipeline (default on; skipped for --dry-run). Use "
+            "--no-ecb-assets for an observation-only run"
+        ),
     )
     r.add_argument(
         "--source",

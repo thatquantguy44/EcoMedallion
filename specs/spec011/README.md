@@ -491,7 +491,10 @@ Delivered in Phase 1:
 - transactionally published SQLite/PostgreSQL SCD2 release, version, change,
   dictionary, current, history, change, and coverage objects;
 - idempotent poll/manual ingestion, signature re-verification, status, and
-  release-aligned as-of queries; and
+  release-aligned as-of queries;
+- default polling after `fred_pipeline run` on SQLite/PostgreSQL, with a
+  `--no-ecb-assets` operator escape hatch and combined non-zero failure status;
+  and
 - Delta Bronze/Silver DDL and Gold view definitions, without a Spark writer.
 
 The 2026-10-22 live release was ingested independently into SQLite and an
@@ -502,6 +505,11 @@ SQLite/PostgreSQL parity across update, deletion, new-security, interval, and
 current-view behavior. Historical archive inventory/backfill, Spark runtime
 parity, production scheduling/alerts, and the named licensing review remain
 explicit open work.
+
+The combined `fred_pipeline run` path was also live-verified against the
+isolated PostgreSQL database: one ECB SDMX series persisted 7,182 observations
+through 2026-10-22, the automatic MID poll completed successfully, and the
+existing 31,331-security current view remained intact.
 
 ### Phase 0 — source-contract and security proof
 

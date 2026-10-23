@@ -1108,6 +1108,14 @@ class ECBEligibleAssetsPipeline:
 
     def poll(self, *, allow_gap: bool = False) -> list[IngestResult]:
         items = parse_rss(self.client.fetch_rss())
+        latest = self.repository.latest_release()
+        if latest:
+            cutoff = datetime.fromisoformat(str(latest["publication_at_utc"]))
+            items = [
+                item
+                for item in items
+                if datetime.fromisoformat(item.published_at) > cutoff
+            ]
         return [
             self.ingest_release(
                 item.url, rss_pub_at=item.published_at, allow_gap=allow_gap
