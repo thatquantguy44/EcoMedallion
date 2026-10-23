@@ -625,6 +625,33 @@ change origin, publication time, and run id.
 #### `silver.ecb_eligible_asset_dictionary`
 Versioned ECB code definitions keyed by dictionary hash × domain × code.
 
+#### `silver.ecb_eligible_asset_backfill_run`
+
+Resumable historical staging run ledger, including the requested range,
+registry hash, status, row counts, final eligible count, timestamps, and error.
+
+#### `silver.ecb_eligible_asset_release_stage`
+
+Accepted, missing, and quarantined archive dates with source hashes,
+date-precision timestamps, continuity, coverage, and N/U/D counts.
+
+#### `silver.ecb_eligible_asset_version_stage`
+
+Run-scoped compact SCD2 intervals and tombstones produced from chronological
+full-snapshot diffs.
+
+#### `silver.ecb_eligible_asset_change_stage`
+
+Run-scoped derived N/U/D changes with before/after hashes and gap-aware change
+origin. All four staging objects are isolated from live history and Gold;
+`run_id` is part of every staging grain.
+
+SQLite exposes the same staging objects as
+`silver_ecb_eligible_asset_backfill_run`,
+`silver_ecb_eligible_asset_release_stage`,
+`silver_ecb_eligible_asset_version_stage`, and
+`silver_ecb_eligible_asset_change_stage`.
+
 #### `gold.ecb_eligible_security_history`
 Enriches every interval and tombstone with labels from the exact dictionary
 version attached to it.

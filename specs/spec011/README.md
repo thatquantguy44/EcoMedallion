@@ -2,8 +2,9 @@
 
 Status: **Phase 1 implemented for forward ingestion; the Phase 2 archive
 inventory, reviewed schema registry, and historical row normalizer are
-implemented, while staged historical backfill and Phase 3 Spark
-runtime/production scheduling remain open.**
+implemented. The isolated resumable staging rebuild is implemented; boundary
+reconciliation/promotion and Phase 3 Spark runtime/production scheduling remain
+open.**
 
 Last verified: 2026-10-23 (2026-10-22 MID release message, signed full/update
 XML and CSV artifacts, dictionary, and live SQLite/PostgreSQL ingestions)
@@ -531,14 +532,40 @@ Delivered as the second Phase 2 slice:
 - automatic registry validation in `ecb-assets inventory`, with a non-zero
   result when an observed schema is not reviewed.
 
+Delivered as the third Phase 2 slice:
+
+- `ecb-assets backfill-stage`, which streams completed-year ZIPs one at a time
+  and current-year daily files into new, isolated SQLite/PostgreSQL staging
+  tables without modifying live ECB history or Gold;
+- an optional `/data/`-ignored local archive cache, bounded download/ZIP/TGZ
+  handling, exact archive/entry hashes, and chronological source enforcement;
+- one-snapshot transactions, stable run IDs, resumable checkpoints, source-byte
+  drift detection, and a run-scoped `--restart` operation;
+- deterministic end-of-day Europe/Frankfurt timestamps explicitly marked with
+  `timestamp_precision = date`, never presented as ECB publication times;
+- compact staged SCD2 intervals and full-snapshot-derived N/U/D changes;
+- explicit `missing`, `gapped`, and `quarantined` coverage rows, including the
+  last accepted release carried across each missing TARGET operating date; and
+- completion checks for duplicate open intervals, invalid interval endpoints,
+  and exact final open-state key/hash parity.
+
+The stage-only path was live-proven against the official 2010 archive. It
+processed all 190 snapshots in 165 seconds, recorded the two known missing
+TARGET dates (`2010-04-12` and `2010-12-03`), produced 179,894 compact versions
+and changes, ended with 28,198 eligible securities, and passed final interval
+and key/hash parity with zero quarantines. Re-running the completed run returned
+the stored result without downloading or duplicating rows. The proof used a
+temporary SQLite database and did not modify live ECB tables.
+
 The 2026-10-22 live release was ingested independently into SQLite and an
 isolated PostgreSQL 16 database: all five signatures verified, XML/CSV parity
 held, the full list contained 31,331 securities, and dictionary-enriched as-of
 queries returned the same security state. A two-release fixture also proves
 SQLite/PostgreSQL parity across update, deletion, new-security, interval, and
-current-view behavior. Historical staging/backfill, Spark runtime parity,
-production scheduling, live alert-delivery proof/runbook, and the named
-licensing review remain explicit open work.
+current-view behavior. Full live archive staging, boundary reconciliation and
+atomic promotion, Spark runtime parity, production scheduling, live
+alert-delivery proof/runbook, and the named licensing review remain explicit
+open work.
 
 Live inventory validation found 190 snapshots and one legacy schema in 2010,
 255 snapshots and one modern schema in 2025, and 207 snapshots across two
@@ -579,11 +606,11 @@ and a cutoff before the second fixture release cannot see its changes.
 
 ### Phase 2 — archive bootstrap and gap semantics
 
-The annual/current-year inventory, reviewed schema registry, and historical
-normalizer are implemented. Next, implement the staging rebuild, coverage
-ledger, schema migrations, and reconciliation to a live full snapshot.
-Backfill from April 2010 through the forward-ingestion boundary, with every gap
-and date-precision timestamp explicit.
+The annual/current-year inventory, reviewed schema registry, historical
+normalizer, isolated staging schema, resumable chronological rebuild, and gap
+ledger are implemented. Next, run the full April 2010 archive staging load,
+reconcile its final state to the signed live full snapshot at the same cutoff,
+and implement the explicit atomic promotion into the live history tables.
 
 Exit: the entire available archive is queryable; a report lists accepted,
 missing, and quarantined dates and proves the final state equals the live full
@@ -612,7 +639,7 @@ Gold state live.
 | AC-006 | Tests cover new, update, delete, re-add, no-op, same-day correction, empty IDs, duplicate IDs, bad types, and interrupted transaction recovery |
 | AC-007 | Historical schemas before and after at least one real field addition load with correct null/schema semantics; unknown forward fields fail closed |
 | AC-008 | Archive gaps are visible in coverage output; carried-forward state always exposes the selected source release and gap/freshness status |
-| AC-009 | A full historical staging rebuild produces non-overlapping half-open intervals and reconciles its boundary state to the corresponding ECB full snapshot |
+| AC-009 | A full historical staging rebuild produces non-overlapping half-open intervals and reconciles its boundary state to the corresponding ECB full snapshot — staging engine implemented; full live run and boundary reconciliation remain open |
 | AC-010 | SQLite, PostgreSQL, and Delta return identical sorted row sets and canonical hashes for current, single-security-history, full-universe-as-of, and between-release change queries |
 | AC-011 | A tampered artifact, invalid signature, schema drift, or release/update mismatch is present in Bronze/audit but cannot advance Silver/Gold |
 | AC-012 | Missing RSS delivery can be recovered from the stable latest endpoints/download page without inventing a publication timestamp or duplicating a release |

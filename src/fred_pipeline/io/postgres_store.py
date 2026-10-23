@@ -70,6 +70,18 @@ _UPSERT_KEYS: dict[str, tuple[str, ...]] = {
     "silver_ecb_eligible_asset_version": ("asset_key", "valid_from_release_id"),
     "silver_ecb_eligible_asset_change": ("release_id", "asset_key"),
     "silver_ecb_eligible_asset_dictionary": ("dictionary_hash", "domain", "code"),
+    "silver_ecb_eligible_asset_backfill_run": ("run_id",),
+    "silver_ecb_eligible_asset_release_stage": ("run_id", "release_id"),
+    "silver_ecb_eligible_asset_version_stage": (
+        "run_id",
+        "asset_key",
+        "valid_from_release_id",
+    ),
+    "silver_ecb_eligible_asset_change_stage": (
+        "run_id",
+        "release_id",
+        "asset_key",
+    ),
 }
 
 
@@ -810,6 +822,22 @@ _POSTGRES_INDEX_SQL = (
     """
     CREATE INDEX IF NOT EXISTS ix_ecb_asset_change_publication
         ON silver.ecb_eligible_asset_change(publication_at_utc, computed_change_type)
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS ix_ecb_asset_stage_release_date
+        ON silver.ecb_eligible_asset_release_stage(run_id, snapshot_date)
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS ix_ecb_asset_stage_version_interval
+        ON silver.ecb_eligible_asset_version_stage(
+            run_id, asset_key, valid_from_utc, valid_to_utc
+        )
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS ix_ecb_asset_stage_version_open
+        ON silver.ecb_eligible_asset_version_stage(
+            run_id, valid_to_utc, is_eligible
+        )
     """,
 )
 

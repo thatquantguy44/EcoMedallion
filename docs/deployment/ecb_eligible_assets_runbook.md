@@ -90,9 +90,35 @@ so an operator can review the new source schema before changing mappings.
 Use `--schema-registry PATH` only to test a separately reviewed candidate.
 
 The checked-in historical parser normalizes registered snapshots and preserves
-every original source field in `source_fields_json`. It does not publish rows
-to PostgreSQL yet; production history must wait for the chronological staging
-rebuild and atomic parity checks required by Spec 011.
+every original source field in `source_fields_json`.
+
+Build or resume an isolated staging history with:
+
+```bash
+PYTHONPATH=src python -m fred_pipeline ecb-assets backfill-stage \
+  --from-year 2010 --to-year 2026 \
+  --archive-dir data/ecb \
+  --backfill-run-id ecb-history-2010-2026 \
+  --env dev
+```
+
+`--archive-dir` is optional; when present, completed-year ZIPs and current-year
+daily files are cached there and `/data/` is ignored by Git. Every accepted
+snapshot commits independently, so repeating the same command resumes from its
+last staged release. If reviewed inputs or the requested start change, use a
+new run ID. `--restart` deletes only that run's staging rows and rebuilds it.
+
+The command writes only these new objects:
+
+- `silver.ecb_eligible_asset_backfill_run`;
+- `silver.ecb_eligible_asset_release_stage`;
+- `silver.ecb_eligible_asset_version_stage`; and
+- `silver.ecb_eligible_asset_change_stage`.
+
+A successful command returns `status: staged` after interval and final-state
+hash checks. It still does not publish rows to the live ECB tables or Gold.
+Promotion must wait for reconciliation to a signed live full snapshot at the
+same cutoff and an explicit atomic promotion implementation.
 
 ## Health and point-in-time queries
 

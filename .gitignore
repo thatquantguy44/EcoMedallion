@@ -8,6 +8,7 @@ dist/
 .venv/
 venv/
 env/
+/data/
 
 # Testing
 .pytest_cache/

@@ -1177,6 +1177,65 @@ def _cmd_ecb_assets(args: argparse.Namespace) -> int:
         print("ERROR: ecb-assets requires a durable warehouse", file=sys.stderr)
         return 2
 
+    if args.action == "backfill-stage":
+        from fred_pipeline.ecb_archive_backfill import (
+            ECBArchiveBackfillError,
+            ECBArchiveSnapshotSource,
+            ECBHistoricalStagingRebuilder,
+        )
+        from fred_pipeline.ecb_archive_inventory import (
+            ECBArchiveInventoryClient,
+            ECBArchiveInventoryError,
+        )
+        from fred_pipeline.ecb_asset_schema_registry import ECBHistoricalSchemaError
+
+        today_utc = _dt.datetime.now(_dt.timezone.utc).date()
+        to_year = args.to_year or today_utc.year
+        requested_to = (
+            today_utc - _dt.timedelta(days=1)
+            if to_year == today_utc.year
+            else _dt.date(to_year, 12, 31)
+        )
+        run_id = args.backfill_run_id or f"ecb-history-{args.from_year}-{to_year}"
+        try:
+            if args.max_archive_mb <= 0:
+                raise ECBArchiveBackfillError(
+                    "--max-archive-mb must be greater than zero"
+                )
+            archive_client = ECBArchiveInventoryClient(
+                timeout=config.request_timeout_seconds,
+                max_retries=config.max_retries,
+                max_archive_bytes=int(args.max_archive_mb * 1024 * 1024),
+                rate_limit_per_minute=min(config.rate_limit_per_minute, 60),
+            )
+            source = ECBArchiveSnapshotSource(
+                archive_client,
+                archive_dir=args.archive_dir,
+            )
+            rebuilder = ECBHistoricalStagingRebuilder(
+                warehouse,
+                registry_path=args.schema_registry,
+            )
+            result = rebuilder.rebuild(
+                source.iter_snapshots(from_year=args.from_year, to_year=to_year),
+                run_id=run_id,
+                from_date=_dt.date(args.from_year, 1, 1),
+                to_date=requested_to,
+                restart=args.restart,
+            )
+            print(json.dumps(result, default=str, indent=2))
+            return 0
+        except (
+            ECBArchiveBackfillError,
+            ECBArchiveInventoryError,
+            ECBHistoricalSchemaError,
+            OSError,
+        ) as exc:
+            print(f"ERROR: {exc}", file=sys.stderr)
+            return 1
+        finally:
+            warehouse.close()
+
     client = ECBMIDClient(
         base_url=config.ecb_mid_base_url,
         timeout=config.request_timeout_seconds,
@@ -1781,6 +1840,7 @@ def build_parser() -> argparse.ArgumentParser:
             "status",
             "as-of",
             "inventory",
+            "backfill-stage",
         ],
     )
     ea.add_argument("--env", default="dev", choices=[e.value for e in Environment])
@@ -1829,6 +1889,21 @@ def build_parser() -> argparse.ArgumentParser:
         "--schema-registry",
         default="config/ecb_eligible_asset_schemas.yml",
         help="reviewed historical schema registry used to validate inventory output",
+    )
+    ea.add_argument(
+        "--archive-dir",
+        default=None,
+        help="optional cache for annual ZIPs/current-year daily files",
+    )
+    ea.add_argument(
+        "--backfill-run-id",
+        default=None,
+        help="stable staging run id used for resume (default: derived from years)",
+    )
+    ea.add_argument(
+        "--restart",
+        action="store_true",
+        help="delete and rebuild only the selected staging run",
     )
     ea.add_argument(
         "--allow-gap",

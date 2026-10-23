@@ -259,6 +259,58 @@ CREATE TABLE IF NOT EXISTS silver_ecb_eligible_asset_dictionary (
     release_id TEXT, ingested_at TEXT,
     PRIMARY KEY (dictionary_hash, domain, code)
 );
+-- spec011 Phase 2: isolated historical rebuild workspace.  These objects are
+-- deliberately separate from the live forward-ingestion tables; a completed
+-- staging run is inspectable but cannot affect Gold until a later explicit
+-- promotion step performs boundary parity checks and an atomic swap/merge.
+CREATE TABLE IF NOT EXISTS silver_ecb_eligible_asset_backfill_run (
+    run_id TEXT PRIMARY KEY,
+    requested_from_date TEXT, requested_to_date TEXT,
+    registry_sha256 TEXT, status TEXT,
+    snapshot_count INTEGER, missing_count INTEGER,
+    quarantined_count INTEGER, version_count INTEGER,
+    change_count INTEGER, final_asset_count INTEGER,
+    started_at TEXT, updated_at TEXT, completed_at TEXT,
+    error_detail TEXT
+);
+CREATE TABLE IF NOT EXISTS silver_ecb_eligible_asset_release_stage (
+    run_id TEXT, release_id TEXT, snapshot_date TEXT,
+    publication_at_local TEXT, publication_at_utc TEXT,
+    timestamp_precision TEXT, prior_release_id TEXT,
+    is_consecutive INTEGER, full_count INTEGER,
+    new_count INTEGER, updated_count INTEGER, deleted_count INTEGER,
+    parser_version TEXT, source_schema_hash TEXT,
+    reconciliation_status TEXT, coverage_status TEXT, status TEXT,
+    source_url TEXT, source_entry_path TEXT,
+    source_entry_sha256 TEXT, archive_sha256 TEXT,
+    error_detail TEXT, staged_at TEXT,
+    PRIMARY KEY (run_id, release_id),
+    UNIQUE (run_id, snapshot_date)
+);
+CREATE TABLE IF NOT EXISTS silver_ecb_eligible_asset_version_stage (
+    run_id TEXT, asset_key TEXT, isin_code TEXT, other_reg_number TEXT,
+    is_eligible INTEGER,
+    haircut_category TEXT, asset_type TEXT, reference_market TEXT,
+    denomination TEXT, issuance_date TEXT, maturity_date TEXT,
+    issuer_csd TEXT, coupon_definition TEXT, coupon_rate REAL,
+    issuer_name TEXT, issuer_group TEXT, issuer_residence TEXT,
+    guarantor_name TEXT, guarantor_group TEXT, guarantor_residence TEXT,
+    non_own_use_haircut REAL, own_use_haircut REAL,
+    potentially_own_usable_covered_bond TEXT, climate_factor TEXT,
+    source_fields_json TEXT, source_schema_version TEXT, row_hash TEXT,
+    change_type TEXT, change_origin TEXT,
+    valid_from_release_id TEXT, valid_from_utc TEXT,
+    valid_to_release_id TEXT, valid_to_utc TEXT,
+    staged_at TEXT,
+    PRIMARY KEY (run_id, asset_key, valid_from_release_id)
+);
+CREATE TABLE IF NOT EXISTS silver_ecb_eligible_asset_change_stage (
+    run_id TEXT, release_id TEXT, asset_key TEXT,
+    computed_change_type TEXT, prior_row_hash TEXT, new_row_hash TEXT,
+    reconciliation_status TEXT, change_origin TEXT,
+    publication_at_utc TEXT, staged_at TEXT,
+    PRIMARY KEY (run_id, release_id, asset_key)
+);
 CREATE TABLE IF NOT EXISTS gold_fred_latest_observation (
     series_id TEXT, observation_date TEXT, value REAL, realtime_start TEXT,
     realtime_end TEXT, is_missing INTEGER, revision_number INTEGER, ingested_at TEXT
@@ -808,6 +860,14 @@ CREATE INDEX IF NOT EXISTS ix_ecb_asset_release_publication
     ON silver_ecb_eligible_asset_release(publication_at_utc);
 CREATE INDEX IF NOT EXISTS ix_ecb_asset_change_publication
     ON silver_ecb_eligible_asset_change(publication_at_utc, computed_change_type);
+CREATE INDEX IF NOT EXISTS ix_ecb_asset_stage_release_date
+    ON silver_ecb_eligible_asset_release_stage(run_id, snapshot_date);
+CREATE INDEX IF NOT EXISTS ix_ecb_asset_stage_version_interval
+    ON silver_ecb_eligible_asset_version_stage(
+        run_id, asset_key, valid_from_utc, valid_to_utc
+    );
+CREATE INDEX IF NOT EXISTS ix_ecb_asset_stage_version_open
+    ON silver_ecb_eligible_asset_version_stage(run_id, valid_to_utc, is_eligible);
 """
 
 
