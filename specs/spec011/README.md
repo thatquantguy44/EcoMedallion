@@ -4,7 +4,9 @@ Status: **Phase 1 implemented for forward ingestion; the Phase 2 archive
 inventory, reviewed schema registry, and historical row normalizer are
 implemented. The isolated resumable staging rebuild, exact boundary
 reconciliation, quarantine acknowledgement, and atomic PostgreSQL promotion are
-implemented; Phase 3 Spark runtime/production scheduling remains open.**
+implemented. Phase 3 Delta staging, catalog-transaction promotion, and query
+contracts are implemented; Databricks runtime proof and production scheduling
+remain open.**
 
 Last verified: 2026-10-23 (2026-10-22 MID release message, signed full/update
 XML and CSV artifacts, dictionary, and live SQLite/PostgreSQL ingestions)
@@ -503,7 +505,7 @@ Delivered in Phase 1:
 - ECB-specific health alerts, using the shared alert routes/transports, for
   failed or quarantined releases, invalid verification, late publication after
   a configurable grace period, coverage gaps, and unusual N/U/D volume; and
-- Delta Bronze/Silver DDL and Gold view definitions, without a Spark writer.
+- Delta Bronze/Silver DDL and Gold view definitions.
 
 Delivered as the first Phase 2 slice:
 
@@ -576,9 +578,14 @@ held, the full list contained 31,331 securities, and dictionary-enriched as-of
 queries returned the same security state. A two-release fixture also proves
 SQLite/PostgreSQL parity across update, deletion, new-security, interval, and
 current-view behavior. Full PostgreSQL archive staging, boundary reconciliation,
-and atomic promotion are now complete. Spark runtime parity, production
-scheduling, live alert-delivery proof/runbook, and the named licensing review
-remain explicit open work.
+and atomic promotion are now complete. Delta run-partitioned staging, bounded
+SQLite-to-Delta transfer, current/history/as-of/change readers, boundary parity
+checks, and catalog-transaction promotion are implemented. The Delta fixture
+tests pass on local Spark/Delta with a temporary Java 17 runtime, including
+idempotent staged partition replacement, boundary key/hash parity, and the
+current/history/as-of/change query contract. Databricks catalog-transaction
+execution, production scheduling, live alert-delivery proof/runbook, and the
+named licensing review remain explicit open work.
 
 Live inventory validation found 190 snapshots and one legacy schema in 2010,
 255 snapshots and one modern schema in 2025, and 207 snapshots across two
@@ -635,10 +642,27 @@ snapshot at the same cutoff.
 
 ### Phase 3 — Delta parity and production operations
 
-Add Delta DDL/MERGE behavior, partitioning/clustering chosen from measurements,
-Spark parity tests, scheduled RSS polling, live alert-delivery proof, runbook,
-replay, backup, and restore. Benchmark archive rebuild and common point-in-time
-queries on all three backends before choosing optimization layout.
+The first Phase 3 slice is implemented:
+
+- run-partitioned Delta release/version/change staging tables and a run ledger;
+- inference-free, bounded-batch Delta writes with idempotent partition
+  replacement and the promotable control record committed last;
+- a Spark staging adapter that reuses the reviewed historical normalizer and
+  spools compact history to bounded local SQLite before batch transfer;
+- pre/post promotion checks for boundary key/hash parity, duplicate open rows,
+  invalid intervals, quarantine acknowledgement, and later live releases;
+- one `BEGIN ATOMIC` promotion statement for Databricks Runtime 18.0+ Unity
+  Catalog managed tables with catalog commits, failing closed on runtimes that
+  cannot provide multi-table atomicity; and
+- Delta current, history, release-aligned as-of, and change query contracts,
+  with real Spark/Delta integration cases for idempotent staging and row-value
+  semantics.
+
+Remaining work is to run those cases on Java/Delta and Databricks, measure and
+choose clustering, schedule RSS polling, prove live alert delivery, and finish
+the replay/backup/restore runbook. Benchmark archive rebuild and common
+point-in-time queries on all three backends before choosing optimization
+layout.
 
 Exit: SQLite, PostgreSQL, and Delta return identical ordered rows and hashes for
 the same fixture cutoffs, and a failed/quarantined release leaves the prior

@@ -298,6 +298,11 @@ only the flags that differ in meaning are listed per command. (Full detail:
 | Backtest "what did Gold look like historically" | `run --local --db-path fred_local.db` (ensure Silver is current) → `backfill --db-path fred_local.db --backfill-db fred_backfill.db --from 2015-01-01 --to 2026-01-01 --step monthly` |
 | Onboard a new FRED category/release wholesale | `discover --name <manifest_name> --category-id <id> --dry-run` (preview) → re-run with `--out manifests/<name>.yml` → hand-review the generated YAML → `validate` → `run --dry-run --series <a few ids>` → activate for real |
 
+On the Databricks backend, ECB archive promotion uses one multi-table
+`BEGIN ATOMIC` statement. It requires Databricks Runtime 18.0+ and Unity
+Catalog managed tables with catalog commits enabled; unsupported Delta
+runtimes fail before publishing rather than exposing a partial history.
+
 ## Deploy to Databricks
 
 > Full go-live checklist (provisioning steps + the quant/ops decisions, with

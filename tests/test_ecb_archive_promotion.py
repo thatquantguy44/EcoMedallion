@@ -11,8 +11,14 @@ from fred_pipeline.ecb_archive_promotion import (
     ECBArchivePromotionError,
     ECBHistoricalPromoter,
 )
+from fred_pipeline.ecb_eligible_assets import (
+    ECBEligibleAssetRepository,
+    _canonical_hash,
+    diff_assets,
+)
 from fred_pipeline.local_store import LocalWarehouse
 from tests.test_ecb_archive_backfill import _three_snapshots
+from tests.test_postgres_warehouse import _ecb_release
 
 
 def _warehouse(tmp_path):
@@ -164,6 +170,80 @@ def test_promotion_requires_exact_ack_and_atomically_maps_signed_boundary(tmp_pa
         again = promoter.promote(run_id, acknowledge_quarantines=0)
         assert again["status"] == "promoted"
         assert again["idempotent"] is True
+
+        # Forward polling resumes from the exact signed boundary: a later
+        # release appends normally and retrying that release is a no-op.
+        repo = ECBEligibleAssetRepository(warehouse)
+        prior = repo.current_assets()
+        added = dict(next(iter(prior.values())))
+        added.update(
+            {
+                "asset_key": "ISIN:DE0099999999",
+                "isin_code": "DE0099999999",
+                "other_reg_number": None,
+            }
+        )
+        added["row_hash"] = _canonical_hash(added)
+        current = {**prior, added["asset_key"]: added}
+        changes = diff_assets(prior, current)
+        release = _ecb_release("signed-next-release", "2026-06-18")
+        repo.record_release(release, run_id="forward-next")
+        result = repo.publish(
+            release,
+            current,
+            prior,
+            {
+                added["asset_key"]: {
+                    **added,
+                    "declared_change_type": "N",
+                }
+            },
+            changes,
+            [],
+            dictionary_hash="dictionary-live",
+            schema_hash="schema-next",
+            reconciliation_status="matched",
+            coverage_status="complete",
+            change_origin="source_reconciled",
+            run_id="forward-next",
+        )
+        assert result.status == "accepted"
+        assert result.new_count == 1
+        assert len(repo.current_assets()) == 4
+        release_count = warehouse.query(
+            "SELECT COUNT(*) AS n FROM silver_ecb_eligible_asset_release"
+        )[0]["n"]
+        version_count = warehouse.query(
+            "SELECT COUNT(*) AS n FROM silver_ecb_eligible_asset_version"
+        )[0]["n"]
+
+        duplicate = repo.publish(
+            release,
+            current,
+            prior,
+            {},
+            changes,
+            [],
+            dictionary_hash="dictionary-live",
+            schema_hash="schema-next",
+            reconciliation_status="matched",
+            coverage_status="complete",
+            change_origin="source_reconciled",
+            run_id="forward-next-retry",
+        )
+        assert duplicate.status == "duplicate"
+        assert (
+            warehouse.query(
+                "SELECT COUNT(*) AS n FROM silver_ecb_eligible_asset_release"
+            )[0]["n"]
+            == release_count
+        )
+        assert (
+            warehouse.query(
+                "SELECT COUNT(*) AS n FROM silver_ecb_eligible_asset_version"
+            )[0]["n"]
+            == version_count
+        )
     finally:
         warehouse.close()
 

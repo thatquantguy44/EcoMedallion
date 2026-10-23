@@ -82,3 +82,63 @@ CREATE TABLE IF NOT EXISTS silver.ecb_eligible_asset_dictionary (
 )
 USING DELTA
 COMMENT 'Versioned ECB eligible-assets code dictionary';
+
+-- spec011 Phase 2: run-scoped historical rebuild workspace. Promotion reads
+-- only a completed run and never mutates these evidence tables.
+CREATE TABLE IF NOT EXISTS silver.ecb_eligible_asset_backfill_run (
+    run_id STRING NOT NULL,
+    requested_from_date DATE, requested_to_date DATE,
+    registry_sha256 STRING, status STRING,
+    snapshot_count BIGINT, missing_count BIGINT, quarantined_count BIGINT,
+    version_count BIGINT, change_count BIGINT, final_asset_count BIGINT,
+    started_at TIMESTAMP, updated_at TIMESTAMP, completed_at TIMESTAMP,
+    error_detail STRING
+)
+USING DELTA
+COMMENT 'Run ledger for isolated ECB historical rebuilds';
+
+CREATE TABLE IF NOT EXISTS silver.ecb_eligible_asset_release_stage (
+    run_id STRING NOT NULL, release_id STRING NOT NULL, snapshot_date DATE,
+    publication_at_local STRING, publication_at_utc TIMESTAMP,
+    timestamp_precision STRING, prior_release_id STRING,
+    is_consecutive BOOLEAN, full_count BIGINT,
+    new_count BIGINT, updated_count BIGINT, deleted_count BIGINT,
+    parser_version STRING, source_schema_hash STRING,
+    reconciliation_status STRING, coverage_status STRING, status STRING,
+    source_url STRING, source_entry_path STRING,
+    source_entry_sha256 STRING, archive_sha256 STRING,
+    error_detail STRING, staged_at TIMESTAMP
+)
+USING DELTA
+PARTITIONED BY (run_id)
+COMMENT 'Run-scoped ECB archive release and coverage staging ledger';
+
+CREATE TABLE IF NOT EXISTS silver.ecb_eligible_asset_version_stage (
+    run_id STRING NOT NULL, asset_key STRING NOT NULL,
+    isin_code STRING, other_reg_number STRING, is_eligible BOOLEAN,
+    haircut_category STRING, asset_type STRING, reference_market STRING,
+    denomination STRING, issuance_date DATE, maturity_date DATE,
+    issuer_csd STRING, coupon_definition STRING, coupon_rate DECIMAL(20,8),
+    issuer_name STRING, issuer_group STRING, issuer_residence STRING,
+    guarantor_name STRING, guarantor_group STRING, guarantor_residence STRING,
+    non_own_use_haircut DECIMAL(20,8), own_use_haircut DECIMAL(20,8),
+    potentially_own_usable_covered_bond STRING, climate_factor STRING,
+    source_fields_json STRING, source_schema_version STRING, row_hash STRING,
+    change_type STRING, change_origin STRING,
+    valid_from_release_id STRING, valid_from_utc TIMESTAMP,
+    valid_to_release_id STRING, valid_to_utc TIMESTAMP,
+    staged_at TIMESTAMP
+)
+USING DELTA
+PARTITIONED BY (run_id)
+COMMENT 'Run-scoped compact SCD2 ECB archive history before promotion';
+
+CREATE TABLE IF NOT EXISTS silver.ecb_eligible_asset_change_stage (
+    run_id STRING NOT NULL, release_id STRING NOT NULL, asset_key STRING NOT NULL,
+    computed_change_type STRING, prior_row_hash STRING, new_row_hash STRING,
+    reconciliation_status STRING, change_origin STRING,
+    publication_at_utc TIMESTAMP, staged_at TIMESTAMP
+)
+USING DELTA
+PARTITIONED BY (run_id)
+COMMENT 'Run-scoped ECB archive changes before promotion';

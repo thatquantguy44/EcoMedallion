@@ -1182,19 +1182,28 @@ def _cmd_ecb_assets(args: argparse.Namespace) -> int:
             ECBArchivePromotionError,
             ECBHistoricalPromoter,
         )
+        from fred_pipeline.ecb_archive_delta import (
+            ECBDeltaPromoter,
+            ECBDeltaWriteError,
+        )
 
         if not args.backfill_run_id:
             print("ERROR: backfill-promote requires --backfill-run-id", file=sys.stderr)
             warehouse.close()
             return 2
         try:
-            result = ECBHistoricalPromoter(warehouse).promote(
+            promoter = (
+                ECBDeltaPromoter(warehouse.spark, warehouse.config)
+                if hasattr(warehouse, "spark")
+                else ECBHistoricalPromoter(warehouse)
+            )
+            result = promoter.promote(
                 args.backfill_run_id,
                 acknowledge_quarantines=args.acknowledge_quarantines,
             )
             print(json.dumps(result, default=str, indent=2))
             return 0
-        except ECBArchivePromotionError as exc:
+        except (ECBArchivePromotionError, ECBDeltaWriteError) as exc:
             print(f"ERROR: {exc}", file=sys.stderr)
             return 1
         finally:
@@ -1211,6 +1220,10 @@ def _cmd_ecb_assets(args: argparse.Namespace) -> int:
             ECBArchiveInventoryError,
         )
         from fred_pipeline.ecb_asset_schema_registry import ECBHistoricalSchemaError
+        from fred_pipeline.ecb_archive_delta import (
+            ECBDeltaHistoricalStagingRebuilder,
+            ECBDeltaWriteError,
+        )
 
         today_utc = _dt.datetime.now(_dt.timezone.utc).date()
         to_year = args.to_year or today_utc.year
@@ -1235,9 +1248,16 @@ def _cmd_ecb_assets(args: argparse.Namespace) -> int:
                 archive_client,
                 archive_dir=args.archive_dir,
             )
-            rebuilder = ECBHistoricalStagingRebuilder(
-                warehouse,
-                registry_path=args.schema_registry,
+            rebuilder = (
+                ECBDeltaHistoricalStagingRebuilder(
+                    warehouse,
+                    registry_path=args.schema_registry,
+                )
+                if hasattr(warehouse, "spark")
+                else ECBHistoricalStagingRebuilder(
+                    warehouse,
+                    registry_path=args.schema_registry,
+                )
             )
             result = rebuilder.rebuild(
                 source.iter_snapshots(from_year=args.from_year, to_year=to_year),
@@ -1252,6 +1272,7 @@ def _cmd_ecb_assets(args: argparse.Namespace) -> int:
             ECBArchiveBackfillError,
             ECBArchiveInventoryError,
             ECBHistoricalSchemaError,
+            ECBDeltaWriteError,
             OSError,
         ) as exc:
             print(f"ERROR: {exc}", file=sys.stderr)
