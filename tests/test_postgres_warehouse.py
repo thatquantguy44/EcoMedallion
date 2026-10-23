@@ -172,12 +172,14 @@ def test_postgres_warehouse_builds_core_gold_like_local(tmp_path, postgres_dsn):
         # _read_gold_silver_subset(); revision stats stay set-based in SQL.
         pg_read = pg._read
 
-        def reject_unbounded_silver_read(table):
+        def reject_unbounded_fact_read(table):
             if table == "silver_fred_observation":
                 raise AssertionError("unbounded PostgreSQL Silver read")
+            if table == "gold_fred_latest_observation":
+                raise AssertionError("unbounded PostgreSQL Latest read")
             return pg_read(table)
 
-        pg._read = reject_unbounded_silver_read
+        pg._read = reject_unbounded_fact_read
         pg_result = pg.build_gold()
         assert pg_result == local_result
 

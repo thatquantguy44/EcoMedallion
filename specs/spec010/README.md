@@ -123,22 +123,29 @@ Python `list[dict]` and reached roughly 49 GB. PostgreSQL Gold now:
   so the complete vintage history never crosses the client boundary;
 - writes rolling z-scores and the heatmap in bounded per-series batches while
   retaining transforms only for configured ML/recession inputs;
-- releases the complete Latest/index structures before equity work; and
+- processes materialized Latest in configurable 32-series batches, applying
+  the database-wide maximum observation date to every dense daily-panel batch;
+- loads only configured series for curve, cross-series, reconciliation,
+  terminal, and model consumers instead of building a 20M-row Python index; and
 - reads Tiingo `adjClose` separately from close/dividend/split histories,
   releasing each working set before the next one.
 
 The first partial attempt (Silver filtering without bounded z-score output)
-still reached about 34 GB and was rejected. The final Gold-only PostgreSQL run
-completed all Gold tables in about 34 minutes, peaked around 20 GB during the
-dense Latest/daily-matrix stage, held around 18-19 GB through streamed z-score
-writes, and used about 11-12 GB through the split equity stages. Focused local,
-Polars-parity, z-score, and PostgreSQL integration suites pass, including a
-regression guard that fails on an unbounded PostgreSQL Silver `_read()`.
+still reached about 34 GB and was rejected. The intermediate implementation
+completed in about 34 minutes but still peaked around 20 GB during the dense
+Latest/daily-matrix stage. The final 32-series-batch implementation completed
+every Gold table on the same production-sized seed in 21m 5s. `/usr/bin/time
+-l` reported 6.53 GB maximum resident set and 14.03 GB for macOS's broader
+peak-footprint counter; live samples stayed near 0.3-0.5 GB throughout the
+all-series macro/z-score phase and rose to about 3.4 GB while loading 4.5M
+Tiingo price rows. The prior ~20 GB Latest/dense-matrix ceiling is removed.
 
-The remaining ~20 GB Latest/dense-matrix ceiling is a follow-up optimization,
-not the original 49 GB Silver blocker. A future pass should stream or implement
-those two all-series transforms set-wise in PostgreSQL; this change deliberately
-keeps their existing output semantics and measured ~34-minute runtime.
+At 5,690 series and the default batch size, the implementation performs 178
+bounded all-series Latest reads plus five small configured-series reads (curve,
+cross-series, reconciliation, terminal, and model), in addition to two
+inventory queries. Focused local, Polars-parity, z-score, and PostgreSQL
+integration suites pass with exact fixture output parity. Regression guards
+fail on either an unbounded PostgreSQL Silver or Latest `_read()`.
 
 ## Phase 3: Backend-specific ingestion and planning experiments
 

@@ -96,6 +96,14 @@ def _select_series(
     return out
 
 
+def _batched(values: Sequence[str], size: int) -> Iterable[Sequence[str]]:
+    """Yield stable, non-empty slices without copying the complete input."""
+    if size < 1:
+        raise ValueError("batch size must be positive")
+    for start in range(0, len(values), size):
+        yield values[start : start + size]
+
+
 def _gold_feature_impls():
     """("polars" | "python", daily_feature_matrix, compute_feature_transforms,
     compute_curve_spreads, compute_revision_stats).
@@ -1028,6 +1036,50 @@ class LocalWarehouse:
     def _read(self, table: str) -> list[dict[str, Any]]:
         cur = self.conn.execute(f"SELECT * FROM {table}")
         return [dict(row) for row in cur.fetchall()]
+
+    def _read_gold_latest_subset(
+        self, *, series_ids: Sequence[str]
+    ) -> list[dict[str, Any]]:
+        """Read a projected, explicitly bounded slice of materialized Latest."""
+        ids = tuple(dict.fromkeys(series_ids))
+        if not ids:
+            return []
+        placeholders = ", ".join("?" for _ in ids)
+        rows = self.query(
+            "SELECT series_id, observation_date, value, realtime_start, "
+            "realtime_end, is_missing, revision_number, ingested_at "
+            "FROM gold_fred_latest_observation "
+            f"WHERE series_id IN ({placeholders}) "
+            "ORDER BY series_id, observation_date",
+            ids,
+        )
+        for row in rows:
+            row["is_missing"] = bool(row.get("is_missing"))
+        return rows
+
+    def _gold_latest_inventory(self) -> tuple[list[str], str | None, str | None, int]:
+        """Return series IDs, usable date bounds, and the materialized row count."""
+        ids = [
+            row["series_id"]
+            for row in self.query(
+                "SELECT DISTINCT series_id FROM gold_fred_latest_observation "
+                "ORDER BY series_id"
+            )
+        ]
+        summary = self.query(
+            "SELECT "
+            "MIN(CASE WHEN COALESCE(is_missing, 0) = 0 THEN observation_date END) "
+            "AS min_date, "
+            "MAX(CASE WHEN COALESCE(is_missing, 0) = 0 THEN observation_date END) "
+            "AS max_date, COUNT(*) AS row_count "
+            "FROM gold_fred_latest_observation"
+        )[0]
+        return (
+            ids,
+            summary["min_date"],
+            summary["max_date"],
+            int(summary["row_count"]),
+        )
 
     def _read_gold_silver_subset(
         self,
@@ -2032,35 +2084,6 @@ class LocalWarehouse:
         touched, new_watermark = self._touched_series_since_watermark(prior_watermark)
         self._gold_silver_rows_read = 0
 
-        def _read_latest():
-            rows = self._read("gold_fred_latest_observation")
-            for r in rows:
-                r["is_missing"] = bool(r.get("is_missing"))
-            return rows
-
-        latest = _stage_timed("read_latest")(_read_latest)()
-        latest_row_count = len(latest)
-        if _STAGE_TIMING_ENABLED:
-            log.info("gold.latest_rows_read count=%d", latest_row_count)
-
-        # spec003 Phase 3 fix: the ~18 _compute_parallel engines below each
-        # want only a handful of curated series (a dashboard catalog, a few
-        # curve tenors, a couple of stats pairs) out of `latest`'s tens of
-        # millions of rows. Left alone, every one of them re-filters via its
-        # own `r for r in latest_rows if r.get("series_id") in wanted` scan --
-        # an O(n) pass over the full table per function. The Spark backend
-        # never pays this cost: writer/gold.py's `_collect_latest()` pushes
-        # the same filter down to a `WHERE series_id IN (...)` SQL query
-        # before collecting, so each engine only ever sees its own rows. This
-        # index (one O(n) pass, built once) plus `_select_series()` below lets
-        # Local mirror that: build the wanted-id set the same way gold.py
-        # does, then hand each engine only its own rows via O(1) dict
-        # lookups. The per-function filter inside each engine still runs, but
-        # now over an already-tiny list, so it's free.
-        latest_by_series = _stage_timed("index_latest_by_series")(_index_by_series)(
-            latest
-        )
-
         # daily forward-filled feature matrix; quant transforms (mom/yoy/diff/
         # zscore); curve spreads; revision-magnitude stats. Prefers the
         # polars-accelerated versions (output-identical, see gold_polars
@@ -2074,16 +2097,6 @@ class LocalWarehouse:
             build_revision_stats,
         ) = _gold_feature_impls()
         insert = self._insert_frame if mode == "polars" else self._insert
-
-        self.conn.execute("DELETE FROM gold_fred_macro_feature_daily")
-        insert(
-            "gold_fred_macro_feature_daily",
-            _stage_timed("daily_feature_matrix")(build_daily_matrix)(latest),
-        )
-
-        self.conn.execute("DELETE FROM gold_fred_feature_transforms")
-        _ft_result = _stage_timed("feature_transforms")(build_transforms)(latest)
-        insert("gold_fred_feature_transforms", _ft_result)
 
         # Downstream models only consume a curated subset of transforms. Load
         # that config before the all-series z-score build so Polars mode can
@@ -2106,9 +2119,97 @@ class LocalWarehouse:
             compute_zscore_heatmap,
         )
 
+        bounded_latest = (
+            getattr(self, "_bounded_gold_memory", False) and mode == "polars"
+        )
+        latest_min_date: str | None = None
+        latest_max_date: str | None = None
+        if bounded_latest:
+            (
+                latest_series_ids,
+                latest_min_date,
+                latest_max_date,
+                latest_row_count,
+            ) = _stage_timed("latest_inventory")(self._gold_latest_inventory)()
+            latest: list[dict[str, Any]] = []
+            latest_by_series: dict[str, list[dict[str, Any]]] = {}
+        else:
+
+            def _read_latest():
+                rows = self._read("gold_fred_latest_observation")
+                for r in rows:
+                    r["is_missing"] = bool(r.get("is_missing"))
+                return rows
+
+            latest = _stage_timed("read_latest")(_read_latest)()
+            latest_row_count = len(latest)
+            latest_by_series = _stage_timed("index_latest_by_series")(_index_by_series)(
+                latest
+            )
+        if _STAGE_TIMING_ENABLED:
+            log.info("gold.latest_rows_read count=%d", latest_row_count)
+
+        self.conn.execute("DELETE FROM gold_fred_macro_feature_daily")
+        self.conn.execute("DELETE FROM gold_fred_feature_transforms")
         self.conn.execute("DELETE FROM gold_fred_series_zscore_rolling")
         self.conn.execute("DELETE FROM gold_zscore_heatmap")
-        if mode == "polars":
+        if bounded_latest:
+            feature_transform_rows = []
+            batch_size = max(
+                1, int(os.environ.get("FRED_GOLD_SERIES_BATCH_SIZE", "32"))
+            )
+            for batch_number, series_batch in enumerate(
+                _batched(latest_series_ids, batch_size), start=1
+            ):
+                batch_latest = self._read_gold_latest_subset(series_ids=series_batch)
+                daily_frame = build_daily_matrix(batch_latest, max_date=latest_max_date)
+                insert("gold_fred_macro_feature_daily", daily_frame)
+                transform_frame = build_transforms(batch_latest)
+                insert("gold_fred_feature_transforms", transform_frame)
+
+                rolling_batch: list[dict[str, Any]] = []
+                heatmap_batch: list[dict[str, Any]] = []
+
+                def _flush_bounded_zscores() -> None:
+                    if rolling_batch:
+                        self._insert("gold_fred_series_zscore_rolling", rolling_batch)
+                        rolling_batch.clear()
+                    if heatmap_batch:
+                        self._insert("gold_zscore_heatmap", heatmap_batch)
+                        heatmap_batch.clear()
+
+                for _key, series_frame in transform_frame.group_by(
+                    "series_id", maintain_order=True
+                ):
+                    series_rows = series_frame.to_dicts()
+                    series_id = series_rows[0]["series_id"] if series_rows else None
+                    if series_id in retained_transform_ids:
+                        feature_transform_rows.extend(series_rows)
+                    rolling_batch.extend(
+                        compute_fred_series_zscore_rolling(series_rows)
+                    )
+                    heatmap_batch.extend(compute_zscore_heatmap(series_rows))
+                    if len(rolling_batch) + len(heatmap_batch) >= 100_000:
+                        _flush_bounded_zscores()
+                _flush_bounded_zscores()
+                if _STAGE_TIMING_ENABLED:
+                    log.info(
+                        "gold.latest_batch number=%d series=%d rows=%d",
+                        batch_number,
+                        len(series_batch),
+                        len(batch_latest),
+                    )
+                del batch_latest, daily_frame, transform_frame
+                del rolling_batch, heatmap_batch
+        else:
+            insert(
+                "gold_fred_macro_feature_daily",
+                _stage_timed("daily_feature_matrix")(build_daily_matrix)(latest),
+            )
+            _ft_result = _stage_timed("feature_transforms")(build_transforms)(latest)
+            insert("gold_fred_feature_transforms", _ft_result)
+
+        if mode == "polars" and not bounded_latest:
             feature_transform_rows: list[dict[str, Any]] = []
             rolling_batch: list[dict[str, Any]] = []
             heatmap_batch: list[dict[str, Any]] = []
@@ -2137,7 +2238,7 @@ class LocalWarehouse:
                     _flush_zscore_batches()
             _flush_zscore_batches()
             del _ft_result
-        else:
+        elif not bounded_latest:
             feature_transform_rows = list(_ft_result)
             self._insert(
                 "gold_fred_series_zscore_rolling",
@@ -2152,11 +2253,26 @@ class LocalWarehouse:
                 ),
             )
 
+        from fred_pipeline.spread_config import load_spread_defs
+
+        spreads = load_spread_defs()
+        spread_leg_ids = {
+            series_id
+            for spread in spreads
+            for series_id in (spread.long_leg, spread.short_leg)
+        }
+        curve_spread_latest = (
+            self._read_gold_latest_subset(series_ids=sorted(spread_leg_ids))
+            if bounded_latest
+            else latest
+        )
         self.conn.execute("DELETE FROM gold_fred_curve_spread")
         insert(
             "gold_fred_curve_spread",
-            _stage_timed("curve_spread")(build_spreads)(latest),
+            _stage_timed("curve_spread")(build_spreads)(curve_spread_latest, spreads),
         )
+        if bounded_latest:
+            del curve_spread_latest
 
         # cross-series features (frequency-aware, N-leg): a small output, so use
         # the pure-Python reference directly (same function the Spark path reuses).
@@ -2169,18 +2285,25 @@ class LocalWarehouse:
 
         cross_series_defs = load_cross_series_defs()
 
+        cross_series_ids = sorted(
+            {series_id for item in cross_series_defs for series_id, _ in item.legs}
+        )
+        cross_series_latest = (
+            self._read_gold_latest_subset(series_ids=cross_series_ids)
+            if bounded_latest
+            else latest
+        )
+
         self.conn.execute("DELETE FROM gold_fred_cross_series_feature")
         self._insert(
             "gold_fred_cross_series_feature",
             _stage_timed("cross_series_feature")(compute_cross_series_features)(
-                latest, cross_series_defs
+                cross_series_latest, cross_series_defs
             ),
         )
         # Point-in-time (as-first-reported) variant: leak-free, reads raw Silver
         # vintages for the configured legs, not every Silver series.
-        pit_series_ids = sorted(
-            {series_id for item in cross_series_defs for series_id, _ in item.legs}
-        )
+        pit_series_ids = cross_series_ids
         pit_silver = (
             _stage_timed("read_silver_cross_series_pit")(self._read_gold_silver_subset)(
                 series_ids=pit_series_ids
@@ -2196,13 +2319,33 @@ class LocalWarehouse:
             ),
         )
         del pit_silver
+        if bounded_latest:
+            del cross_series_latest
+
+        from fred_pipeline.reconciliation_config import load_reconciliation_defs
+
+        reconciliation_defs = load_reconciliation_defs()
+        reconciliation_ids = sorted(
+            {
+                series_id
+                for item in reconciliation_defs
+                for series_id in (item.series_a, item.series_b)
+            }
+        )
+        reconciliation_latest = (
+            self._read_gold_latest_subset(series_ids=reconciliation_ids)
+            if bounded_latest
+            else latest
+        )
         self.conn.execute("DELETE FROM gold_fred_source_reconciliation")
         self._insert(
             "gold_fred_source_reconciliation",
             _stage_timed("source_reconciliation")(compute_source_reconciliation)(
-                latest
+                reconciliation_latest, reconciliation_defs
             ),
         )
+        if bounded_latest:
+            del reconciliation_latest
 
         # SEC company financials: standardize raw XBRL tags into canonical line
         # items, then derived ratios (reads raw Silver for source='sec' rows).
@@ -2257,24 +2400,6 @@ class LocalWarehouse:
         self.conn.execute("DELETE FROM gold_dim_series")
         self._insert("gold_dim_series", build_dim_series(meta_rows=meta_rows))
 
-        obs_dates = [
-            r["observation_date"]
-            for r in latest
-            if not r["is_missing"] and r.get("observation_date")
-        ]
-        usrec = latest_by_series.get(RECESSION_SERIES, [])
-        self.conn.execute("DELETE FROM gold_dim_date")
-        self.conn.execute("DELETE FROM gold_market_calendar")
-        if obs_dates:
-            self._insert(
-                "gold_dim_date",
-                build_dim_date(min(obs_dates), max(obs_dates), usrec),
-            )
-            self._insert(
-                "gold_market_calendar",
-                compute_market_calendar(min(obs_dates), max(obs_dates)),
-            )
-
         # Independent pure-Python Gold engines can compute in parallel; writes
         # remain serial below because SQLite has a single writer.
         # spec003 Phase 3: load each engine's own config up front (the same
@@ -2310,11 +2435,9 @@ class LocalWarehouse:
             load_regime_config,
             load_stats_config,
         )
-        from fred_pipeline.spread_config import load_spread_defs
 
         catalog = load_series_catalog()
         tenors = load_curve_defs()
-        spreads = load_spread_defs()
         board = load_benchmark_board()
         funding_cfg = load_funding_config()
         mmkt_cfg = load_mmkt_config()
@@ -2350,6 +2473,49 @@ class LocalWarehouse:
         global_ids = {d.series_id for d in global_cfg.inflation} | {
             d.series_id for d in global_cfg.policy_rates
         }
+
+        if bounded_latest:
+            terminal_ids = set().union(
+                dashboard_ids,
+                curve_ids,
+                spread_leg_ids,
+                board_ids,
+                mmkt_ids,
+                credit_ids,
+                inflation_ids,
+                regime_ids,
+                stats_ids,
+                fomc_ids,
+                global_ids,
+            )
+            latest = _stage_timed("read_latest_curated")(self._read_gold_latest_subset)(
+                series_ids=sorted(terminal_ids)
+            )
+            latest_by_series = _stage_timed("index_latest_by_series")(_index_by_series)(
+                latest
+            )
+
+        obs_dates = (
+            [latest_min_date, latest_max_date]
+            if bounded_latest and latest_min_date and latest_max_date
+            else [
+                r["observation_date"]
+                for r in latest
+                if not r["is_missing"] and r.get("observation_date")
+            ]
+        )
+        usrec = latest_by_series.get(RECESSION_SERIES, [])
+        self.conn.execute("DELETE FROM gold_dim_date")
+        self.conn.execute("DELETE FROM gold_market_calendar")
+        if obs_dates:
+            self._insert(
+                "gold_dim_date",
+                build_dim_date(min(obs_dates), max(obs_dates), usrec),
+            )
+            self._insert(
+                "gold_market_calendar",
+                compute_market_calendar(min(obs_dates), max(obs_dates)),
+            )
 
         # spec003 Phase 2: each entry individually _stage_timed so a
         # per-function breakdown is available (see the module-level comment
@@ -2578,7 +2744,11 @@ class LocalWarehouse:
             )
         else:
             model_latest_ids.update(("CPIAUCSL", "PCEPI"))
-        model_latest = _select_series(latest_by_series, model_latest_ids)
+        model_latest = (
+            self._read_gold_latest_subset(series_ids=sorted(model_latest_ids))
+            if bounded_latest
+            else _select_series(latest_by_series, model_latest_ids)
+        )
         latest_by_series = {}
         latest = []
 

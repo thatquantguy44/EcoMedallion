@@ -34,6 +34,7 @@ Each computation has two entry points:
 from __future__ import annotations
 
 import warnings
+from datetime import date, datetime
 from typing import Any, Iterable, Optional
 
 import polars as pl
@@ -44,13 +45,17 @@ from fred_pipeline.spread_config import SpreadDef, load_spread_defs
 
 def _parse_date_col(df: pl.DataFrame, col: str) -> pl.DataFrame:
     return df.with_columns(
-        pl.col(col).cast(pl.Utf8).str.slice(0, 10)
+        pl.col(col)
+        .cast(pl.Utf8)
+        .str.slice(0, 10)
         .str.strptime(pl.Date, "%Y-%m-%d", strict=False)
         .alias("_date")
     )
 
 
-def daily_feature_matrix_frame(latest_rows: Iterable[dict[str, Any]]) -> pl.DataFrame:
+def daily_feature_matrix_frame(
+    latest_rows: Iterable[dict[str, Any]], *, max_date: str | date | None = None
+) -> pl.DataFrame:
     """Polars parity of :func:`fred_pipeline.transform.daily_feature_matrix`.
 
     Returns a DataFrame with columns ``(as_of_date, series_id, raw_value,
@@ -60,8 +65,12 @@ def daily_feature_matrix_frame(latest_rows: Iterable[dict[str, Any]]) -> pl.Data
     rows = [r for r in latest_rows if not r.get("is_missing", False)]
     if not rows:
         return pl.DataFrame(
-            schema={"as_of_date": pl.Utf8, "series_id": pl.Utf8,
-                    "raw_value": pl.Float64, "value": pl.Float64}
+            schema={
+                "as_of_date": pl.Utf8,
+                "series_id": pl.Utf8,
+                "raw_value": pl.Float64,
+                "value": pl.Float64,
+            }
         )
 
     df = pl.DataFrame(
@@ -74,11 +83,20 @@ def daily_feature_matrix_frame(latest_rows: Iterable[dict[str, Any]]) -> pl.Data
     df = _parse_date_col(df, "observation_date").drop_nulls("_date")
     if df.is_empty():
         return pl.DataFrame(
-            schema={"as_of_date": pl.Utf8, "series_id": pl.Utf8,
-                    "raw_value": pl.Float64, "value": pl.Float64}
+            schema={
+                "as_of_date": pl.Utf8,
+                "series_id": pl.Utf8,
+                "raw_value": pl.Float64,
+                "value": pl.Float64,
+            }
         )
 
-    max_d = df["_date"].max()
+    if max_date is None:
+        max_d = df["_date"].max()
+    elif isinstance(max_date, date):
+        max_d = max_date
+    else:
+        max_d = datetime.strptime(str(max_date)[:10], "%Y-%m-%d").date()
 
     # Per-series daily calendar: each series spans from ITS OWN first
     # observation to the global max date, not the global min. Using a global
@@ -90,9 +108,7 @@ def daily_feature_matrix_frame(latest_rows: Iterable[dict[str, Any]]) -> pl.Data
     panel = (
         df.group_by("series_id")
         .agg(pl.col("_date").min().alias("_start"))
-        .with_columns(
-            pl.date_ranges(pl.col("_start"), max_d, "1d").alias("as_of_date")
-        )
+        .with_columns(pl.date_ranges(pl.col("_start"), max_d, "1d").alias("as_of_date"))
         .explode("as_of_date")
         .select("series_id", "as_of_date")
     )
@@ -116,25 +132,33 @@ def daily_feature_matrix_frame(latest_rows: Iterable[dict[str, Any]]) -> pl.Data
     return out
 
 
-def daily_feature_matrix_pl(latest_rows: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
+def daily_feature_matrix_pl(
+    latest_rows: Iterable[dict[str, Any]],
+) -> list[dict[str, Any]]:
     """Dict-returning spec surface — see module docstring. Prefer
     :func:`daily_feature_matrix_frame` + direct DataFrame insert for bulk loads."""
     return daily_feature_matrix_frame(latest_rows).to_dicts()
 
 
 def compute_feature_transforms_frame(
-    latest_rows: Iterable[dict[str, Any]]
+    latest_rows: Iterable[dict[str, Any]],
 ) -> pl.DataFrame:
     """Polars parity of :func:`fred_pipeline.features.compute_feature_transforms`.
 
     Returns a DataFrame with columns ``(series_id, observation_date, value,
     mom, diff, yoy, zscore)`` — ``observation_date`` already cast to ``Utf8``.
     """
-    schema = {"series_id": pl.Utf8, "observation_date": pl.Utf8, "value": pl.Float64,
-              "mom": pl.Float64, "diff": pl.Float64, "yoy": pl.Float64, "zscore": pl.Float64}
+    schema = {
+        "series_id": pl.Utf8,
+        "observation_date": pl.Utf8,
+        "value": pl.Float64,
+        "mom": pl.Float64,
+        "diff": pl.Float64,
+        "yoy": pl.Float64,
+        "zscore": pl.Float64,
+    }
     rows = [
-        r for r in latest_rows
-        if not r.get("is_missing") and r.get("value") is not None
+        r for r in latest_rows if not r.get("is_missing") and r.get("value") is not None
     ]
     if not rows:
         return pl.DataFrame(schema=schema)
@@ -185,7 +209,9 @@ def compute_feature_transforms_frame(
     # Both frames are pre-sorted by (series_id, key) above; polars just can't
     # cheaply verify per-group sortedness when `by` is used, hence the warning.
     with warnings.catch_warnings():
-        warnings.filterwarnings("ignore", message="Sortedness of columns cannot be checked")
+        warnings.filterwarnings(
+            "ignore", message="Sortedness of columns cannot be checked"
+        )
         yoy_lookup = target.join_asof(
             lookup,
             left_on="_target",
@@ -196,7 +222,9 @@ def compute_feature_transforms_frame(
         ).select("series_id", pl.col("_date").alias("_date_key"), "_year_ago")
 
     df = df.join(
-        yoy_lookup, left_on=["series_id", "_date"], right_on=["series_id", "_date_key"],
+        yoy_lookup,
+        left_on=["series_id", "_date"],
+        right_on=["series_id", "_date_key"],
         how="left",
     ).sort(["series_id", "_date"])
 
@@ -220,11 +248,13 @@ def compute_feature_transforms_frame(
         pl.col("_date").cast(pl.Utf8).alias("observation_date"),
     )
 
-    return df.select("series_id", "observation_date", "value", "mom", "diff", "yoy", "zscore")
+    return df.select(
+        "series_id", "observation_date", "value", "mom", "diff", "yoy", "zscore"
+    )
 
 
 def compute_feature_transforms_pl(
-    latest_rows: Iterable[dict[str, Any]]
+    latest_rows: Iterable[dict[str, Any]],
 ) -> list[dict[str, Any]]:
     """Dict-returning spec surface — see module docstring. Prefer
     :func:`compute_feature_transforms_frame` + direct DataFrame insert for bulk loads."""
@@ -245,11 +275,15 @@ def compute_curve_spreads_frame(
     if spreads is None:
         spreads = load_spread_defs()
 
-    schema = {"spread_name": pl.Utf8, "observation_date": pl.Utf8, "long_leg": pl.Utf8,
-              "short_leg": pl.Utf8, "value": pl.Float64}
+    schema = {
+        "spread_name": pl.Utf8,
+        "observation_date": pl.Utf8,
+        "long_leg": pl.Utf8,
+        "short_leg": pl.Utf8,
+        "value": pl.Float64,
+    }
     rows = [
-        r for r in latest_rows
-        if not r.get("is_missing") and r.get("value") is not None
+        r for r in latest_rows if not r.get("is_missing") and r.get("value") is not None
     ]
     if not rows:
         return pl.DataFrame(schema=schema)
@@ -278,7 +312,8 @@ def compute_curve_spreads_frame(
         if joined.is_empty():
             continue
         value_expr = (
-            (pl.col("_long") / pl.col("_short")) if sd.op == "ratio"
+            (pl.col("_long") / pl.col("_short"))
+            if sd.op == "ratio"
             else (pl.col("_long") - pl.col("_short"))
         )
         out_frames.append(
@@ -314,14 +349,18 @@ def compute_revision_stats_frame(silver_rows: Iterable[dict[str, Any]]) -> pl.Da
     revision_delta, revision_pct)``.
     """
     schema = {
-        "series_id": pl.Utf8, "observation_date": pl.Utf8, "revision_count": pl.UInt32,
-        "first_value": pl.Float64, "first_realtime_start": pl.Utf8,
-        "latest_value": pl.Float64, "latest_realtime_start": pl.Utf8,
-        "revision_delta": pl.Float64, "revision_pct": pl.Float64,
+        "series_id": pl.Utf8,
+        "observation_date": pl.Utf8,
+        "revision_count": pl.UInt32,
+        "first_value": pl.Float64,
+        "first_realtime_start": pl.Utf8,
+        "latest_value": pl.Float64,
+        "latest_realtime_start": pl.Utf8,
+        "revision_delta": pl.Float64,
+        "revision_pct": pl.Float64,
     }
     rows = [
-        r for r in silver_rows
-        if not r.get("is_missing") and r.get("value") is not None
+        r for r in silver_rows if not r.get("is_missing") and r.get("value") is not None
     ]
     if not rows:
         return pl.DataFrame(schema=schema)
@@ -354,13 +393,21 @@ def compute_revision_stats_frame(silver_rows: Iterable[dict[str, Any]]) -> pl.Da
         .alias("revision_pct"),
     )
     return agg.select(
-        "series_id", "observation_date", "revision_count", "first_value",
-        "first_realtime_start", "latest_value", "latest_realtime_start",
-        "revision_delta", "revision_pct",
+        "series_id",
+        "observation_date",
+        "revision_count",
+        "first_value",
+        "first_realtime_start",
+        "latest_value",
+        "latest_realtime_start",
+        "revision_delta",
+        "revision_pct",
     ).sort(["series_id", "observation_date"])
 
 
-def compute_revision_stats_pl(silver_rows: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
+def compute_revision_stats_pl(
+    silver_rows: Iterable[dict[str, Any]],
+) -> list[dict[str, Any]]:
     """Dict-returning spec surface — see module docstring. Prefer
     :func:`compute_revision_stats_frame` + direct DataFrame insert for bulk loads."""
     return compute_revision_stats_frame(silver_rows).to_dicts()
@@ -381,8 +428,12 @@ def compute_cross_series_features_frame(
     """
     from fred_pipeline.features import compute_cross_series_features
 
-    schema = {"feature_name": pl.Utf8, "op": pl.Utf8, "observation_date": pl.Utf8,
-              "value": pl.Float64}
+    schema = {
+        "feature_name": pl.Utf8,
+        "op": pl.Utf8,
+        "observation_date": pl.Utf8,
+        "value": pl.Float64,
+    }
     rows = compute_cross_series_features(latest_rows, defs)
     if not rows:
         return pl.DataFrame(schema=schema)

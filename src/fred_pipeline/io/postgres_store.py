@@ -178,6 +178,7 @@ def _borrowed_from_local_warehouse(cls: type) -> type:
         "_build_series_correlation",
         "_build_equity_total_return_index",
         "_read_gold_silver_subset",
+        "_gold_latest_inventory",
     ):
         setattr(cls, name, getattr(LocalWarehouse, name))
     return cls
@@ -410,6 +411,29 @@ class PostgresWarehouse:
         with self._pg_conn.cursor() as cur:
             cur.execute(f"SELECT * FROM {_relation_from_flat(table)}")
             return [dict(row) for row in cur.fetchall()]
+
+    def _read_gold_latest_subset(
+        self, *, series_ids: Sequence[str]
+    ) -> list[dict[str, Any]]:
+        """Read one bounded Latest slice without using client ``fetchall()``."""
+        ids = tuple(dict.fromkeys(series_ids))
+        if not ids:
+            return []
+        placeholders = ", ".join("%s" for _ in ids)
+        with self._pg_conn.cursor(name="gold_latest_subset") as cur:
+            cur.itersize = 10_000
+            cur.execute(
+                "SELECT series_id, observation_date, value, realtime_start, "
+                "realtime_end, is_missing, revision_number, ingested_at "
+                "FROM gold.fred_latest_observation "
+                f"WHERE series_id IN ({placeholders}) "
+                "ORDER BY series_id, observation_date",
+                ids,
+            )
+            rows = [dict(row) for row in cur]
+        for row in rows:
+            row["is_missing"] = bool(row.get("is_missing"))
+        return rows
 
     def query(
         self,
