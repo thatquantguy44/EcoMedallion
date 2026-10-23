@@ -177,6 +177,7 @@ def _borrowed_from_local_warehouse(cls: type) -> type:
         "_build_funding_stress_daily",
         "_build_series_correlation",
         "_build_equity_total_return_index",
+        "_read_gold_silver_subset",
     ):
         setattr(cls, name, getattr(LocalWarehouse, name))
     return cls
@@ -187,6 +188,7 @@ class PostgresWarehouse:
     """PostgreSQL implementation of the write-side Warehouse protocol."""
 
     supports_incremental_audit = True
+    _bounded_gold_memory = True
 
     def __init__(self, config: PipelineConfig, **kwargs: Any):
         self.config = config
@@ -553,11 +555,87 @@ class PostgresWarehouse:
             )
             return max(cur.rowcount, 0)
 
+    def _rebuild_gold_revision_stats(self, insert: Any, builder: Any) -> int:
+        """Rebuild revision statistics entirely inside PostgreSQL.
+
+        ``insert`` and ``builder`` are accepted for the shared LocalWarehouse
+        orchestration contract but deliberately unused. Returning every
+        Silver vintage to Python was the dominant Gold peak-memory failure.
+        """
+        del insert, builder
+        with self._pg_conn.cursor() as cur:
+            cur.execute("DELETE FROM gold.fred_revision_stats")
+            cur.execute(
+                """
+                INSERT INTO gold.fred_revision_stats (
+                    series_id, observation_date, revision_count,
+                    first_value, first_realtime_start,
+                    latest_value, latest_realtime_start,
+                    revision_delta, revision_pct
+                )
+                WITH ranked AS (
+                    SELECT
+                        series_id,
+                        observation_date,
+                        value,
+                        COALESCE(realtime_start, '') AS realtime_start,
+                        COUNT(*) OVER (
+                            PARTITION BY series_id, observation_date
+                        ) AS revision_count,
+                        ROW_NUMBER() OVER (
+                            PARTITION BY series_id, observation_date
+                            ORDER BY COALESCE(revision_number, 0),
+                                     COALESCE(realtime_start, ''), ctid
+                        ) AS first_rank,
+                        ROW_NUMBER() OVER (
+                            PARTITION BY series_id, observation_date
+                            ORDER BY COALESCE(revision_number, 0) DESC,
+                                     COALESCE(realtime_start, '') DESC, ctid DESC
+                        ) AS latest_rank
+                    FROM silver.fred_observation
+                    WHERE COALESCE(is_missing, 0) = 0
+                      AND value IS NOT NULL
+                ),
+                collapsed AS (
+                    SELECT
+                        series_id,
+                        observation_date,
+                        MAX(revision_count) AS revision_count,
+                        MAX(value) FILTER (WHERE first_rank = 1) AS first_value,
+                        MAX(realtime_start) FILTER (
+                            WHERE first_rank = 1
+                        ) AS first_realtime_start,
+                        MAX(value) FILTER (WHERE latest_rank = 1) AS latest_value,
+                        MAX(realtime_start) FILTER (
+                            WHERE latest_rank = 1
+                        ) AS latest_realtime_start
+                    FROM ranked
+                    GROUP BY series_id, observation_date
+                )
+                SELECT
+                    series_id,
+                    observation_date,
+                    revision_count,
+                    first_value,
+                    first_realtime_start,
+                    latest_value,
+                    latest_realtime_start,
+                    latest_value - first_value AS revision_delta,
+                    CASE
+                        WHEN first_value <> 0
+                        THEN (latest_value - first_value) / first_value
+                    END AS revision_pct
+                FROM collapsed
+                """
+            )
+            return max(cur.rowcount, 0)
+
     def _build_gold_inner(self, full: bool = False) -> dict[str, str]:
         # Reuse the SQLite backend's pure-Python Gold orchestration. The
         # low-level table operations above translate flat table names into
-        # Postgres schemas, and the two largest relational transforms are
-        # overridden with native Postgres SQL.
+        # Postgres schemas. Latest-observation and revision-stat rebuilds stay
+        # in PostgreSQL; the remaining raw-Silver consumers use predicate-
+        # pushed, projected reads from the shared orchestration.
         from fred_pipeline.io.local_store import LocalWarehouse
 
         return LocalWarehouse._build_gold_inner(self, full=full)

@@ -146,8 +146,9 @@ def test_postgres_warehouse_builds_core_gold_like_local(tmp_path, postgres_dsn):
             # infra) and mmkt_rate_snapshot (spec009).
             "gold": 58,
             "meta": 6,
-            # FRED observations plus the four spec011 PIT tables.
-            "silver": 5,
+            # FRED observations, four spec011 PIT tables, and four archive
+            # backfill staging tables.
+            "silver": 9,
         }
         view_counts = pg.query(
             """
@@ -165,6 +166,18 @@ def test_postgres_warehouse_builds_core_gold_like_local(tmp_path, postgres_dsn):
         pg.merge_silver(rows)
 
         local_result = local.build_gold()
+
+        # Regression guard: PostgreSQL Gold must never materialize the complete
+        # Silver table in Python. Purpose-specific raw reads go through
+        # _read_gold_silver_subset(); revision stats stay set-based in SQL.
+        pg_read = pg._read
+
+        def reject_unbounded_silver_read(table):
+            if table == "silver_fred_observation":
+                raise AssertionError("unbounded PostgreSQL Silver read")
+            return pg_read(table)
+
+        pg._read = reject_unbounded_silver_read
         pg_result = pg.build_gold()
         assert pg_result == local_result
 
@@ -183,6 +196,16 @@ def test_postgres_warehouse_builds_core_gold_like_local(tmp_path, postgres_dsn):
             ORDER BY series_id, observation_date, realtime_start
         """
         assert pg.query(pit_sql) == local.query(pit_sql)
+
+        revision_sql = """
+            SELECT series_id, observation_date, revision_count,
+                   first_value, first_realtime_start,
+                   latest_value, latest_realtime_start,
+                   revision_delta, revision_pct
+            FROM gold_fred_revision_stats
+            ORDER BY series_id, observation_date
+        """
+        assert pg.query(revision_sql) == local.query(revision_sql)
 
         local_mmkt = local.query(
             "SELECT * FROM gold_mmkt_rate_snapshot ORDER BY instrument_id"

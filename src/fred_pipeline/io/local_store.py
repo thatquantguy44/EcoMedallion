@@ -1029,6 +1029,79 @@ class LocalWarehouse:
         cur = self.conn.execute(f"SELECT * FROM {table}")
         return [dict(row) for row in cur.fetchall()]
 
+    def _read_gold_silver_subset(
+        self,
+        *,
+        sources: Sequence[str] = (),
+        series_ids: Sequence[str] = (),
+        series_id_suffixes: Sequence[str] = (),
+    ) -> list[dict[str, Any]]:
+        """Read only the raw Silver rows required by one Gold consumer.
+
+        Gold used to materialize the complete Silver table as ``list[dict]``
+        before doing any work. On a production-sized PostgreSQL seed that
+        retained tens of millions of rows (and every unused payload/audit
+        column) in Python. Raw-Silver Gold engines have narrow, explicit
+        inputs, so push those predicates and the column projection into the
+        database instead.
+
+        At least one filter is mandatory. This guard makes accidentally
+        reintroducing an unbounded Gold read a loud error rather than another
+        memory regression.
+        """
+        source_values = tuple(dict.fromkeys(sources))
+        series_values = tuple(dict.fromkeys(series_ids))
+        suffix_values = tuple(dict.fromkeys(series_id_suffixes))
+        if not source_values and not series_values and not suffix_values:
+            raise ValueError(
+                "Gold Silver reads must specify sources, series_ids, or suffixes"
+            )
+
+        clauses: list[str] = []
+        params: list[Any] = []
+        if source_values:
+            clauses.append(f"source IN ({', '.join('?' for _ in source_values)})")
+            params.extend(source_values)
+        if series_values:
+            clauses.append(f"series_id IN ({', '.join('?' for _ in series_values)})")
+            params.extend(series_values)
+        if suffix_values:
+            clauses.append(
+                "(" + " OR ".join("series_id LIKE ?" for _ in suffix_values) + ")"
+            )
+            params.extend(f"%:{suffix}" for suffix in suffix_values)
+
+        rows = self.query(
+            "SELECT source, series_id, observation_date, realtime_start, "
+            "realtime_end, value, is_missing, revision_number "
+            "FROM silver_fred_observation WHERE " + " AND ".join(clauses),
+            tuple(params),
+        )
+        for row in rows:
+            row["is_missing"] = bool(row.get("is_missing"))
+        if hasattr(self, "_gold_silver_rows_read"):
+            self._gold_silver_rows_read += len(rows)
+        return rows
+
+    def _rebuild_gold_revision_stats(self, insert: Any, builder: Any) -> int:
+        """Reference revision-stat rebuild for SQLite.
+
+        PostgreSQL overrides this with a set-based implementation so its full
+        Silver history never crosses the client boundary. Keeping this
+        reference path makes the shared orchestration and SQLite behavior
+        output-compatible.
+        """
+        rows = self.query(
+            "SELECT series_id, observation_date, realtime_start, value, "
+            "is_missing, revision_number FROM silver_fred_observation"
+        )
+        for row in rows:
+            row["is_missing"] = bool(row.get("is_missing"))
+        if hasattr(self, "_gold_silver_rows_read"):
+            self._gold_silver_rows_read += len(rows)
+        self.conn.execute("DELETE FROM gold_fred_revision_stats")
+        return insert("gold_fred_revision_stats", builder(rows))
+
     def _rebuild_gold_latest_observation_sql(self) -> int:
         """Rebuild latest-revision observations with a set-based window query."""
         self.conn.execute("DELETE FROM gold_fred_latest_observation")
@@ -1957,12 +2030,7 @@ class LocalWarehouse:
         # build regardless of which kind this one was.
         prior_watermark = self._get_build_watermark()
         touched, new_watermark = self._touched_series_since_watermark(prior_watermark)
-
-        def _read_silver():
-            rows = self._read("silver_fred_observation")
-            for r in rows:
-                r["is_missing"] = bool(r.get("is_missing"))
-            return rows
+        self._gold_silver_rows_read = 0
 
         def _read_latest():
             rows = self._read("gold_fred_latest_observation")
@@ -1970,10 +2038,10 @@ class LocalWarehouse:
                 r["is_missing"] = bool(r.get("is_missing"))
             return rows
 
-        silver = _stage_timed("read_silver")(_read_silver)()
         latest = _stage_timed("read_latest")(_read_latest)()
+        latest_row_count = len(latest)
         if _STAGE_TIMING_ENABLED:
-            log.info("gold.row_counts silver=%d latest=%d", len(silver), len(latest))
+            log.info("gold.latest_rows_read count=%d", latest_row_count)
 
         # spec003 Phase 3 fix: the ~18 _compute_parallel engines below each
         # want only a handful of curated series (a dashboard catalog, a few
@@ -2016,10 +2084,21 @@ class LocalWarehouse:
         self.conn.execute("DELETE FROM gold_fred_feature_transforms")
         _ft_result = _stage_timed("feature_transforms")(build_transforms)(latest)
         insert("gold_fred_feature_transforms", _ft_result)
-        # Capture as list[dict] for the ML feature-matrix engine (ML-0).
-        feature_transform_rows: list[dict] = (
-            _ft_result.to_dicts() if mode == "polars" else list(_ft_result)
-        )
+
+        # Downstream models only consume a curated subset of transforms. Load
+        # that config before the all-series z-score build so Polars mode can
+        # retain just those rows instead of converting the complete 20M+ row
+        # frame into a second Python list[dict].
+        from fred_pipeline.ml_features import load_ml_feature_config
+
+        ml_cfg = None
+        try:
+            ml_cfg = load_ml_feature_config()
+        except (OSError, ValueError) as exc:
+            log.warning("Using default ML feature config: %s", exc)
+        retained_transform_ids = {"UNRATE", "INDPRO"}
+        if ml_cfg is not None:
+            retained_transform_ids.update(fd.series_id for fd in ml_cfg.features)
 
         # Historical z-score analysis (ML-adjacent: reads feature_transform_rows).
         from fred_pipeline.zscore_views import (
@@ -2028,19 +2107,50 @@ class LocalWarehouse:
         )
 
         self.conn.execute("DELETE FROM gold_fred_series_zscore_rolling")
-        self._insert(
-            "gold_fred_series_zscore_rolling",
-            _stage_timed("zscore_rolling")(compute_fred_series_zscore_rolling)(
-                feature_transform_rows
-            ),
-        )
         self.conn.execute("DELETE FROM gold_zscore_heatmap")
-        self._insert(
-            "gold_zscore_heatmap",
-            _stage_timed("zscore_heatmap")(compute_zscore_heatmap)(
-                feature_transform_rows
-            ),
-        )
+        if mode == "polars":
+            feature_transform_rows: list[dict[str, Any]] = []
+            rolling_batch: list[dict[str, Any]] = []
+            heatmap_batch: list[dict[str, Any]] = []
+
+            def _flush_zscore_batches() -> None:
+                if rolling_batch:
+                    self._insert("gold_fred_series_zscore_rolling", rolling_batch)
+                    rolling_batch.clear()
+                if heatmap_batch:
+                    self._insert("gold_zscore_heatmap", heatmap_batch)
+                    heatmap_batch.clear()
+
+            # Each z-score engine is series-local. Processing one Polars group
+            # at a time preserves exact results while bounding Python objects;
+            # output is flushed in chunks instead of constructing ~80M dicts.
+            for _key, series_frame in _ft_result.group_by(
+                "series_id", maintain_order=True
+            ):
+                series_rows = series_frame.to_dicts()
+                series_id = series_rows[0]["series_id"] if series_rows else None
+                if series_id in retained_transform_ids:
+                    feature_transform_rows.extend(series_rows)
+                rolling_batch.extend(compute_fred_series_zscore_rolling(series_rows))
+                heatmap_batch.extend(compute_zscore_heatmap(series_rows))
+                if len(rolling_batch) + len(heatmap_batch) >= 100_000:
+                    _flush_zscore_batches()
+            _flush_zscore_batches()
+            del _ft_result
+        else:
+            feature_transform_rows = list(_ft_result)
+            self._insert(
+                "gold_fred_series_zscore_rolling",
+                _stage_timed("zscore_rolling")(compute_fred_series_zscore_rolling)(
+                    feature_transform_rows
+                ),
+            )
+            self._insert(
+                "gold_zscore_heatmap",
+                _stage_timed("zscore_heatmap")(compute_zscore_heatmap)(
+                    feature_transform_rows
+                ),
+            )
 
         self.conn.execute("DELETE FROM gold_fred_curve_spread")
         insert(
@@ -2055,21 +2165,37 @@ class LocalWarehouse:
             compute_cross_series_features_pit,
             compute_source_reconciliation,
         )
+        from fred_pipeline.cross_series_config import load_cross_series_defs
+
+        cross_series_defs = load_cross_series_defs()
 
         self.conn.execute("DELETE FROM gold_fred_cross_series_feature")
         self._insert(
             "gold_fred_cross_series_feature",
-            _stage_timed("cross_series_feature")(compute_cross_series_features)(latest),
+            _stage_timed("cross_series_feature")(compute_cross_series_features)(
+                latest, cross_series_defs
+            ),
         )
         # Point-in-time (as-first-reported) variant: leak-free, reads raw Silver
-        # (all vintages), not latest-revision rows.
+        # vintages for the configured legs, not every Silver series.
+        pit_series_ids = sorted(
+            {series_id for item in cross_series_defs for series_id, _ in item.legs}
+        )
+        pit_silver = (
+            _stage_timed("read_silver_cross_series_pit")(self._read_gold_silver_subset)(
+                series_ids=pit_series_ids
+            )
+            if pit_series_ids
+            else []
+        )
         self.conn.execute("DELETE FROM gold_fred_cross_series_feature_pit")
         self._insert(
             "gold_fred_cross_series_feature_pit",
             _stage_timed("cross_series_feature_pit")(compute_cross_series_features_pit)(
-                silver
+                pit_silver, cross_series_defs
             ),
         )
+        del pit_silver
         self.conn.execute("DELETE FROM gold_fred_source_reconciliation")
         self._insert(
             "gold_fred_source_reconciliation",
@@ -2085,9 +2211,13 @@ class LocalWarehouse:
             standardize_sec_statements,
         )
 
-        fundamentals = _stage_timed("sec_standardize")(standardize_sec_statements)(
-            silver
+        sec_silver = _stage_timed("read_silver_sec")(self._read_gold_silver_subset)(
+            sources=("sec",)
         )
+        fundamentals = _stage_timed("sec_standardize")(standardize_sec_statements)(
+            sec_silver
+        )
+        del sec_silver
         self.conn.execute("DELETE FROM gold_fred_company_fundamentals")
         self._insert("gold_fred_company_fundamentals", fundamentals)
         self.conn.execute("DELETE FROM gold_fred_company_ratios")
@@ -2098,10 +2228,8 @@ class LocalWarehouse:
 
         # revision stats read raw Silver (every vintage), not latest-revision
         # rows — they exist to measure how much observations get revised.
-        self.conn.execute("DELETE FROM gold_fred_revision_stats")
-        insert(
-            "gold_fred_revision_stats",
-            _stage_timed("revision_stats")(build_revision_stats)(silver),
+        _stage_timed("revision_stats")(self._rebuild_gold_revision_stats)(
+            insert, build_revision_stats
         )
 
         # Market-terminal analytical views (docs/market_terminal_gold_views.md):
@@ -2432,6 +2560,28 @@ class LocalWarehouse:
         self.conn.execute("DELETE FROM gold_powerbi_catalog")
         self._insert("gold_powerbi_catalog", powerbi_catalog_rows())
 
+        # No later model needs the complete Latest universe. Preserve only
+        # USREC and the configured inflation inputs, then release the 20M-row
+        # list and its per-series index before raw equity history is loaded.
+        from fred_pipeline.inflation_model import load_inflation_forecast_config
+
+        inf_cfg = None
+        try:
+            inf_cfg = load_inflation_forecast_config()
+        except (OSError, ValueError) as exc:
+            log.warning("Using default inflation forecast config: %s", exc)
+        model_latest_ids = {RECESSION_SERIES}
+        if inf_cfg is not None:
+            model_latest_ids.update(inf_cfg.series)
+            model_latest_ids.update(
+                series_id for pair in inf_cfg.var_pairs for series_id in pair
+            )
+        else:
+            model_latest_ids.update(("CPIAUCSL", "PCEPI"))
+        model_latest = _select_series(latest_by_series, model_latest_ids)
+        latest_by_series = {}
+        latest = []
+
         # Equity slice: canonical price return, constituents (iShares), total
         # return (Tiingo). Feed source-filtered Silver rows so the shared
         # <ticker>:close namespace can't collapse vendor rows before canonical
@@ -2444,15 +2594,21 @@ class LocalWarehouse:
             select_canonical_equity_price_rows,
         )
 
-        stooq_rows = [r for r in silver if r.get("source") == "stooq"]
-        ishares_rows = [r for r in silver if r.get("source") == "ishares"]
-        tiingo_rows = [r for r in silver if r.get("source") == "tiingo"]
+        stooq_rows = _stage_timed("read_silver_stooq")(self._read_gold_silver_subset)(
+            sources=("stooq",)
+        )
+        ishares_rows = _stage_timed("read_silver_ishares")(
+            self._read_gold_silver_subset
+        )(sources=("ishares",))
+        tiingo_price_rows = _stage_timed("read_silver_tiingo_prices")(
+            self._read_gold_silver_subset
+        )(sources=("tiingo",), series_id_suffixes=("adjClose",))
         canonical_price_rows = _stage_timed("equity_canonical_prices")(
             select_canonical_equity_price_rows
-        )(stooq_rows, tiingo_rows)
-        eq_return_rows = _stage_timed("equity_return_daily")(
-            compute_equity_return_daily
-        )(canonical_price_rows)
+        )(stooq_rows, tiingo_price_rows)
+        eq_return_rows: list[dict[str, Any]] | None = _stage_timed(
+            "equity_return_daily"
+        )(compute_equity_return_daily)(canonical_price_rows)
         self.conn.execute("DELETE FROM gold_equity_return_daily")
         self._insert("gold_equity_return_daily", eq_return_rows)
         self.conn.execute("DELETE FROM gold_index_constituents")
@@ -2462,15 +2618,12 @@ class LocalWarehouse:
                 ishares_rows
             ),
         )
-        _stage_timed("equity_total_return_index_incremental")(
-            self._build_equity_total_return_index
-        )(tiingo_rows, touched, full)
         self.conn.execute("DELETE FROM gold_equity_price_reconciliation")
         self._insert(
             "gold_equity_price_reconciliation",
             _stage_timed("equity_price_reconciliation")(
                 compute_equity_price_reconciliation
-            )(stooq_rows, tiingo_rows),
+            )(stooq_rows, tiingo_price_rows),
         )
         self.conn.execute("DELETE FROM gold_realized_volatility")
         self._insert(
@@ -2479,19 +2632,35 @@ class LocalWarehouse:
                 canonical_price_rows
             ),
         )
+        del canonical_price_rows
+        del tiingo_price_rows
+        del stooq_rows
+        del ishares_rows
+        if getattr(self, "_bounded_gold_memory", False):
+            # PostgreSQL can read this materialized Gold table back after
+            # Tiingo total-return processing. Dropping the 4.5M-row Python
+            # list prevents it from overlapping the next raw history.
+            eq_return_rows = None
+
+        # Tiingo total return does not use adjClose. Loading its three raw
+        # fields only after the price/reconciliation frames are released
+        # avoids retaining all four 4.5M-row field histories together.
+        tiingo_total_return_rows = _stage_timed("read_silver_tiingo_total_return")(
+            self._read_gold_silver_subset
+        )(
+            sources=("tiingo",),
+            series_id_suffixes=("close", "divCash", "splitFactor"),
+        )
+        _stage_timed("equity_total_return_index_incremental")(
+            self._build_equity_total_return_index
+        )(tiingo_total_return_rows, touched, full)
+        del tiingo_total_return_rows
 
         # ML pipeline: ML-0 feature matrix → ML-2 PCA scores/loadings → ML-4 anomaly.
         from fred_pipeline.anomaly import compute_macro_anomaly_scores
         from fred_pipeline.macro_pca import compute_macro_factor_scores
         from fred_pipeline.ml_features import compute_ml_feature_matrix
 
-        ml_cfg = None  # load from repo config/ml_features.yml
-        try:
-            from fred_pipeline.ml_features import load_ml_feature_config
-
-            ml_cfg = load_ml_feature_config()
-        except (OSError, ValueError) as exc:
-            log.warning("Using default ML feature config: %s", exc)
         ml_matrix = _stage_timed("ml_feature_matrix")(compute_ml_feature_matrix)(
             feature_transform_rows, ml_cfg
         )
@@ -2528,6 +2697,8 @@ class LocalWarehouse:
             ef_cfg = load_equity_factor_config()
         except (OSError, ValueError) as exc:
             log.warning("Using default equity factor config: %s", exc)
+        if eq_return_rows is None:
+            eq_return_rows = self._read("gold_equity_return_daily")
         attribution_rows = _stage_timed("equity_factor_attribution")(
             compute_equity_factor_attribution
         )(eq_return_rows, pca["scores"], cfg=ef_cfg)
@@ -2558,7 +2729,7 @@ class LocalWarehouse:
         self._insert(
             "gold_recession_probability_daily",
             _stage_timed("recession_probability")(compute_recession_probability)(
-                latest,
+                model_latest,
                 ns_factor_rows=ns_factor_rows,
                 feature_transform_rows=feature_transform_rows,
                 credit_spread_rows=credit_rows,
@@ -2569,23 +2740,22 @@ class LocalWarehouse:
         )
 
         # ML-6: Short-horizon inflation forecasting (AR + VAR on CPI/PCE MoM).
-        from fred_pipeline.inflation_model import (
-            compute_inflation_forecast,
-            load_inflation_forecast_config,
-        )
+        from fred_pipeline.inflation_model import compute_inflation_forecast
 
-        inf_cfg = None
-        try:
-            inf_cfg = load_inflation_forecast_config()
-        except (OSError, ValueError) as exc:
-            log.warning("Using default inflation forecast config: %s", exc)
         self.conn.execute("DELETE FROM gold_inflation_forecast")
         self._insert(
             "gold_inflation_forecast",
             _stage_timed("inflation_forecast")(compute_inflation_forecast)(
-                latest, cfg=inf_cfg
+                model_latest, cfg=inf_cfg
             ),
         )
+
+        if _STAGE_TIMING_ENABLED:
+            log.info(
+                "gold.row_counts silver=%d latest=%d",
+                self._gold_silver_rows_read,
+                latest_row_count,
+            )
 
         # spec003 Phase 3: only advance the watermark once every table above
         # has succeeded -- build_gold() rolls back the whole transaction on

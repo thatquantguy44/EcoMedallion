@@ -1,6 +1,7 @@
 # Spec 010: Next Pipeline Performance Pass
 
-Status: **Phase 0 implemented; Phase 1 equity pilot integrated and correctness-tested** (2026-10-18).
+Status: **Phase 0 implemented; Phase 1 equity pilot integrated and correctness-tested;
+Phase 2 PostgreSQL memory blocker fixed and production-seed verified** (2026-10-23).
 No representative large-seed speedup has been measured yet; the fixture smoke
 is a harness check, not a production baseline. Live API and Spark measurements
 remain unverified.
@@ -110,6 +111,34 @@ missing values, and multiple sources; measured reduction in peak RSS and in
 the combined `read_silver` + `read_latest` time on a large seed. Report row
 counts and any added database reads. Do not ship a stream conversion that
 trades lower memory for a slower end-to-end build without an explicit reason.
+
+**PostgreSQL status (2026-10-23): implemented and production-seed verified.**
+The dev seed contained 35,446,039 Silver rows (5,690 series) and 20,547,307
+materialized Latest rows. The old shared orchestration retained all Silver as
+Python `list[dict]` and reached roughly 49 GB. PostgreSQL Gold now:
+
+- pushes configured-series/source/column predicates into every raw-Silver
+  client read;
+- builds `gold.fred_revision_stats` with a set-based PostgreSQL window query,
+  so the complete vintage history never crosses the client boundary;
+- writes rolling z-scores and the heatmap in bounded per-series batches while
+  retaining transforms only for configured ML/recession inputs;
+- releases the complete Latest/index structures before equity work; and
+- reads Tiingo `adjClose` separately from close/dividend/split histories,
+  releasing each working set before the next one.
+
+The first partial attempt (Silver filtering without bounded z-score output)
+still reached about 34 GB and was rejected. The final Gold-only PostgreSQL run
+completed all Gold tables in about 34 minutes, peaked around 20 GB during the
+dense Latest/daily-matrix stage, held around 18-19 GB through streamed z-score
+writes, and used about 11-12 GB through the split equity stages. Focused local,
+Polars-parity, z-score, and PostgreSQL integration suites pass, including a
+regression guard that fails on an unbounded PostgreSQL Silver `_read()`.
+
+The remaining ~20 GB Latest/dense-matrix ceiling is a follow-up optimization,
+not the original 49 GB Silver blocker. A future pass should stream or implement
+those two all-series transforms set-wise in PostgreSQL; this change deliberately
+keeps their existing output semantics and measured ~34-minute runtime.
 
 ## Phase 3: Backend-specific ingestion and planning experiments
 
