@@ -47,6 +47,7 @@ _SETTING_FIELDS = (
     "fred_api_key",
     "fred_base_url",
     "ecb_base_url",
+    "ecb_mid_base_url",
     "bls_api_key",
     "eia_api_key",
     "bea_api_key",
@@ -75,6 +76,7 @@ _ENV_OVERRIDES = {
     "fred_api_key": "FRED_API_KEY",
     "fred_base_url": "FRED_BASE_URL",
     "ecb_base_url": "ECB_BASE_URL",
+    "ecb_mid_base_url": "ECB_MID_BASE_URL",
     "bls_api_key": "BLS_API_KEY",
     "eia_api_key": "EIA_API_KEY",
     "bea_api_key": "BEA_API_KEY",
@@ -204,6 +206,7 @@ class PipelineConfig:
     fred_api_key: str = field(repr=False, default="")
     fred_base_url: str = "https://api.stlouisfed.org/fred"
     ecb_base_url: str = "https://data-api.ecb.europa.eu/service"
+    ecb_mid_base_url: str = "https://mid.ecb.europa.eu"
     # Optional keys for additional sources (see fred_pipeline.sources). BLS and
     # Census work keyless at a lower quota; EIA and BEA require a key. SEC needs
     # a descriptive User-Agent (contact), not a key. Keys are never logged.

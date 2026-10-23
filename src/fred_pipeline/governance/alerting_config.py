@@ -135,6 +135,40 @@ class RouteConfig:
 
 
 @dataclass(frozen=True)
+class ECBAssetsAlertConfig:
+    """Health thresholds for the dedicated ECB eligible-assets feed.
+
+    Delivery still obeys the parent alerting switch, policy, environment, and
+    routes.  This section only decides which ECB conditions are noteworthy.
+    """
+
+    enabled: bool = True
+    expected_release_time_local: str = "18:15"
+    grace_period_minutes: int = 180
+    max_change_percent: float = 20.0
+    alert_on_gap: bool = True
+    alert_on_quarantine: bool = True
+
+    def __post_init__(self) -> None:
+        try:
+            hour, minute = (
+                int(part) for part in self.expected_release_time_local.split(":")
+            )
+        except (TypeError, ValueError) as exc:
+            raise AlertingConfigError(
+                "ecb_assets.expected_release_time_local must be HH:MM"
+            ) from exc
+        if not (0 <= hour <= 23 and 0 <= minute <= 59):
+            raise AlertingConfigError(
+                "ecb_assets.expected_release_time_local must be HH:MM"
+            )
+        if self.grace_period_minutes < 0:
+            raise AlertingConfigError("ecb_assets.grace_period_minutes must be >= 0")
+        if self.max_change_percent < 0:
+            raise AlertingConfigError("ecb_assets.max_change_percent must be >= 0")
+
+
+@dataclass(frozen=True)
 class AlertingConfig:
     enabled: bool = False
     policy: str = "failure"
@@ -149,6 +183,7 @@ class AlertingConfig:
     attach_run_json: bool = False
     #: Cap on failing series listed in the body before truncating.
     max_failures_listed: int = 25
+    ecb_assets: ECBAssetsAlertConfig = field(default_factory=ECBAssetsAlertConfig)
 
     def __post_init__(self) -> None:
         if self.policy not in VALID_POLICIES:
@@ -156,9 +191,7 @@ class AlertingConfig:
                 f"policy {self.policy!r} must be one of {list(VALID_POLICIES)}"
             )
         if self.enabled and not self.from_address:
-            raise AlertingConfigError(
-                "alerting is enabled but 'from_address' is empty"
-            )
+            raise AlertingConfigError("alerting is enabled but 'from_address' is empty")
 
     def route_for(self, verdict: str) -> RouteConfig:
         """Recipients for a verdict, falling back to the 'default' route."""
@@ -200,8 +233,16 @@ def _parse_transport(raw: Any) -> TransportConfig:
         raise AlertingConfigError("'transport' must be a mapping")
     _reject_inline_secrets(raw, where="transport")
     known = {
-        "kind", "host", "port", "use_starttls", "username", "password_env",
-        "tenant_id", "client_id", "client_secret_env", "output_dir",
+        "kind",
+        "host",
+        "port",
+        "use_starttls",
+        "username",
+        "password_env",
+        "tenant_id",
+        "client_id",
+        "client_secret_env",
+        "output_dir",
         "timeout_seconds",
     }
     unknown = set(raw) - known
@@ -258,6 +299,37 @@ def _parse_routes(raw: Any) -> dict[str, RouteConfig]:
     return routes
 
 
+def _parse_ecb_assets(raw: Any) -> ECBAssetsAlertConfig:
+    if raw is None:
+        return ECBAssetsAlertConfig()
+    if not isinstance(raw, dict):
+        raise AlertingConfigError("'ecb_assets' must be a mapping")
+    known = {
+        "enabled",
+        "expected_release_time_local",
+        "grace_period_minutes",
+        "max_change_percent",
+        "alert_on_gap",
+        "alert_on_quarantine",
+    }
+    unknown = set(raw) - known
+    if unknown:
+        raise AlertingConfigError(
+            f"ecb_assets has unknown field(s): {sorted(unknown)}. "
+            f"Allowed: {sorted(known)}"
+        )
+    return ECBAssetsAlertConfig(
+        enabled=bool(raw.get("enabled", True)),
+        expected_release_time_local=str(
+            raw.get("expected_release_time_local", "18:15")
+        ),
+        grace_period_minutes=int(raw.get("grace_period_minutes", 180)),
+        max_change_percent=float(raw.get("max_change_percent", 20.0)),
+        alert_on_gap=bool(raw.get("alert_on_gap", True)),
+        alert_on_quarantine=bool(raw.get("alert_on_quarantine", True)),
+    )
+
+
 def load_alerting_config(path: Optional[str] = None) -> AlertingConfig:
     """Load alert routing from YAML.
 
@@ -267,9 +339,7 @@ def load_alerting_config(path: Optional[str] = None) -> AlertingConfig:
     than refuse to start. A *malformed* file raises: silently not alerting
     because of a YAML typo is the failure this whole module exists to prevent.
     """
-    resolved = (
-        path or os.environ.get("FRED_ALERTING_FILE") or DEFAULT_ALERTING_PATH
-    )
+    resolved = path or os.environ.get("FRED_ALERTING_FILE") or DEFAULT_ALERTING_PATH
     if not resolved or not os.path.isfile(resolved):
         return AlertingConfig()
     with open(resolved, "r", encoding="utf-8") as fh:
@@ -278,9 +348,17 @@ def load_alerting_config(path: Optional[str] = None) -> AlertingConfig:
         raise AlertingConfigError(f"{resolved} must be a mapping at the top level")
 
     known = {
-        "enabled", "policy", "from_address", "from_name", "subject_prefix",
-        "environments", "transport", "routes", "attach_run_json",
+        "enabled",
+        "policy",
+        "from_address",
+        "from_name",
+        "subject_prefix",
+        "environments",
+        "transport",
+        "routes",
+        "attach_run_json",
         "max_failures_listed",
+        "ecb_assets",
     }
     unknown = set(data) - known
     if unknown:
@@ -312,4 +390,5 @@ def load_alerting_config(path: Optional[str] = None) -> AlertingConfig:
         routes=_parse_routes(data.get("routes")),
         attach_run_json=bool(data.get("attach_run_json", False)),
         max_failures_listed=int(data.get("max_failures_listed", 25)),
+        ecb_assets=_parse_ecb_assets(data.get("ecb_assets")),
     )

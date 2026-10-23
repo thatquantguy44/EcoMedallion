@@ -35,6 +35,9 @@ default:
   # No API key needed; ECB's SDMX 2.1 endpoint is fully public. Set the URL
   # below only if you route ECB traffic through an approved proxy or mirror.
   ecb_base_url: "https://data-api.ecb.europa.eu/service"  # ECB_BASE_URL
+  # MID publishes the signed eligible-marketable-assets releases used by
+  # `fred_pipeline ecb-assets` (spec011). Override only for an approved mirror.
+  ecb_mid_base_url: "https://mid.ecb.europa.eu"           # ECB_MID_BASE_URL
 
   # --- Additional data source keys ------------------------------------------
   #

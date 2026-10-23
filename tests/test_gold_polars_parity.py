@@ -29,8 +29,12 @@ from fred_pipeline.transform import daily_feature_matrix
 
 
 def _row(series_id, obs_date, value, is_missing=False):
-    return {"series_id": series_id, "observation_date": obs_date, "value": value,
-            "is_missing": is_missing}
+    return {
+        "series_id": series_id,
+        "observation_date": obs_date,
+        "value": value,
+        "is_missing": is_missing,
+    }
 
 
 def _sort_key(d: dict) -> tuple:
@@ -39,8 +43,20 @@ def _sort_key(d: dict) -> tuple:
 
 def _assert_same_rows(actual: list[dict], expected: list[dict]) -> None:
     assert len(actual) == len(expected)
-    a_sorted = sorted(actual, key=lambda r: (r.get("series_id", ""), r.get("observation_date") or r.get("as_of_date")))
-    e_sorted = sorted(expected, key=lambda r: (r.get("series_id", ""), r.get("observation_date") or r.get("as_of_date")))
+    a_sorted = sorted(
+        actual,
+        key=lambda r: (
+            r.get("series_id", ""),
+            r.get("observation_date") or r.get("as_of_date"),
+        ),
+    )
+    e_sorted = sorted(
+        expected,
+        key=lambda r: (
+            r.get("series_id", ""),
+            r.get("observation_date") or r.get("as_of_date"),
+        ),
+    )
     for a, e in zip(a_sorted, e_sorted):
         assert set(a) == set(e), (a, e)
         for k in e:
@@ -52,6 +68,7 @@ def _assert_same_rows(actual: list[dict], expected: list[dict]) -> None:
 
 
 # ---- daily_feature_matrix ---------------------------------------------------
+
 
 def _daily_matrix_fixture():
     return [
@@ -72,7 +89,9 @@ def test_daily_feature_matrix_parity():
 def test_daily_feature_matrix_parity_empty():
     assert daily_feature_matrix_pl([]) == daily_feature_matrix([]) == []
     all_missing = [_row("A", "2024-01-01", 1.0, is_missing=True)]
-    assert daily_feature_matrix_pl(all_missing) == daily_feature_matrix(all_missing) == []
+    assert (
+        daily_feature_matrix_pl(all_missing) == daily_feature_matrix(all_missing) == []
+    )
 
 
 def test_daily_feature_matrix_parity_single_series_single_point():
@@ -80,20 +99,77 @@ def test_daily_feature_matrix_parity_single_series_single_point():
     _assert_same_rows(daily_feature_matrix_pl(rows), daily_feature_matrix(rows))
 
 
+def test_daily_feature_matrix_batch_can_use_global_max_date():
+    from fred_pipeline.gold_polars import daily_feature_matrix_frame
+
+    rows = [_row("A", "2024-01-01", 1.0), _row("A", "2024-01-03", 2.0)]
+    got = daily_feature_matrix_frame(rows, max_date="2024-01-05").to_dicts()
+    assert got[-1] == {
+        "as_of_date": "2024-01-05",
+        "series_id": "A",
+        "raw_value": None,
+        "value": 2.0,
+    }
+
+
 # ---- compute_feature_transforms --------------------------------------------
+
 
 def _transforms_fixture():
     rows = []
     # Regular monthly series over 3 years to exercise mom/diff/yoy/zscore,
     # including a point exactly at the 40-day YoY tolerance boundary.
-    values = [100, 102, 101, 105, 103, 110, 108, 112, 115, 111, 109, 120,
-              121, 119, 125, 123, 130, 128, 132, 135, 131, 129, 140, 141]
+    values = [
+        100,
+        102,
+        101,
+        105,
+        103,
+        110,
+        108,
+        112,
+        115,
+        111,
+        109,
+        120,
+        121,
+        119,
+        125,
+        123,
+        130,
+        128,
+        132,
+        135,
+        131,
+        129,
+        140,
+        141,
+    ]
     dates = [
-        "2022-01-15", "2022-02-15", "2022-03-15", "2022-04-15", "2022-05-15",
-        "2022-06-15", "2022-07-15", "2022-08-15", "2022-09-15", "2022-10-15",
-        "2022-11-15", "2022-12-15", "2023-01-15", "2023-02-15", "2023-03-15",
-        "2023-04-15", "2023-05-15", "2023-06-15", "2023-07-15", "2023-08-15",
-        "2023-09-15", "2023-10-15", "2023-11-15", "2023-12-15",
+        "2022-01-15",
+        "2022-02-15",
+        "2022-03-15",
+        "2022-04-15",
+        "2022-05-15",
+        "2022-06-15",
+        "2022-07-15",
+        "2022-08-15",
+        "2022-09-15",
+        "2022-10-15",
+        "2022-11-15",
+        "2022-12-15",
+        "2023-01-15",
+        "2023-02-15",
+        "2023-03-15",
+        "2023-04-15",
+        "2023-05-15",
+        "2023-06-15",
+        "2023-07-15",
+        "2023-08-15",
+        "2023-09-15",
+        "2023-10-15",
+        "2023-11-15",
+        "2023-12-15",
     ]
     for d, v in zip(dates, values):
         rows.append(_row("MONTHLY", d, float(v)))
@@ -123,7 +199,9 @@ def _transforms_fixture():
 
 def test_compute_feature_transforms_parity():
     rows = _transforms_fixture()
-    _assert_same_rows(compute_feature_transforms_pl(rows), compute_feature_transforms(rows))
+    _assert_same_rows(
+        compute_feature_transforms_pl(rows), compute_feature_transforms(rows)
+    )
 
 
 def test_compute_feature_transforms_parity_empty():
@@ -143,10 +221,14 @@ def test_compute_feature_transforms_parity_large_magnitude_zscore():
     val = 20000.0  # ~$20T in billions, like GDP
     for i in range(300):
         val *= 1 + random.uniform(-0.005, 0.02)
-        rows.append(_row("GDP_LIKE", f"20{(i // 12) % 100:02d}-{(i % 12) + 1:02d}-01", val))
+        rows.append(
+            _row("GDP_LIKE", f"20{(i // 12) % 100:02d}-{(i % 12) + 1:02d}-01", val)
+        )
 
     py = {r["observation_date"]: r["zscore"] for r in compute_feature_transforms(rows)}
-    pl_ = {r["observation_date"]: r["zscore"] for r in compute_feature_transforms_pl(rows)}
+    pl_ = {
+        r["observation_date"]: r["zscore"] for r in compute_feature_transforms_pl(rows)
+    }
     assert set(py) == set(pl_)
     for d, a in py.items():
         b = pl_[d]
@@ -157,6 +239,7 @@ def test_compute_feature_transforms_parity_large_magnitude_zscore():
 
 
 # ---- compute_curve_spreads ---------------------------------------------------
+
 
 def _spreads_fixture():
     return [
@@ -196,29 +279,78 @@ def test_compute_curve_spreads_parity_ratio_op_and_zero_guard():
 
 # ---- compute_revision_stats --------------------------------------------------
 
+
 def _revision_stats_fixture():
     return [
         # revised twice
-        {"series_id": "G", "observation_date": "2024-01-01", "value": 100.0,
-         "realtime_start": "2024-02-01", "is_missing": False, "revision_number": 1},
-        {"series_id": "G", "observation_date": "2024-01-01", "value": 101.5,
-         "realtime_start": "2024-03-01", "is_missing": False, "revision_number": 2},
-        {"series_id": "G", "observation_date": "2024-01-01", "value": 99.0,
-         "realtime_start": "2024-04-01", "is_missing": False, "revision_number": 3},
+        {
+            "series_id": "G",
+            "observation_date": "2024-01-01",
+            "value": 100.0,
+            "realtime_start": "2024-02-01",
+            "is_missing": False,
+            "revision_number": 1,
+        },
+        {
+            "series_id": "G",
+            "observation_date": "2024-01-01",
+            "value": 101.5,
+            "realtime_start": "2024-03-01",
+            "is_missing": False,
+            "revision_number": 2,
+        },
+        {
+            "series_id": "G",
+            "observation_date": "2024-01-01",
+            "value": 99.0,
+            "realtime_start": "2024-04-01",
+            "is_missing": False,
+            "revision_number": 3,
+        },
         # never revised
-        {"series_id": "G", "observation_date": "2024-02-01", "value": 102.0,
-         "realtime_start": "2024-03-15", "is_missing": False, "revision_number": 1},
+        {
+            "series_id": "G",
+            "observation_date": "2024-02-01",
+            "value": 102.0,
+            "realtime_start": "2024-03-15",
+            "is_missing": False,
+            "revision_number": 1,
+        },
         # non-vintage series (blank realtime_start)
-        {"series_id": "NV", "observation_date": "2024-01-01", "value": 5.0,
-         "realtime_start": "", "is_missing": False, "revision_number": 1},
+        {
+            "series_id": "NV",
+            "observation_date": "2024-01-01",
+            "value": 5.0,
+            "realtime_start": "",
+            "is_missing": False,
+            "revision_number": 1,
+        },
         # first value is exactly zero -> revision_pct must be null, not div/0
-        {"series_id": "Z", "observation_date": "2024-01-01", "value": 0.0,
-         "realtime_start": "2024-02-01", "is_missing": False, "revision_number": 1},
-        {"series_id": "Z", "observation_date": "2024-01-01", "value": 2.0,
-         "realtime_start": "2024-03-01", "is_missing": False, "revision_number": 2},
+        {
+            "series_id": "Z",
+            "observation_date": "2024-01-01",
+            "value": 0.0,
+            "realtime_start": "2024-02-01",
+            "is_missing": False,
+            "revision_number": 1,
+        },
+        {
+            "series_id": "Z",
+            "observation_date": "2024-01-01",
+            "value": 2.0,
+            "realtime_start": "2024-03-01",
+            "is_missing": False,
+            "revision_number": 2,
+        },
         # missing/None rows must be excluded
-        {"series_id": "G", "observation_date": "2024-03-01", "value": None,
-         "realtime_start": "2024-04-01", "is_missing": True, "revision_number": 1},
+        {
+            "series_id": "G",
+            "observation_date": "2024-03-01",
+            "value": None,
+            "realtime_start": "2024-04-01",
+            "is_missing": True,
+            "revision_number": 1,
+        },
     ]
 
 

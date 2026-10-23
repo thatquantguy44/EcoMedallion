@@ -64,6 +64,24 @@ _UPSERT_KEYS: dict[str, tuple[str, ...]] = {
         "realtime_start",
     ),
     "audit_etl_run": ("run_id",),
+    "bronze_ecb_eligible_asset_release": ("release_id",),
+    "bronze_ecb_eligible_asset_artifact": ("release_id", "artifact_kind"),
+    "silver_ecb_eligible_asset_release": ("release_id",),
+    "silver_ecb_eligible_asset_version": ("asset_key", "valid_from_release_id"),
+    "silver_ecb_eligible_asset_change": ("release_id", "asset_key"),
+    "silver_ecb_eligible_asset_dictionary": ("dictionary_hash", "domain", "code"),
+    "silver_ecb_eligible_asset_backfill_run": ("run_id",),
+    "silver_ecb_eligible_asset_release_stage": ("run_id", "release_id"),
+    "silver_ecb_eligible_asset_version_stage": (
+        "run_id",
+        "asset_key",
+        "valid_from_release_id",
+    ),
+    "silver_ecb_eligible_asset_change_stage": (
+        "run_id",
+        "release_id",
+        "asset_key",
+    ),
 }
 
 
@@ -159,6 +177,8 @@ def _borrowed_from_local_warehouse(cls: type) -> type:
         "_build_funding_stress_daily",
         "_build_series_correlation",
         "_build_equity_total_return_index",
+        "_read_gold_silver_subset",
+        "_gold_latest_inventory",
     ):
         setattr(cls, name, getattr(LocalWarehouse, name))
     return cls
@@ -169,6 +189,7 @@ class PostgresWarehouse:
     """PostgreSQL implementation of the write-side Warehouse protocol."""
 
     supports_incremental_audit = True
+    _bounded_gold_memory = True
 
     def __init__(self, config: PipelineConfig, **kwargs: Any):
         self.config = config
@@ -391,6 +412,29 @@ class PostgresWarehouse:
             cur.execute(f"SELECT * FROM {_relation_from_flat(table)}")
             return [dict(row) for row in cur.fetchall()]
 
+    def _read_gold_latest_subset(
+        self, *, series_ids: Sequence[str]
+    ) -> list[dict[str, Any]]:
+        """Read one bounded Latest slice without using client ``fetchall()``."""
+        ids = tuple(dict.fromkeys(series_ids))
+        if not ids:
+            return []
+        placeholders = ", ".join("%s" for _ in ids)
+        with self._pg_conn.cursor(name="gold_latest_subset") as cur:
+            cur.itersize = 10_000
+            cur.execute(
+                "SELECT series_id, observation_date, value, realtime_start, "
+                "realtime_end, is_missing, revision_number, ingested_at "
+                "FROM gold.fred_latest_observation "
+                f"WHERE series_id IN ({placeholders}) "
+                "ORDER BY series_id, observation_date",
+                ids,
+            )
+            rows = [dict(row) for row in cur]
+        for row in rows:
+            row["is_missing"] = bool(row.get("is_missing"))
+        return rows
+
     def query(
         self,
         sql: str,
@@ -535,11 +579,87 @@ class PostgresWarehouse:
             )
             return max(cur.rowcount, 0)
 
+    def _rebuild_gold_revision_stats(self, insert: Any, builder: Any) -> int:
+        """Rebuild revision statistics entirely inside PostgreSQL.
+
+        ``insert`` and ``builder`` are accepted for the shared LocalWarehouse
+        orchestration contract but deliberately unused. Returning every
+        Silver vintage to Python was the dominant Gold peak-memory failure.
+        """
+        del insert, builder
+        with self._pg_conn.cursor() as cur:
+            cur.execute("DELETE FROM gold.fred_revision_stats")
+            cur.execute(
+                """
+                INSERT INTO gold.fred_revision_stats (
+                    series_id, observation_date, revision_count,
+                    first_value, first_realtime_start,
+                    latest_value, latest_realtime_start,
+                    revision_delta, revision_pct
+                )
+                WITH ranked AS (
+                    SELECT
+                        series_id,
+                        observation_date,
+                        value,
+                        COALESCE(realtime_start, '') AS realtime_start,
+                        COUNT(*) OVER (
+                            PARTITION BY series_id, observation_date
+                        ) AS revision_count,
+                        ROW_NUMBER() OVER (
+                            PARTITION BY series_id, observation_date
+                            ORDER BY COALESCE(revision_number, 0),
+                                     COALESCE(realtime_start, ''), ctid
+                        ) AS first_rank,
+                        ROW_NUMBER() OVER (
+                            PARTITION BY series_id, observation_date
+                            ORDER BY COALESCE(revision_number, 0) DESC,
+                                     COALESCE(realtime_start, '') DESC, ctid DESC
+                        ) AS latest_rank
+                    FROM silver.fred_observation
+                    WHERE COALESCE(is_missing, 0) = 0
+                      AND value IS NOT NULL
+                ),
+                collapsed AS (
+                    SELECT
+                        series_id,
+                        observation_date,
+                        MAX(revision_count) AS revision_count,
+                        MAX(value) FILTER (WHERE first_rank = 1) AS first_value,
+                        MAX(realtime_start) FILTER (
+                            WHERE first_rank = 1
+                        ) AS first_realtime_start,
+                        MAX(value) FILTER (WHERE latest_rank = 1) AS latest_value,
+                        MAX(realtime_start) FILTER (
+                            WHERE latest_rank = 1
+                        ) AS latest_realtime_start
+                    FROM ranked
+                    GROUP BY series_id, observation_date
+                )
+                SELECT
+                    series_id,
+                    observation_date,
+                    revision_count,
+                    first_value,
+                    first_realtime_start,
+                    latest_value,
+                    latest_realtime_start,
+                    latest_value - first_value AS revision_delta,
+                    CASE
+                        WHEN first_value <> 0
+                        THEN (latest_value - first_value) / first_value
+                    END AS revision_pct
+                FROM collapsed
+                """
+            )
+            return max(cur.rowcount, 0)
+
     def _build_gold_inner(self, full: bool = False) -> dict[str, str]:
         # Reuse the SQLite backend's pure-Python Gold orchestration. The
         # low-level table operations above translate flat table names into
-        # Postgres schemas, and the two largest relational transforms are
-        # overridden with native Postgres SQL.
+        # Postgres schemas. Latest-observation and revision-stat rebuilds stay
+        # in PostgreSQL; the remaining raw-Silver consumers use predicate-
+        # pushed, projected reads from the shared orchestration.
         from fred_pipeline.io.local_store import LocalWarehouse
 
         return LocalWarehouse._build_gold_inner(self, full=full)
@@ -665,13 +785,20 @@ def _convert_table_part(part: str) -> str:
     if upper.startswith("PRIMARY KEY"):
         cols = text[text.index("(") + 1 : text.rindex(")")]
         return f"PRIMARY KEY ({_pg_column_list([c.strip() for c in cols.split(',')])})"
+    if upper.startswith("UNIQUE"):
+        cols = text[text.index("(") + 1 : text.rindex(")")]
+        return f"UNIQUE ({_pg_column_list([c.strip() for c in cols.split(',')])})"
 
-    pieces = text.split(None, 2)
-    name = pieces[0]
-    sqlite_type = pieces[1] if len(pieces) > 1 else "TEXT"
-    rest = pieces[2] if len(pieces) > 2 else ""
-    pieces = (_pg_ident(name), _pg_type(sqlite_type), _quote_inline_constraints(rest))
-    return " ".join(p for p in pieces if p)
+    source_parts = text.split(None, 2)
+    name = source_parts[0]
+    sqlite_type = source_parts[1] if len(source_parts) > 1 else "TEXT"
+    rest = source_parts[2] if len(source_parts) > 2 else ""
+    converted_parts = (
+        _pg_ident(name),
+        _pg_type(sqlite_type),
+        _quote_inline_constraints(rest),
+    )
+    return " ".join(part for part in converted_parts if part)
 
 
 def _quote_inline_constraints(rest: str) -> str:
@@ -789,6 +916,38 @@ _POSTGRES_INDEX_SQL = (
     CREATE INDEX IF NOT EXISTS ix_silver_obs_sid_ingested
         ON silver.fred_observation(series_id, ingested_at)
     """,
+    """
+    CREATE INDEX IF NOT EXISTS ix_ecb_asset_version_interval
+        ON silver.ecb_eligible_asset_version(asset_key, valid_from_utc, valid_to_utc)
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS ix_ecb_asset_version_open
+        ON silver.ecb_eligible_asset_version(valid_to_utc, is_eligible)
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS ix_ecb_asset_release_publication
+        ON silver.ecb_eligible_asset_release(publication_at_utc)
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS ix_ecb_asset_change_publication
+        ON silver.ecb_eligible_asset_change(publication_at_utc, computed_change_type)
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS ix_ecb_asset_stage_release_date
+        ON silver.ecb_eligible_asset_release_stage(run_id, snapshot_date)
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS ix_ecb_asset_stage_version_interval
+        ON silver.ecb_eligible_asset_version_stage(
+            run_id, asset_key, valid_from_utc, valid_to_utc
+        )
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS ix_ecb_asset_stage_version_open
+        ON silver.ecb_eligible_asset_version_stage(
+            run_id, valid_to_utc, is_eligible
+        )
+    """,
 )
 
 _POSTGRES_VIEW_SQL = """
@@ -882,4 +1041,34 @@ SELECT cik, ratio_name, observation_date, value,
            PARTITION BY ratio_name, observation_date ORDER BY value DESC
        ) AS rank_desc
 FROM gold.fred_company_ratios;
+
+CREATE OR REPLACE VIEW gold.ecb_eligible_security_history AS
+SELECT v.*,
+       at.definition AS asset_type_label,
+       hc.definition AS haircut_category_label,
+       rm.definition AS reference_market_label,
+       cd.definition AS coupon_definition_label
+FROM silver.ecb_eligible_asset_version v
+LEFT JOIN silver.ecb_eligible_asset_dictionary at
+  ON at.dictionary_hash = v.dictionary_hash
+ AND at.domain = 'assetTypes' AND at.code = v.asset_type
+LEFT JOIN silver.ecb_eligible_asset_dictionary hc
+  ON hc.dictionary_hash = v.dictionary_hash
+ AND hc.domain = 'assetHaircutCategories' AND hc.code = v.haircut_category
+LEFT JOIN silver.ecb_eligible_asset_dictionary rm
+  ON rm.dictionary_hash = v.dictionary_hash
+ AND rm.domain = 'assetReferenceMarkets' AND rm.code = v.reference_market
+LEFT JOIN silver.ecb_eligible_asset_dictionary cd
+  ON cd.dictionary_hash = v.dictionary_hash
+ AND cd.domain = 'assetCouponDefinitions' AND cd.code = v.coupon_definition;
+
+CREATE OR REPLACE VIEW gold.ecb_eligible_security_current AS
+SELECT * FROM gold.ecb_eligible_security_history
+WHERE valid_to_utc IS NULL AND is_eligible = 1;
+
+CREATE OR REPLACE VIEW gold.ecb_eligible_security_change AS
+SELECT * FROM silver.ecb_eligible_asset_change;
+
+CREATE OR REPLACE VIEW gold.ecb_eligible_security_coverage AS
+SELECT * FROM silver.ecb_eligible_asset_release;
 """

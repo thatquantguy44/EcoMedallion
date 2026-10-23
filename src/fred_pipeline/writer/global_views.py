@@ -645,6 +645,42 @@ POWERBI_CATALOG: tuple[dict[str, Any], ...] = (
         "first print (market/price series) and which cannot (GDP, payrolls).",
     ),
     _entry(
+        "ecb_eligible_security_history",
+        "view",
+        "PIT",
+        "1 / security x eligibility interval",
+        "security history table / as-of drill-through",
+        "ECB-listed eligible marketable securities as half-open publication-time intervals, "
+        "including the attributes, haircuts, release lineage, and dictionary labels in force.",
+    ),
+    _entry(
+        "ecb_eligible_security_current",
+        "view",
+        "PIT",
+        "1 / currently listed security",
+        "current eligibility table / filters",
+        "The open intervals from ecb_eligible_security_history: securities present in the "
+        "latest accepted ECB full snapshot, with no independent legal-eligibility claim.",
+    ),
+    _entry(
+        "ecb_eligible_security_change",
+        "view",
+        "PIT",
+        "1 / release x changed security",
+        "release change table / additions-removals chart",
+        "Computed and ECB-declared N/U/D changes by accepted eligible-assets release, with "
+        "reconciliation status and publication-time lineage.",
+    ),
+    _entry(
+        "ecb_eligible_security_coverage",
+        "view",
+        "PIT",
+        "1 / ECB eligible-assets release",
+        "coverage timeline / pipeline health table",
+        "Accepted-release coverage, counts, prior-release continuity, schema identity, and "
+        "reconciliation status for the ECB eligible-assets history.",
+    ),
+    _entry(
         "fred_cross_series_feature",
         "fact",
         "PIT",

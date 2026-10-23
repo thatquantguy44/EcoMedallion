@@ -3,6 +3,12 @@ import uuid
 import pytest
 
 from fred_pipeline.config import Environment, PipelineConfig
+from fred_pipeline.ecb_eligible_assets import (
+    ECBEligibleAssetRepository,
+    ReleaseMessage,
+    diff_assets,
+    parse_assets_xml,
+)
 from fred_pipeline.io.local_store import LocalWarehouse
 from fred_pipeline.io.postgres_store import PostgresWarehouse
 from fred_pipeline.io.warehouse_factory import WarehouseConfig, WarehouseFactory
@@ -134,12 +140,15 @@ def test_postgres_warehouse_builds_core_gold_like_local(tmp_path, postgres_dsn):
         )
         assert {row["table_schema"]: row["n"] for row in object_counts} == {
             "audit": 4,
-            "bronze": 1,
+            # FRED response plus the spec011 release/artifact tables.
+            "bronze": 3,
             # Includes gold_incremental_checkpoint (spec003 Phase 3 checkpoint
             # infra) and mmkt_rate_snapshot (spec009).
             "gold": 58,
             "meta": 6,
-            "silver": 1,
+            # FRED observations, four spec011 PIT tables, and four archive
+            # backfill staging tables.
+            "silver": 9,
         }
         view_counts = pg.query(
             """
@@ -149,15 +158,28 @@ def test_postgres_warehouse_builds_core_gold_like_local(tmp_path, postgres_dsn):
             GROUP BY table_schema
             """
         )
-        # 7, not 6: includes gold.fred_point_in_time, the flat-name-translated
-        # mirror of LocalWarehouse's gold_fred_point_in_time view, alongside
-        # the pre-existing gold.v_point_in_time BI-facing alias.
-        assert view_counts == [{"table_schema": "gold", "n": 7}]
+        # Includes gold.fred_point_in_time, the flat-name-translated mirror of
+        # LocalWarehouse's view, plus the four spec011 consumer views.
+        assert view_counts == [{"table_schema": "gold", "n": 11}]
 
         local.merge_silver(rows)
         pg.merge_silver(rows)
 
         local_result = local.build_gold()
+
+        # Regression guard: PostgreSQL Gold must never materialize the complete
+        # Silver table in Python. Purpose-specific raw reads go through
+        # _read_gold_silver_subset(); revision stats stay set-based in SQL.
+        pg_read = pg._read
+
+        def reject_unbounded_fact_read(table):
+            if table == "silver_fred_observation":
+                raise AssertionError("unbounded PostgreSQL Silver read")
+            if table == "gold_fred_latest_observation":
+                raise AssertionError("unbounded PostgreSQL Latest read")
+            return pg_read(table)
+
+        pg._read = reject_unbounded_fact_read
         pg_result = pg.build_gold()
         assert pg_result == local_result
 
@@ -176,6 +198,16 @@ def test_postgres_warehouse_builds_core_gold_like_local(tmp_path, postgres_dsn):
             ORDER BY series_id, observation_date, realtime_start
         """
         assert pg.query(pit_sql) == local.query(pit_sql)
+
+        revision_sql = """
+            SELECT series_id, observation_date, revision_count,
+                   first_value, first_realtime_start,
+                   latest_value, latest_realtime_start,
+                   revision_delta, revision_pct
+            FROM gold_fred_revision_stats
+            ORDER BY series_id, observation_date
+        """
+        assert pg.query(revision_sql) == local.query(revision_sql)
 
         local_mmkt = local.query(
             "SELECT * FROM gold_mmkt_rate_snapshot ORDER BY instrument_id"
@@ -377,6 +409,149 @@ def test_warehouse_factory_builds_postgres(postgres_dsn):
         wh.close()
 
 
+def _ecb_asset_xml(isin: str, haircut: str, *, change: str | None = None) -> str:
+    tag = "assetUpdate" if change else "asset"
+    change_xml = f"<change>{change}</change>" if change else ""
+    return (
+        f"<{tag}><id><isinCode>{isin}</isinCode><otherRegNumber/></id>"
+        "<haircutCategory>L1A</haircutCategory><type>AT01</type>"
+        "<referenceMarket>RMDE01</referenceMarket><denomination>EUR</denomination>"
+        f"<nonOwnUseHaircut>{haircut}</nonOwnUseHaircut>{change_xml}</{tag}>"
+    )
+
+
+def _ecb_release(release_id: str, day: str) -> ReleaseMessage:
+    return ReleaseMessage(
+        release_id=release_id,
+        url=f"https://mid.ecb.europa.eu/rel/{release_id}.xml",
+        release_type="EligibleAssetsList",
+        release_title="List of eligible marketable assets",
+        release_at_local=f"{day}T17:56:07+01:00",
+        publication_at_local=f"{day}T17:56:07+01:00",
+        publication_at_utc=f"{day}T16:56:07+00:00",
+        rss_pub_at=f"{day}T16:56:07+00:00",
+        attachments=(),
+    )
+
+
+def _publish_two_ecb_releases(warehouse):
+    repo = ECBEligibleAssetRepository(warehouse)
+    dictionary = [
+        {
+            "domain": "assetTypes",
+            "code": "AT01",
+            "definition": "Bond",
+            "short_definition": None,
+            "attributes_json": "{}",
+        }
+    ]
+    first = parse_assets_xml(
+        (
+            "<assets>"
+            + _ecb_asset_xml("DE0000000001", "1.0")
+            + _ecb_asset_xml("DE0000000002", "2.0")
+            + "</assets>"
+        ).encode()
+    ).rows
+    release_1 = _ecb_release("release-one", "2024-01-01")
+    repo.record_release(release_1, run_id="run-one")
+    repo.publish(
+        release_1,
+        first,
+        {},
+        {},
+        diff_assets({}, first),
+        dictionary,
+        dictionary_hash="dictionary-v1",
+        schema_hash="schema-v1",
+        reconciliation_status="initial_snapshot",
+        coverage_status="starts_here",
+        change_origin="initial_full_snapshot",
+        run_id="run-one",
+    )
+
+    prior = repo.current_assets()
+    second = parse_assets_xml(
+        (
+            "<assets>"
+            + _ecb_asset_xml("DE0000000001", "1.5")
+            + _ecb_asset_xml("DE0000000003", "3.0")
+            + "</assets>"
+        ).encode()
+    ).rows
+    update = parse_assets_xml(
+        (
+            "<assetsUpdates>"
+            + _ecb_asset_xml("DE0000000001", "1.5", change="U")
+            + _ecb_asset_xml("DE0000000002", "2.0", change="D")
+            + _ecb_asset_xml("DE0000000003", "3.0", change="N")
+            + "</assetsUpdates>"
+        ).encode()
+    ).rows
+    changes = diff_assets(prior, second)
+    release_2 = _ecb_release("release-two", "2024-01-02")
+    repo.record_release(release_2, run_id="run-two")
+    repo.publish(
+        release_2,
+        second,
+        prior,
+        update,
+        changes,
+        dictionary,
+        dictionary_hash="dictionary-v1",
+        schema_hash="schema-v1",
+        reconciliation_status="matched",
+        coverage_status="complete",
+        change_origin="source_reconciled",
+        run_id="run-two",
+    )
+    return repo
+
+
+def _ecb_snapshot(repo, timestamp: str):
+    return [
+        {
+            "asset_key": row["asset_key"],
+            "haircut": row["non_own_use_haircut"],
+            "label": row["asset_type_label"],
+            "release": row["selected_release_id"],
+            "coverage": row["coverage_status"],
+        }
+        for row in repo.as_of(timestamp)
+    ]
+
+
+def test_ecb_point_in_time_history_persists_with_local_postgres_parity(
+    postgres_dsn, tmp_path
+):
+    local = LocalWarehouse(_config(), db_path=str(tmp_path / "ecb-parity.db"))
+    postgres = PostgresWarehouse(_config(), dsn=postgres_dsn)
+    try:
+        local_repo = _publish_two_ecb_releases(local)
+        postgres_repo = _publish_two_ecb_releases(postgres)
+
+        before = "2024-01-01T17:00:00+00:00"
+        after = "2024-01-02T17:00:00+00:00"
+        assert _ecb_snapshot(postgres_repo, before) == _ecb_snapshot(local_repo, before)
+        assert _ecb_snapshot(postgres_repo, after) == _ecb_snapshot(local_repo, after)
+        assert {row["asset_key"] for row in _ecb_snapshot(postgres_repo, after)} == {
+            "ISIN:DE0000000001",
+            "ISIN:DE0000000003",
+        }
+        assert postgres.query(
+            "SELECT COUNT(*) AS n FROM bronze.ecb_eligible_asset_release"
+        ) == [{"n": 2}]
+        assert postgres.query(
+            "SELECT COUNT(*) AS n FROM silver.ecb_eligible_asset_version"
+        ) == [{"n": 5}]
+        assert postgres.query(
+            "SELECT COUNT(*) AS n FROM gold.ecb_eligible_security_current"
+        ) == [{"n": 2}]
+    finally:
+        local.close()
+        postgres.close()
+
+
 # ---------------------------------------------------------------------------
 # Upsert keys. A database seeded by scripts/copy_sqlite_to_postgres.py has the
 # tables but none of their primary keys, so the first ON CONFLICT upsert failed
@@ -450,6 +625,19 @@ def test_upsert_keys_match_the_primary_keys_the_ddl_declares():
             assert inline, f"{flat} declares no primary key"
             declared = (inline.group(1),)
         assert declared == columns, flat
+
+
+def test_postgres_ddl_preserves_composite_unique_constraints():
+    from fred_pipeline.io.postgres_store import _postgres_create_table_sql
+
+    sql = _postgres_create_table_sql(
+        "silver",
+        "example",
+        "run_id TEXT, snapshot_date TEXT, UNIQUE (run_id, snapshot_date)",
+    )
+
+    assert 'UNIQUE ("run_id", "snapshot_date")' in sql
+    assert '"UNIQUE" TEXT' not in sql
 
 
 def test_a_database_without_keys_gets_them_back_and_can_upsert(postgres_dsn):

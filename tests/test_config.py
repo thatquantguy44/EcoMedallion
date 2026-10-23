@@ -111,10 +111,12 @@ def test_env_var_overrides_file(tmp_path, monkeypatch):
         fred_api_key: file-key
         rate_limit_per_minute: 30
         ecb_base_url: https://file-ecb.example/service
+        ecb_mid_base_url: https://file-mid.example
         """,
     )
     monkeypatch.setenv("FRED_API_KEY", "env-key")
     monkeypatch.setenv("ECB_BASE_URL", "https://env-ecb.example/service")
+    monkeypatch.setenv("ECB_MID_BASE_URL", "https://env-mid.example")
     monkeypatch.setenv("FRED_RATE_LIMIT_PER_MINUTE", "77")
     monkeypatch.setenv("FRED_EXTRACT_WORKERS", "12")
     monkeypatch.setenv("FRED_SOURCE_EXTRACT_WORKERS", "fred=12,tiingo=1")
@@ -122,6 +124,7 @@ def test_env_var_overrides_file(tmp_path, monkeypatch):
     cfg = PipelineConfig.resolve(environment="dev", config_file=path)
     assert cfg.fred_api_key == "env-key"
     assert cfg.ecb_base_url == "https://env-ecb.example/service"
+    assert cfg.ecb_mid_base_url == "https://env-mid.example"
     assert cfg.rate_limit_per_minute == 77  # coerced to int
     assert cfg.extract_workers == 12
     assert cfg.source_extract_workers == "fred=12,tiingo=1"

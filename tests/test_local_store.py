@@ -135,6 +135,11 @@ def test_local_backend_gold_views_exist_and_match_tables(
         "gold_v_series_revision_summary",
         "gold_v_source_coverage",
         "gold_v_company_ratio_ranks",
+        # spec011 ECB eligible-assets point-in-time consumer views.
+        "gold_ecb_eligible_security_history",
+        "gold_ecb_eligible_security_current",
+        "gold_ecb_eligible_security_change",
+        "gold_ecb_eligible_security_coverage",
         # gold_fred_point_in_time is itself a view now (spec003 section 7) --
         # a pure 1:1 mirror of Silver, identical to gold_v_point_in_time.
         "gold_fred_point_in_time",
@@ -239,6 +244,32 @@ def test_local_sql_core_gold_rebuild_matches_python_output(tmp_path):
     ]
     assert wh.query(latest_sql) == latest_expected
     wh.close()
+
+
+def test_gold_silver_subset_requires_and_pushes_filters(tmp_path):
+    wh = LocalWarehouse(_config(), db_path=str(tmp_path / "subset.db"))
+    try:
+        wh.merge_silver(
+            [
+                _silver_row("A", "2024-01-01", "", 1.0, 1, source="fred"),
+                _silver_row("B", "2024-01-01", "", 2.0, 1, source="sec"),
+                _silver_row("A", "2024-01-02", "", 3.0, 1, source="sec"),
+            ]
+        )
+
+        with pytest.raises(ValueError, match="must specify"):
+            wh._read_gold_silver_subset()
+
+        assert {
+            (row["source"], row["series_id"])
+            for row in wh._read_gold_silver_subset(sources=("sec",))
+        } == {("sec", "A"), ("sec", "B")}
+        both = wh._read_gold_silver_subset(sources=("sec",), series_ids=("A",))
+        assert [(row["source"], row["series_id"]) for row in both] == [("sec", "A")]
+        assert "raw_value" not in both[0]
+        assert "run_id" not in both[0]
+    finally:
+        wh.close()
 
 
 def test_local_gold_rebuild_rolls_back_on_failure(tmp_path, monkeypatch):

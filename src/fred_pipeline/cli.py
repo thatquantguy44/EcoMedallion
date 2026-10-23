@@ -33,6 +33,8 @@ import datetime as _dt
 import json
 import logging
 import sys
+from pathlib import Path
+from typing import Any
 
 from fred_pipeline.config import Environment, PipelineConfig
 from fred_pipeline.manifest import all_series, load_manifests
@@ -793,6 +795,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
     pipeline = FredPipeline(
         config, spark=spark, warehouse=warehouse, persist_audit=persist
     )
+    ecb_assets_result: dict[str, object]
     try:
         run = pipeline.run_from_manifest(
             args.manifests,
@@ -805,11 +808,55 @@ def _cmd_run(args: argparse.Namespace) -> int:
             skip_not_due=args.skip_not_due,
             refresh_fomc_calendar=args.refresh_fomc_calendar,
         )
+        if args.dry_run:
+            ecb_assets_result = {
+                "status": "skipped",
+                "reason": "dry-run has no durable warehouse",
+            }
+        elif not getattr(args, "ecb_assets", True):
+            ecb_assets_result = {
+                "status": "skipped",
+                "reason": "disabled by --no-ecb-assets",
+            }
+        elif not (hasattr(warehouse, "conn") and hasattr(warehouse, "_insert")):
+            ecb_assets_result = {
+                "status": "skipped",
+                "reason": (
+                    f"{warehouse.__class__.__name__} has no ECB eligible-assets "
+                    "writer; SQLite and PostgreSQL are currently supported"
+                ),
+            }
+        else:
+            try:
+                releases = _poll_ecb_assets_for_run(config, warehouse)
+                ecb_assets_result = {
+                    "status": "succeeded",
+                    "releases": releases,
+                }
+                _send_ecb_assets_health_alert(
+                    config,
+                    warehouse,
+                    action="poll",
+                    results=releases,
+                )
+            except Exception as exc:  # noqa: BLE001 - reflected in run exit/status
+                ecb_assets_result = {
+                    "status": "failed",
+                    "error": str(exc),
+                }
+                _send_ecb_assets_health_alert(
+                    config,
+                    warehouse,
+                    action="poll",
+                    error=str(exc),
+                )
     finally:
         if warehouse is not None:
             warehouse.close()
 
-    print(json.dumps(run.to_row(), default=str, indent=2))
+    output = run.to_row()
+    output["ecb_assets"] = ecb_assets_result
+    print(json.dumps(output, default=str, indent=2))
     if args.local and not args.dry_run:
         print(
             f"\nSaved to {args.db_path}. Inspect with e.g.:\n"
@@ -817,7 +864,56 @@ def _cmd_run(args: argparse.Namespace) -> int:
             f"'SELECT series_id, observation_date, value "
             f"FROM gold_fred_latest_observation LIMIT 10;'"
         )
-    return 0 if run.status.value in ("succeeded", "partial") else 1
+    pipeline_succeeded = run.status.value in ("succeeded", "partial")
+    ecb_succeeded = ecb_assets_result["status"] != "failed"
+    return 0 if pipeline_succeeded and ecb_succeeded else 1
+
+
+def _poll_ecb_assets_for_run(config: PipelineConfig, warehouse) -> list[dict]:
+    """Poll signed MID releases after the observation pipeline has persisted."""
+    from fred_pipeline.ecb_eligible_assets import (
+        ECBEligibleAssetsPipeline,
+        ECBMIDClient,
+    )
+
+    if warehouse is None:
+        raise RuntimeError("ECB eligible-assets polling requires a durable warehouse")
+    client = ECBMIDClient(
+        base_url=config.ecb_mid_base_url,
+        timeout=config.request_timeout_seconds,
+        max_retries=config.max_retries,
+        rate_limit_per_minute=min(config.rate_limit_per_minute, 60),
+    )
+    pipeline = ECBEligibleAssetsPipeline(warehouse, client=client)
+    return [result.to_dict() for result in pipeline.poll()]
+
+
+def _send_ecb_assets_health_alert(
+    config: PipelineConfig,
+    warehouse,
+    *,
+    action: str,
+    results: list[dict] | None = None,
+    error: str = "",
+) -> bool:
+    """Send the ECB-specific health alert without affecting ingestion."""
+    from fred_pipeline.ecb_eligible_assets import ECBEligibleAssetRepository
+    from fred_pipeline.governance.ecb_alerting import send_ecb_assets_alert
+
+    status: dict[str, object] = {}
+    health_error = error
+    try:
+        status = ECBEligibleAssetRepository(warehouse).status()
+    except Exception as exc:  # noqa: BLE001 - alerting must not fail the run
+        if not health_error:
+            health_error = f"could not read ECB health status: {exc}"
+    return send_ecb_assets_alert(
+        action=action,
+        results=results or [],
+        status=status,
+        error=health_error,
+        environment=config.environment.value,
+    )
 
 
 def _cmd_gold(args: argparse.Namespace) -> int:
@@ -985,6 +1081,272 @@ def _cmd_price_constituents(args: argparse.Namespace) -> int:
         warehouse.close()
 
 
+def _cmd_ecb_assets(args: argparse.Namespace) -> int:
+    """Run the dedicated spec011 ECB eligible-assets workflow."""
+    from fred_pipeline.ecb_eligible_assets import (
+        ECBEligibleAssetRepository,
+        ECBEligibleAssetsPipeline,
+        ECBMIDClient,
+    )
+    from fred_pipeline.io.warehouse_factory import (
+        WarehouseConfig,
+        WarehouseFactory,
+        WarehouseInitError,
+        load_warehouse_config,
+    )
+
+    config = PipelineConfig.resolve(
+        environment=Environment(args.env), config_file=args.config
+    )
+    if args.action == "inventory":
+        from fred_pipeline.ecb_archive_inventory import (
+            ECBArchiveInventoryClient,
+            ECBArchiveInventoryError,
+        )
+        from fred_pipeline.ecb_asset_schema_registry import (
+            ECBHistoricalSchemaError,
+            load_schema_registry,
+            validate_inventory_report,
+        )
+
+        if args.max_archive_mb <= 0:
+            print("ERROR: --max-archive-mb must be greater than zero", file=sys.stderr)
+            return 2
+        inventory_client = ECBArchiveInventoryClient(
+            timeout=config.request_timeout_seconds,
+            max_retries=config.max_retries,
+            max_archive_bytes=int(args.max_archive_mb * 1024 * 1024),
+            rate_limit_per_minute=min(config.rate_limit_per_minute, 60),
+        )
+        try:
+            report = inventory_client.inventory(
+                from_year=args.from_year,
+                to_year=args.to_year,
+                deep=args.deep,
+                include_snapshots=not args.summary_only,
+            )
+        except ECBArchiveInventoryError as exc:
+            print(f"ERROR: {exc}", file=sys.stderr)
+            return 2
+        try:
+            registry = load_schema_registry(args.schema_registry)
+            report["schema_registry_validation"] = validate_inventory_report(
+                report, registry
+            )
+        except ECBHistoricalSchemaError as exc:
+            report["schema_registry_validation"] = {
+                "status": "failed",
+                "registry_path": args.schema_registry,
+                "error": str(exc),
+            }
+        rendered = json.dumps(report, default=str, indent=2)
+        if args.output:
+            output_path = Path(args.output)
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            output_path.write_text(rendered + "\n", encoding="utf-8")
+            print(
+                json.dumps(
+                    {
+                        "output": str(output_path),
+                        "summary": report["summary"],
+                    },
+                    indent=2,
+                )
+            )
+        else:
+            print(rendered)
+        unhealthy = (
+            report["summary"]["failed_year_count"]
+            or report["summary"]["partial_year_count"]
+            or report["schema_registry_validation"]["status"] != "valid"
+        )
+        return 1 if unhealthy else 0
+
+    warehouse_config = load_warehouse_config(environment=config.environment.value)
+    if args.local:
+        warehouse_config = WarehouseConfig(
+            primary_backend="local",
+            backends={"local": {"db_path": args.db_path}},
+        )
+    try:
+        warehouse = WarehouseFactory(config, warehouse_config).build()
+    except WarehouseInitError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 2
+    if warehouse is None:
+        print("ERROR: ecb-assets requires a durable warehouse", file=sys.stderr)
+        return 2
+
+    if args.action == "backfill-promote":
+        from fred_pipeline.ecb_archive_promotion import (
+            ECBArchivePromotionError,
+            ECBHistoricalPromoter,
+        )
+        from fred_pipeline.ecb_archive_delta import (
+            ECBDeltaPromoter,
+            ECBDeltaWriteError,
+        )
+
+        if not args.backfill_run_id:
+            print("ERROR: backfill-promote requires --backfill-run-id", file=sys.stderr)
+            warehouse.close()
+            return 2
+        try:
+            promoter = (
+                ECBDeltaPromoter(warehouse.spark, warehouse.config)
+                if hasattr(warehouse, "spark")
+                else ECBHistoricalPromoter(warehouse)
+            )
+            result = promoter.promote(
+                args.backfill_run_id,
+                acknowledge_quarantines=args.acknowledge_quarantines,
+            )
+            print(json.dumps(result, default=str, indent=2))
+            return 0
+        except (ECBArchivePromotionError, ECBDeltaWriteError) as exc:
+            print(f"ERROR: {exc}", file=sys.stderr)
+            return 1
+        finally:
+            warehouse.close()
+
+    if args.action == "backfill-stage":
+        from fred_pipeline.ecb_archive_backfill import (
+            ECBArchiveBackfillError,
+            ECBArchiveSnapshotSource,
+            ECBHistoricalStagingRebuilder,
+        )
+        from fred_pipeline.ecb_archive_inventory import (
+            ECBArchiveInventoryClient,
+            ECBArchiveInventoryError,
+        )
+        from fred_pipeline.ecb_asset_schema_registry import ECBHistoricalSchemaError
+        from fred_pipeline.ecb_archive_delta import (
+            ECBDeltaHistoricalStagingRebuilder,
+            ECBDeltaWriteError,
+        )
+
+        today_utc = _dt.datetime.now(_dt.timezone.utc).date()
+        to_year = args.to_year or today_utc.year
+        requested_to = (
+            today_utc - _dt.timedelta(days=1)
+            if to_year == today_utc.year
+            else _dt.date(to_year, 12, 31)
+        )
+        run_id = args.backfill_run_id or f"ecb-history-{args.from_year}-{to_year}"
+        try:
+            if args.max_archive_mb <= 0:
+                raise ECBArchiveBackfillError(
+                    "--max-archive-mb must be greater than zero"
+                )
+            archive_client = ECBArchiveInventoryClient(
+                timeout=config.request_timeout_seconds,
+                max_retries=config.max_retries,
+                max_archive_bytes=int(args.max_archive_mb * 1024 * 1024),
+                rate_limit_per_minute=min(config.rate_limit_per_minute, 60),
+            )
+            source = ECBArchiveSnapshotSource(
+                archive_client,
+                archive_dir=args.archive_dir,
+            )
+            rebuilder = (
+                ECBDeltaHistoricalStagingRebuilder(
+                    warehouse,
+                    registry_path=args.schema_registry,
+                )
+                if hasattr(warehouse, "spark")
+                else ECBHistoricalStagingRebuilder(
+                    warehouse,
+                    registry_path=args.schema_registry,
+                )
+            )
+            result = rebuilder.rebuild(
+                source.iter_snapshots(from_year=args.from_year, to_year=to_year),
+                run_id=run_id,
+                from_date=_dt.date(args.from_year, 1, 1),
+                to_date=requested_to,
+                restart=args.restart,
+            )
+            print(json.dumps(result, default=str, indent=2))
+            return 0
+        except (
+            ECBArchiveBackfillError,
+            ECBArchiveInventoryError,
+            ECBHistoricalSchemaError,
+            ECBDeltaWriteError,
+            OSError,
+        ) as exc:
+            print(f"ERROR: {exc}", file=sys.stderr)
+            return 1
+        finally:
+            warehouse.close()
+
+    client = ECBMIDClient(
+        base_url=config.ecb_mid_base_url,
+        timeout=config.request_timeout_seconds,
+        max_retries=config.max_retries,
+        rate_limit_per_minute=min(config.rate_limit_per_minute, 60),
+    )
+    pipeline = ECBEligibleAssetsPipeline(warehouse, client=client)
+    repository = ECBEligibleAssetRepository(warehouse)
+    try:
+        if args.action == "poll":
+            result: object = [
+                row.to_dict() for row in pipeline.poll(allow_gap=args.allow_gap)
+            ]
+        elif args.action == "ingest-release":
+            if not args.release_url:
+                print("ERROR: ingest-release requires --release-url", file=sys.stderr)
+                return 2
+            result = pipeline.ingest_release(
+                args.release_url, allow_gap=args.allow_gap
+            ).to_dict()
+        elif args.action == "verify":
+            if not args.release_id:
+                print("ERROR: verify requires --release-id", file=sys.stderr)
+                return 2
+            result = pipeline.verify(args.release_id)
+        elif args.action == "as-of":
+            if not args.as_of:
+                print("ERROR: as-of requires --as-of TIMESTAMP", file=sys.stderr)
+                return 2
+            rows = repository.as_of(args.as_of)
+            if args.asset_key:
+                key = args.asset_key.strip().upper()
+                rows = [row for row in rows if row["asset_key"] == key]
+            result = rows[: args.limit] if args.limit else rows
+        else:
+            result = repository.status()
+        print(json.dumps(result, default=str, indent=2))
+        if args.action in {"poll", "ingest-release", "verify"}:
+            if isinstance(result, list):
+                alert_rows: list[dict[str, Any]] = [
+                    row for row in result if isinstance(row, dict)
+                ]
+            elif isinstance(result, dict):
+                alert_rows = [result]
+            else:
+                alert_rows = []
+            _send_ecb_assets_health_alert(
+                config,
+                warehouse,
+                action=args.action,
+                results=alert_rows,
+            )
+        return 0
+    except Exception as exc:  # noqa: BLE001 - CLI reports source/quarantine errors
+        if args.action in {"poll", "ingest-release", "verify"}:
+            _send_ecb_assets_health_alert(
+                config,
+                warehouse,
+                action=args.action,
+                error=str(exc),
+            )
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 1
+    finally:
+        warehouse.close()
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="fred_pipeline", description=__doc__)
     parser.add_argument(
@@ -1072,6 +1434,16 @@ def build_parser() -> argparse.ArgumentParser:
         "--no-gold",
         action="store_true",
         help="skip the Gold refresh after extracting/writing Silver",
+    )
+    r.add_argument(
+        "--ecb-assets",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help=(
+            "poll signed ECB eligible-assets releases after the observation "
+            "pipeline (default on; skipped for --dry-run). Use "
+            "--no-ecb-assets for an observation-only run"
+        ),
     )
     r.add_argument(
         "--source",
@@ -1498,6 +1870,99 @@ def build_parser() -> argparse.ArgumentParser:
         help="rebuild Silver only, skip the Gold refresh",
     )
     rp.set_defaults(func=_cmd_replay)
+
+    ea = sub.add_parser(
+        "ecb-assets",
+        help="ingest/query the point-in-time ECB eligible marketable-assets list",
+    )
+    ea.add_argument(
+        "action",
+        choices=[
+            "poll",
+            "ingest-release",
+            "verify",
+            "status",
+            "as-of",
+            "inventory",
+            "backfill-stage",
+            "backfill-promote",
+        ],
+    )
+    ea.add_argument("--env", default="dev", choices=[e.value for e in Environment])
+    ea.add_argument("--config", default=None)
+    ea.add_argument("--local", action="store_true", help="use SQLite")
+    ea.add_argument("--db-path", default="fred_local.db")
+    ea.add_argument("--release-url", default=None)
+    ea.add_argument("--release-id", default=None)
+    ea.add_argument("--as-of", default=None, help="ISO-8601 UTC cutoff")
+    ea.add_argument("--asset-key", default=None, help="optional ISIN:/OTHER: key")
+    ea.add_argument("--limit", type=int, default=100)
+    ea.add_argument(
+        "--from-year",
+        type=int,
+        default=2010,
+        help="first annual archive to inventory (default: 2010)",
+    )
+    ea.add_argument(
+        "--to-year",
+        type=int,
+        default=None,
+        help="last annual archive to inventory (default: current year)",
+    )
+    ea.add_argument(
+        "--deep",
+        action="store_true",
+        help="fully decompress every snapshot to count records",
+    )
+    ea.add_argument(
+        "--summary-only",
+        action="store_true",
+        help="omit per-snapshot rows while retaining schema and gap summaries",
+    )
+    ea.add_argument(
+        "--output",
+        default=None,
+        help="write the inventory JSON to this path instead of stdout",
+    )
+    ea.add_argument(
+        "--max-archive-mb",
+        type=float,
+        default=1024.0,
+        help="compressed size safety limit for one annual ZIP (default: 1024)",
+    )
+    ea.add_argument(
+        "--schema-registry",
+        default="config/ecb_eligible_asset_schemas.yml",
+        help="reviewed historical schema registry used to validate inventory output",
+    )
+    ea.add_argument(
+        "--archive-dir",
+        default=None,
+        help="optional cache for annual ZIPs/current-year daily files",
+    )
+    ea.add_argument(
+        "--backfill-run-id",
+        default=None,
+        help="stable staging run id used for resume (default: derived from years)",
+    )
+    ea.add_argument(
+        "--acknowledge-quarantines",
+        type=int,
+        default=None,
+        help="exact quarantined-release count explicitly accepted for promotion",
+    )
+    ea.add_argument(
+        "--restart",
+        action="store_true",
+        help="delete and rebuild only the selected staging run",
+    )
+    ea.add_argument(
+        "--allow-gap",
+        action="store_true",
+        help="accept a full snapshot when its daily update cannot reconcile; "
+        "marks coverage gapped and derives the net diff",
+    )
+    ea.set_defaults(func=_cmd_ecb_assets)
     return parser
 
 

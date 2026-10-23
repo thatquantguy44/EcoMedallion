@@ -13,6 +13,7 @@ Databricks-only concern).
 
 from __future__ import annotations
 
+import subprocess
 from datetime import datetime, timezone
 from types import SimpleNamespace
 
@@ -29,6 +30,11 @@ SILVER_KEYS = ["series_id", "observation_date", "realtime_start"]
 
 @pytest.fixture(scope="module")
 def spark(tmp_path_factory):
+    java = subprocess.run(
+        ["java", "-version"], capture_output=True, check=False, timeout=10
+    )
+    if java.returncode != 0:
+        pytest.skip("a working Java runtime is required for Spark integration tests")
     warehouse = tmp_path_factory.mktemp("warehouse")
     builder = (
         SparkSession.builder.master("local[1]")
@@ -41,6 +47,7 @@ def spark(tmp_path_factory):
         .config("spark.sql.warehouse.dir", str(warehouse))
         .config("spark.ui.enabled", "false")
         .config("spark.sql.shuffle.partitions", "1")
+        .config("spark.sql.session.timeZone", "UTC")
     )
     session = configure_spark_with_delta_pip(builder).getOrCreate()
     yield session
@@ -108,6 +115,161 @@ def test_merge_delta_upserts_idempotently(spark):
     )
     merge_delta(spark, new, "silver_it", SILVER_KEYS)
     assert spark.table("silver_it").count() == 3
+
+
+def test_ecb_delta_stage_is_idempotent_and_current_boundary_has_parity(spark):
+    from fred_pipeline.ecb_archive_delta import ECBDeltaStageWriter
+
+    names = {
+        "ecb_eligible_asset_backfill_run": "ecb_backfill_run_it",
+        "ecb_eligible_asset_release_stage": "ecb_release_stage_it",
+        "ecb_eligible_asset_version_stage": "ecb_version_stage_it",
+        "ecb_eligible_asset_change_stage": "ecb_change_stage_it",
+        "ecb_eligible_asset_version": "ecb_version_live_it",
+    }
+    config = SimpleNamespace(table=lambda _schema, name: names[name])
+    for table in names.values():
+        spark.sql(f"DROP TABLE IF EXISTS {table}")
+    spark.sql(
+        "CREATE TABLE ecb_backfill_run_it (run_id STRING, status STRING) USING DELTA"
+    )
+    spark.sql(
+        "CREATE TABLE ecb_release_stage_it (run_id STRING, release_id STRING, "
+        "status STRING) USING DELTA PARTITIONED BY (run_id)"
+    )
+    spark.sql(
+        "CREATE TABLE ecb_version_stage_it (run_id STRING, asset_key STRING, "
+        "row_hash STRING, is_eligible BOOLEAN, valid_from_utc TIMESTAMP, "
+        "valid_to_utc TIMESTAMP) USING DELTA PARTITIONED BY (run_id)"
+    )
+    spark.sql(
+        "CREATE TABLE ecb_change_stage_it (run_id STRING, release_id STRING, "
+        "asset_key STRING, computed_change_type STRING) "
+        "USING DELTA PARTITIONED BY (run_id)"
+    )
+    spark.sql(
+        "CREATE TABLE ecb_version_live_it (asset_key STRING, row_hash STRING, "
+        "is_eligible BOOLEAN, valid_to_utc TIMESTAMP) USING DELTA"
+    )
+    spark.sql(
+        "INSERT INTO ecb_version_live_it VALUES "
+        "('ISIN:A', 'hash-a', true, NULL), ('ISIN:B', 'hash-b', true, NULL)"
+    )
+
+    writer = ECBDeltaStageWriter(spark, config)
+    arguments = {
+        "run_id": "history-it",
+        "run_row": {"run_id": "history-it", "status": "staged"},
+        "releases": [
+            {
+                "run_id": "history-it",
+                "release_id": "archive:2026-10-22",
+                "status": "accepted",
+            }
+        ],
+        "versions": [
+            {
+                "run_id": "history-it",
+                "asset_key": "ISIN:A",
+                "row_hash": "hash-a",
+                "is_eligible": True,
+                "valid_from_utc": "2026-10-22T15:56:07",
+                "valid_to_utc": None,
+            },
+            {
+                "run_id": "history-it",
+                "asset_key": "ISIN:B",
+                "row_hash": "hash-b",
+                "is_eligible": True,
+                "valid_from_utc": "2026-10-22T15:56:07",
+                "valid_to_utc": None,
+            },
+        ],
+        "changes": [
+            {
+                "run_id": "history-it",
+                "release_id": "archive:2026-10-22",
+                "asset_key": "ISIN:A",
+                "computed_change_type": "N",
+            }
+        ],
+    }
+    first = writer.replace_run(**arguments)
+    second = writer.replace_run(**arguments)
+
+    assert first == second
+    assert spark.table("ecb_version_stage_it").count() == 2
+    assert spark.table("ecb_change_stage_it").count() == 1
+    assert writer.parity_summary("history-it") == {
+        "stage_only": 0,
+        "live_only": 0,
+        "duplicate_open": 0,
+        "invalid_intervals": 0,
+    }
+
+
+def test_ecb_delta_current_history_asof_and_change_contract(spark):
+    from fred_pipeline.ecb_archive_delta import ECBDeltaEligibleAssetReader
+
+    names = {
+        "ecb_eligible_asset_release": "ecb_release_query_it",
+        "ecb_eligible_asset_version": "ecb_version_query_it",
+        "ecb_eligible_asset_change": "ecb_change_query_it",
+    }
+    config = SimpleNamespace(table=lambda _schema, name: names[name])
+    for table in names.values():
+        spark.sql(f"DROP TABLE IF EXISTS {table}")
+    spark.sql(
+        "CREATE TABLE ecb_release_query_it (release_id STRING, "
+        "publication_at_utc TIMESTAMP, coverage_status STRING, status STRING) "
+        "USING DELTA"
+    )
+    spark.sql(
+        "CREATE TABLE ecb_version_query_it (asset_key STRING, row_hash STRING, "
+        "is_eligible BOOLEAN, valid_from_utc TIMESTAMP, valid_to_utc TIMESTAMP) "
+        "USING DELTA"
+    )
+    spark.sql(
+        "CREATE TABLE ecb_change_query_it (release_id STRING, asset_key STRING, "
+        "computed_change_type STRING, publication_at_utc TIMESTAMP) USING DELTA"
+    )
+    spark.sql(
+        "INSERT INTO ecb_release_query_it VALUES "
+        "('r1', TIMESTAMP '2024-01-01 16:00:00', 'starts_here', 'accepted'), "
+        "('r2', TIMESTAMP '2024-01-02 16:00:00', 'complete', 'accepted')"
+    )
+    spark.sql(
+        "INSERT INTO ecb_version_query_it VALUES "
+        "('ISIN:A', 'a1', true, TIMESTAMP '2024-01-01 16:00:00', "
+        " TIMESTAMP '2024-01-02 16:00:00'), "
+        "('ISIN:A', 'a2', true, TIMESTAMP '2024-01-02 16:00:00', NULL), "
+        "('ISIN:B', 'b1', true, TIMESTAMP '2024-01-02 16:00:00', NULL)"
+    )
+    spark.sql(
+        "INSERT INTO ecb_change_query_it VALUES "
+        "('r1', 'ISIN:A', 'N', TIMESTAMP '2024-01-01 16:00:00'), "
+        "('r2', 'ISIN:A', 'U', TIMESTAMP '2024-01-02 16:00:00'), "
+        "('r2', 'ISIN:B', 'N', TIMESTAMP '2024-01-02 16:00:00')"
+    )
+
+    reader = ECBDeltaEligibleAssetReader(spark, config)
+    assert [(row["asset_key"], row["row_hash"]) for row in reader.current()] == [
+        ("ISIN:A", "a2"),
+        ("ISIN:B", "b1"),
+    ]
+    assert [row["row_hash"] for row in reader.history(asset_key="ISIN:A")] == [
+        "a1",
+        "a2",
+    ]
+    assert [
+        (row["asset_key"], row["row_hash"], row["selected_release_id"])
+        for row in reader.as_of("2024-01-01T20:00:00+00:00")
+    ] == [("ISIN:A", "a1", "r1")]
+    assert [row["computed_change_type"] for row in reader.changes()] == [
+        "N",
+        "U",
+        "N",
+    ]
 
 
 def test_spark_due_date_watermark_tracks_changed_silver_rows(spark):

@@ -260,10 +260,11 @@ only the flags that differ in meaning are listed per command. (Full detail:
 
 | Command | What it does | Key flags |
 |---|---|---|
-| `run` | Full Bronze → Silver → Gold: extracts active series from every source with an active manifest entry, then rebuilds Gold (unless `--no-gold`). **This is the only command the scheduled job (`resources/fred_pipeline.job.yml`) actually runs** — everything else in this table is invoked manually. | `--local --db-path`, `--series`, `--source` / `--exclude-source`, `--full`, `--dry-run`, `--no-gold`, `--extract-workers`, `--source-workers`, `--rate-limit-per-minute`, `--source-rate-limits` |
+| `run` | Full Bronze → Silver → Gold: extracts active series, rebuilds Gold (unless `--no-gold`), then polls signed ECB eligible-assets releases by default on SQLite/PostgreSQL. ECB results are included in the final JSON and an ECB failure makes the command exit non-zero after observation data is safely persisted. **This is the only command the scheduled job (`resources/fred_pipeline.job.yml`) actually runs**. | `--local --db-path`, `--series`, `--source` / `--exclude-source`, `--full`, `--dry-run`, `--no-gold`, `--no-ecb-assets`, `--extract-workers`, `--source-workers`, `--rate-limit-per-minute`, `--source-rate-limits` |
 | `price-constituents` | Dynamic Tiingo pricing batch: reads current ETF membership from `gold_index_constituents`, prices only missing/stale tickers (by weight rank), stops on a Tiingo quota hit. **Manual-only — not wired into any scheduled job**; run it yourself (or set up your own schedule) whenever you want constituent coverage refreshed. | `--index-etf`, `--max-symbols`, `--stale-days`, `--rate-limit-per-minute`, `--dry-run`, `--rebuild-gold` |
 | `discover` | Generates a new manifest from a FRED category/release/search — not a refresh, a discovery/authoring tool | `--category-id` / `--release-id` / `--search`, `--frequencies`, `--min-popularity`, `--max`, `--out`, `--dry-run` |
 | `discover-ecb` | Lists ECB SDMX dataflows for candidate manifest authoring | `--list-flows`, `--search`, `--max`, `--json` |
+| `ecb-assets` | `poll`/`ingest-release` discover signed ECB MID releases and advance the point-in-time eligible-securities history; `status`/`verify`/`as-of` inspect it; `inventory` downloads annual archives one year at a time and reports dates, gaps, encodings, formats, hashes, and schema versions without writing to the warehouse | action, `--local --db-path`, `--release-url`, `--release-id`, `--as-of`, `--asset-key`, `--allow-gap` (operator override only), `--from-year`, `--to-year`, `--deep`, `--summary-only`, `--output`, `--max-archive-mb` |
 
 ### Refresh (rebuilds from already-ingested data — no external API calls)
 
@@ -285,14 +286,22 @@ only the flags that differ in meaning are listed per command. (Full detail:
 | Goal | Sequence |
 |---|---|
 | First-ever local run | `validate` → `run --dry-run --series <one id>` (confirm a key/id works cheaply) → `run --local --db-path fred_local.db` |
-| Routine daily refresh | `run --local --db-path fred_local.db` (incremental restate-last-N + full Gold rebuild + release calendar, all in one) |
+| Routine daily refresh | `run --local --db-path fred_local.db` (incremental restate-last-N + full Gold rebuild + release calendar + signed ECB eligible-assets poll, all in one) |
 | Large first-time load, rate-limit-safe | `run --local --db-path f.db --full --no-gold --source-workers fred=8,tiingo=1 --source-rate-limits fred=60,tiingo=5` → `gold --local --db-path f.db` (separates slow extraction retries from the one-shot Gold rebuild) |
 | Add a brand-new source/series | edit the manifest (`active: true`) → `validate` → `run --dry-run --series <new id>` → `run --local --db-path fred_local.db` |
 | Grow ETF constituent coverage | `run --local --db-path f.db --series <ETF ticker>` (refresh holdings **and** rebuild Gold, so `gold_index_constituents` reflects today's snapshot before you plan against it) → `price-constituents --db-path f.db --index-etf <ETF> --dry-run` (preview the next batch) → `price-constituents --db-path f.db --index-etf <ETF> --rate-limit-per-minute 5` (pull it) → `gold --local --db-path f.db` (rebuild once more so price-derived tables pick up the new prices) |
 | Health-check the series universe | `reconcile --local --db-path fred_local.db` (safe to run anytime — reads ingested data + FRED metadata only, doesn't touch other sources' quotas) |
 | Recover from a bad DQ/normalization bug | fix the code → `replay --local --db-path fred_local.db` (reprocesses already-archived Bronze payloads, no re-fetch, no API quota spent) |
+| Inventory ECB eligible-assets history | `ecb-assets inventory --from-year 2010 --to-year 2026 --summary-only --output ecb_archive_inventory.json` (read-only; completed years use annual ZIPs, the current year uses official daily files, and all headers must match `config/ecb_eligible_asset_schemas.yml`) |
+| Stage ECB eligible-assets history | `ecb-assets backfill-stage --from-year 2010 --to-year 2026 --archive-dir data/ecb --backfill-run-id ecb-history-2010-2026` (resumable, writes only new run-scoped `silver.*_stage` objects; does not promote live/Gold history) |
+| Promote reconciled ECB history | `ecb-assets backfill-promote --backfill-run-id ecb-history-2010-2026 --acknowledge-quarantines <exact-count>` (requires boundary parity and clean intervals; atomically maps the final archive transition onto the signed live release) |
 | Backtest "what did Gold look like historically" | `run --local --db-path fred_local.db` (ensure Silver is current) → `backfill --db-path fred_local.db --backfill-db fred_backfill.db --from 2015-01-01 --to 2026-01-01 --step monthly` |
 | Onboard a new FRED category/release wholesale | `discover --name <manifest_name> --category-id <id> --dry-run` (preview) → re-run with `--out manifests/<name>.yml` → hand-review the generated YAML → `validate` → `run --dry-run --series <a few ids>` → activate for real |
+
+On the Databricks backend, ECB archive promotion uses one multi-table
+`BEGIN ATOMIC` statement. It requires Databricks Runtime 18.0+ and Unity
+Catalog managed tables with catalog commits enabled; unsupported Delta
+runtimes fail before publishing rather than exposing a partial history.
 
 ## Deploy to Databricks
 
@@ -365,6 +374,7 @@ environments:
 | EIA API key | `eia_api_key` | `EIA_API_KEY` | required to activate `source: eia` series |
 | ECB API key | — | — | keyless |
 | ECB API base URL | `ecb_base_url` | `ECB_BASE_URL` | optional proxy/mirror override; default is official ECB endpoint |
+| ECB MID base URL | `ecb_mid_base_url` | `ECB_MID_BASE_URL` | optional proxy/mirror override for signed eligible-assets releases |
 | BEA API key | `bea_api_key` | `BEA_API_KEY` | required to activate `source: bea` series |
 | Census API key (optional) | `census_api_key` | `CENSUS_API_KEY` | keyless works at a lower quota |
 | SEC User-Agent | `sec_user_agent` | `SEC_USER_AGENT` | set to your contact; SEC 403s without a descriptive UA |
@@ -627,7 +637,11 @@ CI**, green on the latest commit). Highlights: **thirteen pluggable sources**
 `source` in the natural key and source-aware Bronze lineage + replay;
 **API-driven FRED discovery**; **metadata governance** (drift + lifecycle vs.
 live FRED); **incremental loads** (full-on-first-run, then restate last N);
-**replay-from-Bronze** rebuild; **stage tracking + run-summary email alerting** (Outlook/Microsoft 365 SMTP, Microsoft Graph, or a Slack-compatible webhook — reports *which phase* failed, so a run whose Gold rebuild broke is no longer reported as a success); richer **data quality**
+**replay-from-Bronze** rebuild; **stage tracking + run-summary email alerting**
+(Outlook/Microsoft 365 SMTP, Microsoft Graph, or a Slack-compatible webhook —
+reports *which phase* failed, so a run whose Gold rebuild broke is no longer
+reported as a success); **ECB eligible-assets health alerts** for late, gapped,
+quarantined, failed, signature-invalid, or unusually large releases; richer **data quality**
 (freshness + value bounds); **quant Gold features** (MoM/YoY/diff/z-score, curve
 spreads, **frequency-aware N-leg cross-series features** — `config/cross_series.yml`,
 as-of alignment for cross-source/cross-frequency spreads/ratios/composites,
