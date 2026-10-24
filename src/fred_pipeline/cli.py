@@ -1098,6 +1098,20 @@ def _cmd_ecb_assets(args: argparse.Namespace) -> int:
     config = PipelineConfig.resolve(
         environment=Environment(args.env), config_file=args.config
     )
+    if args.action == "alert-drill":
+        from fred_pipeline.governance.alerting_config import load_alerting_config
+        from fred_pipeline.governance.ecb_alert_drill import run_ecb_alert_drill
+
+        try:
+            report = run_ecb_alert_drill(
+                load_alerting_config(),
+                output_dir=args.output or "alerts/ecb-alert-drill",
+            )
+        except (OSError, RuntimeError, ValueError) as exc:
+            print(f"ERROR: {exc}", file=sys.stderr)
+            return 1
+        print(json.dumps(report, default=str, indent=2))
+        return 0
     if args.action == "inventory":
         from fred_pipeline.ecb_archive_inventory import (
             ECBArchiveInventoryClient,
@@ -1884,6 +1898,7 @@ def build_parser() -> argparse.ArgumentParser:
             "status",
             "as-of",
             "inventory",
+            "alert-drill",
             "backfill-stage",
             "backfill-promote",
         ],
@@ -1922,7 +1937,7 @@ def build_parser() -> argparse.ArgumentParser:
     ea.add_argument(
         "--output",
         default=None,
-        help="write the inventory JSON to this path instead of stdout",
+        help="inventory JSON path, or alert-drill root output directory",
     )
     ea.add_argument(
         "--max-archive-mb",

@@ -12,6 +12,7 @@ from fred_pipeline.governance.ecb_alerting import (
     expected_release_date,
     send_ecb_assets_alert,
 )
+from fred_pipeline.governance.ecb_alert_drill import run_ecb_alert_drill
 
 
 LATEST = {
@@ -156,3 +157,45 @@ def test_failure_alert_uses_ecb_subject_and_existing_failure_route():
     assert "[ECB][prod] FAILURE" in message.subject
     assert "MID unavailable" in message.text_body
     assert message.to == ("oncall@example.com",)
+
+
+def test_alert_drill_delivers_all_four_scenarios_without_network_or_warehouse(
+    tmp_path,
+):
+    config = AlertingConfig(
+        enabled=False,
+        policy="failure",
+        from_address="pipeline@example.com",
+        routes={
+            "failure": RouteConfig(to=("oncall@example.com",)),
+            "partial": RouteConfig(to=("oncall@example.com",)),
+        },
+    )
+
+    report = run_ecb_alert_drill(config, output_dir=tmp_path)
+
+    assert report["passed"] is True
+    assert report["non_mutating"] is True
+    assert report["warehouse_opened"] is False
+    assert report["network_used"] is False
+    assert [row["scenario"] for row in report["scenarios"]] == [
+        "late_release",
+        "quarantined_release",
+        "signature_failure",
+        "ingestion_failure",
+    ]
+    assert [row["verdict"] for row in report["scenarios"]] == [
+        "partial",
+        "failure",
+        "failure",
+        "failure",
+    ]
+    assert all(
+        len(digest) == 64
+        for row in report["scenarios"]
+        for digest in row["sha256"].values()
+    )
+    run_dir = tmp_path / report["output_directory"].split("/")[-1]
+    assert (run_dir / "manifest.json").is_file()
+    assert len(list(run_dir.glob("*.html"))) == 4
+    assert len(list(run_dir.glob("*.txt"))) == 4

@@ -23,7 +23,7 @@ PostgreSQL service backend.
   ECB digest matches the downloaded bytes.
 - The selected SQLite file or PostgreSQL database is on durable storage and is
   included in the normal backup policy.
-- A named reviewer has completed the ECB entry in
+- A reviewer has completed the ECB entry in
   `config/data_licensing.yml` before external redistribution or use in a
   commercial compliance decision.
 
@@ -134,6 +134,29 @@ Keep the timer disabled until the manual poll succeeds and alert delivery has
 been proven. A Databricks-backed `fred_pipeline run` continues to report
 forward ECB polling as skipped; the implemented Delta path currently covers
 historical staging/promotion and query parity, not this forward scheduler.
+
+### Prove ECB alert classification, routing, and rendering
+
+Run the safe drill before configuring a live mailbox:
+
+```bash
+PYTHONPATH=src python -m fred_pipeline ecb-assets alert-drill \
+  --output /tmp/ecb-alert-drill --env prod
+```
+
+The command does not open a warehouse, call the ECB, or contact an email
+service. It forces the configured partial/failure routes through the file
+transport for four deterministic cases: late release, quarantined release,
+signature failure, and ingestion failure. A unique output directory contains
+four HTML/text pairs and `manifest.json`; a missing delivery, wrong verdict, or
+missing rendition makes the command exit non-zero. Placeholder routes are used
+only when the loaded alerting config has no recipient for that verdict.
+
+This proves application-side classification, routing, rendering, and transport
+invocation. Production acceptance additionally requires configuring a real
+SMTP or Microsoft Graph transport, sending the same cases to the named on-call
+mailbox in a controlled test, and recording receipt/message IDs in the incident
+or deployment record. Do not enable the timer based only on console logs.
 
 ## Historical archive inventory and schema review
 

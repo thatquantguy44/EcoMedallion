@@ -140,18 +140,30 @@ sources:
 
   - source: ecb
     license_type: open-data
-    review_status: provisional
+    review_status: verified
+    reviewed_by: Repository maintainer (identity not recorded by request)
+    source_of_truth: >
+      Primary evidence prepared from the ECB Disclaimer & Copyright page linked
+      by the official eligible-assets download page. The repository maintainer
+      accepted the documented controls on 2026-10-24; see
+      docs/governance/ecb_eligible_assets_licensing_review.md.
     redistribution_allowed: true
     commercial_use_allowed: true
     attribution_required: true
-    terms_url: https://data.ecb.europa.eu/help
-    last_reviewed_date: "2026-08-22"
+    terms_url: https://www.ecb.europa.eu/services/using-our-site/disclaimer/html/index.en.html
+    last_reviewed_date: "2026-10-24"
     notes: >
-      European Central Bank Data Portal. Added provisionally from the public API
-      help pages while wiring source ingestion; a human must read the ECB's
-      primary terms/copyright page and set review_status: verified with
-      reviewed_by before relying on this for external redistribution or a real
-      commercial compliance decision. Attribute ECB as the data source.
+      The ECB permits use of information obtained directly from its website
+      when it is reproduced accurately and the ECB is cited as source. For
+      information incorporated into material offered for sale, customers must
+      be told before payment and at each access that the information is freely
+      available from the ECB website. User modifications must be stated
+      explicitly. This pipeline's normalized fields, SCD2 history, hashes, gap
+      flags, and derived changes are modifications/derived work and must be
+      labelled accordingly. Third-party material is not cleared by this entry.
+      Review attestation is recorded in
+      docs/governance/ecb_eligible_assets_licensing_review.md. The maintainer's
+      identity and a pipeline owner are intentionally not recorded.
 
   - source: worldbank
     license_type: open-data

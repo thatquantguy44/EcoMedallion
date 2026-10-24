@@ -7,13 +7,15 @@ reconciliation, quarantine acknowledgement, and atomic PostgreSQL promotion are
 implemented. Phase 3 Delta staging, catalog-transaction promotion, and query
 contracts are implemented. A PostgreSQL systemd polling schedule is implemented;
 deployment activation, Databricks runtime proof, and live alert delivery remain
-open.**
+open. A deterministic non-network drill proves late, quarantine,
+signature-failure, and ingestion-failure alert classification, routing,
+rendering, and file delivery.**
 
 Last verified: 2026-10-24 (2026-10-22 MID release message, signed full/update
 XML and CSV artifacts, dictionary, live SQLite/PostgreSQL ingestions, and
 Frankfurt-time scheduler resource validation)
 
-Primary owner: TBD
+Primary owner: Not recorded, by request
 
 Target: a point-in-time-safe history of the ECB's List of eligible marketable
 assets in SQLite, PostgreSQL, and Delta, with a current view and an auditable
@@ -460,11 +462,12 @@ verification procedure against an official sample and a live release. Until
 then, the pipeline may archive a release but may not call its signature
 `verified`.
 
-`config/data_licensing.yml` currently marks `ecb` as provisional. A named human
-must review the applicable ECB copyright/reuse terms and record `reviewed_by`
-before this dataset is redistributed or used for a commercial compliance
-decision. Attribution to the ECB is retained in Gold metadata and downstream
-exports.
+`config/data_licensing.yml` marks `ecb` as verified. The
+primary-source evidence and reuse controls are prepared in
+`docs/governance/ecb_eligible_assets_licensing_review.md`. The repository
+maintainer accepted the review on 2026-10-24; the register records a role-based
+attestation without a personal identity or pipeline owner, as requested.
+Attribution to the ECB is retained in Gold metadata and downstream exports.
 
 ## 8. CLI and operator contract
 
@@ -476,6 +479,7 @@ python -m fred_pipeline ecb-assets ingest-release --release-url <release-url>
 python -m fred_pipeline ecb-assets verify --release-id <id>
 python -m fred_pipeline ecb-assets status
 python -m fred_pipeline ecb-assets as-of --as-of <ISO-8601 UTC timestamp>
+python -m fred_pipeline ecb-assets alert-drill --output <directory>
 ```
 
 `poll` and `ingest-release` are safe to repeat. `verify` currently re-runs the
@@ -586,8 +590,9 @@ checks, and catalog-transaction promotion are implemented. The Delta fixture
 tests pass on local Spark/Delta with a temporary Java 17 runtime, including
 idempotent staged partition replacement, boundary key/hash parity, and the
 current/history/as-of/change query contract. Databricks catalog-transaction
-execution, production schedule activation, live alert-delivery proof, and the
-named licensing review remain explicit open work.
+execution and production schedule activation remain open. The safe
+file-delivery alert drill is implemented and repeatable; real-mailbox receipt
+remains explicit open work. The licensing review is complete.
 
 Live inventory validation found 190 snapshots and one legacy schema in 2010,
 255 snapshots and one modern schema in 2025, and 207 snapshots across two
@@ -686,7 +691,7 @@ Gold state live.
 | AC-010 | SQLite, PostgreSQL, and Delta return identical sorted row sets and canonical hashes for current, single-security-history, full-universe-as-of, and between-release change queries |
 | AC-011 | A tampered artifact, invalid signature, schema drift, or release/update mismatch is present in Bronze/audit but cannot advance Silver/Gold |
 | AC-012 | Missing RSS delivery can be recovered from the stable latest endpoints/download page without inventing a publication timestamp or duplicating a release |
-| AC-013 | The ECB licensing entry is verified by a named reviewer before external redistribution; source attribution survives Gold/export paths |
+| AC-013 | The ECB licensing entry has a documented review attestation before external redistribution; source attribution survives Gold/export paths |
 | AC-014 | The live runbook demonstrates alerting on late, quarantined, and failed releases and recovery without hand-editing database rows |
 
 ## 11. Non-goals
