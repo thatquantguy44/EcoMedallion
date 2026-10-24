@@ -1131,6 +1131,8 @@ def _cmd_ecb_assets(args: argparse.Namespace) -> int:
             report = run_ecb_alert_drill(
                 load_alerting_config(),
                 output_dir=args.output or "alerts/ecb-alert-drill",
+                live_delivery=args.live_alert_delivery,
+                environment=args.env,
             )
         except (OSError, RuntimeError, ValueError) as exc:
             print(f"ERROR: {exc}", file=sys.stderr)
@@ -1997,6 +1999,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--output",
         default=None,
         help="inventory JSON path, or alert-drill root output directory",
+    )
+    ea.add_argument(
+        "--live-alert-delivery",
+        action="store_true",
+        help="for alert-drill only: send four real messages through the "
+        "configured SMTP/Graph transport",
     )
     ea.add_argument(
         "--max-archive-mb",

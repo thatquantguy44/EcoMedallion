@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+from pathlib import Path
 
 import pytest
 
@@ -6,6 +7,7 @@ from fred_pipeline.governance.alerting_config import (
     AlertingConfig,
     ECBAssetsAlertConfig,
     RouteConfig,
+    TransportConfig,
 )
 from fred_pipeline.governance.ecb_alerting import (
     assess_ecb_assets,
@@ -199,3 +201,41 @@ def test_alert_drill_delivers_all_four_scenarios_without_network_or_warehouse(
     assert (run_dir / "manifest.json").is_file()
     assert len(list(run_dir.glob("*.html"))) == 4
     assert len(list(run_dir.glob("*.txt"))) == 4
+
+
+def test_live_alert_drill_requires_enabled_external_transport(tmp_path):
+    with pytest.raises(ValueError, match="alerting.enabled"):
+        run_ecb_alert_drill(AlertingConfig(), output_dir=tmp_path, live_delivery=True)
+
+
+def test_live_alert_drill_sends_four_messages_to_configured_routes(tmp_path):
+    transport = _CapturingTransport()
+    config = AlertingConfig(
+        enabled=True,
+        policy="failure",
+        from_address="pipeline@example.com",
+        environments=("prod",),
+        transport=TransportConfig(kind="smtp", host="smtp.example.com"),
+        routes={
+            "failure": RouteConfig(to=("oncall@example.com",)),
+            "partial": RouteConfig(to=("oncall@example.com",)),
+        },
+    )
+
+    report = run_ecb_alert_drill(
+        config,
+        output_dir=tmp_path,
+        live_delivery=True,
+        environment="prod",
+        transport=transport,
+    )
+
+    assert report["passed"] is True
+    assert report["mode"] == "live"
+    assert report["network_used"] is True
+    assert report["delivery_environment"] == "prod"
+    assert len(transport.sent) == 4
+    assert all("[DRILL][ECB][prod]" in message.subject for message in transport.sent)
+    run_dir = Path(report["output_directory"])
+    assert list(run_dir.glob("*.html")) == []
+    assert (run_dir / "manifest.json").is_file()

@@ -183,9 +183,20 @@ only when the loaded alerting config has no recipient for that verdict.
 
 This proves application-side classification, routing, rendering, and transport
 invocation. Production acceptance additionally requires configuring a real
-SMTP or Microsoft Graph transport, sending the same cases to the named on-call
-mailbox in a controlled test, and recording receipt/message IDs in the incident
-or deployment record. Do not enable the timer based only on console logs.
+SMTP or Microsoft Graph transport. After confirming the recipients know that
+four synthetic messages are coming, run:
+
+```bash
+PYTHONPATH=src python -m fred_pipeline ecb-assets alert-drill \
+  --env prod --live-alert-delivery \
+  --output /var/lib/fred-pipeline/ecb-alert-drill
+```
+
+Live mode refuses disabled alerting, console/file transports, `policy: never`,
+environment mismatches, or missing partial/failure routes. Its manifest proves
+that the real transport accepted each message; record recipient confirmation
+and provider message IDs in the deployment record to prove mailbox receipt.
+Do not enable the timer based only on transport acceptance or console logs.
 
 ## Historical archive inventory and schema review
 
