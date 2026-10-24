@@ -56,12 +56,40 @@ tables.
 ## Routine polling
 
 `python -m fred_pipeline run --env dev` polls eligible-assets releases by
-default after the observation pipeline finishes on SQLite or PostgreSQL. The
-observation writes are already committed if ECB polling fails, but the combined
-command exits non-zero and reports `ecb_assets.status=failed` so operations do
-not mistake a partial refresh for complete success. Use `--no-ecb-assets` only
-for a deliberate observation-only run; `--dry-run` skips ECB because it has no
-durable warehouse.
+default after the observation pipeline finishes when the selected SQLite or
+PostgreSQL backend equals `ecb_assets_authoritative_backend`. The observation
+writes are already committed if ECB polling fails, but the combined command
+exits non-zero and reports `ecb_assets.status=failed` so operations do not
+mistake a partial refresh for complete success. If the observation warehouse is
+not authoritative for ECB, the combined run reports an explicit skip and the
+dedicated poller owns ingestion. Use `--no-ecb-assets` only for a deliberate
+observation-only run; `--dry-run` skips ECB because it has no durable warehouse.
+
+### Authoritative destination
+
+PostgreSQL is the current authoritative production destination. It is selected
+independently from the observation-series warehouse so Databricks can remain
+the production observation backend without receiving duplicate ECB writes:
+
+```yaml
+default:
+  primary_backend: postgres
+  ecb_assets_authoritative_backend: postgres
+```
+
+The setting lives in the warehouse profile and can be overridden at deployment
+time with `FRED_ECB_ASSETS_AUTHORITATIVE_BACKEND`. Valid values are `local`,
+`postgres`, `databricks`, and `disabled`. Dedicated `poll`, `ingest-release`,
+and `backfill-promote` writes fail closed if warehouse fallback selects a
+different backend. `databricks` reserves the configuration contract, but
+forward MID polling there is not yet implemented; selecting it for `poll` or
+`ingest-release` produces a clear error before any ECB request. `local` is for
+development only, and `disabled` turns authoritative writes off explicitly.
+
+To change the production authority later, update both the poller's
+`primary_backend` and `ecb_assets_authoritative_backend`, provision the target,
+run backend parity and restore drills, then cut the scheduler over. Never run
+two authoritative pollers during a cutover.
 
 The standalone `ecb-assets poll` command is the production scheduler entry
 point. The repository ships a systemd service/timer template under
@@ -82,10 +110,11 @@ one poll is still active when the next trigger arrives.
 
 ### Install the PostgreSQL production timer
 
-The checked-in `config/warehouse.yml` selects Databricks for `prod`; do not use
-it unchanged for this host-side poller. Install the provided PostgreSQL service
-profile and an environment file whose DSN comes from a protected environment
-variable:
+The checked-in `config/warehouse.yml` selects Databricks for production
+observation series while explicitly declaring PostgreSQL authoritative for ECB.
+Do not use it unchanged for this host-side poller because its primary backend
+still initializes Databricks. Install the provided PostgreSQL service profile
+and an environment file whose DSN comes from a protected environment variable:
 
 ```bash
 sudo install -d -m 0750 /etc/fred-pipeline

@@ -35,6 +35,9 @@ from fred_pipeline.config import PipelineConfig
 from fred_pipeline.warehouse import Warehouse
 
 
+ECB_ASSETS_BACKENDS = ("local", "postgres", "databricks", "disabled")
+
+
 @dataclass(frozen=True)
 class WarehouseConfig:
     """Warehouse backend configuration."""
@@ -49,11 +52,30 @@ class WarehouseConfig:
     # Backend-specific settings
     backends: dict[str, dict[str, Any]] = None
 
+    # Authoritative destination for ECB MID eligible-assets state. This is
+    # intentionally independent of the observation pipeline's primary backend:
+    # production observations may use Databricks while a dedicated poller owns
+    # the authoritative PostgreSQL tables.
+    ecb_assets_authoritative_backend: str | None = None
+
     def __post_init__(self) -> None:
         if self.fallback_backends is None:
             object.__setattr__(self, "fallback_backends", [])
         if self.backends is None:
             object.__setattr__(self, "backends", {})
+        backend = self.ecb_assets_authoritative_backend
+        if backend is None:
+            backend = (
+                self.primary_backend
+                if self.primary_backend in ECB_ASSETS_BACKENDS
+                else "disabled"
+            )
+        if backend not in ECB_ASSETS_BACKENDS:
+            raise ValueError(
+                "ecb_assets_authoritative_backend must be one of "
+                f"{list(ECB_ASSETS_BACKENDS)}, got {backend!r}"
+            )
+        object.__setattr__(self, "ecb_assets_authoritative_backend", backend)
 
 
 def load_warehouse_config(
@@ -78,6 +100,9 @@ def load_warehouse_config(
         return WarehouseConfig(
             primary_backend="local",
             backends={"local": {"db_path": "fred.db"}},
+            ecb_assets_authoritative_backend=os.environ.get(
+                "FRED_ECB_ASSETS_AUTHORITATIVE_BACKEND"
+            ),
         )
 
     if yaml is None:
@@ -95,10 +120,15 @@ def load_warehouse_config(
     if env_section:
         settings.update(env_section)
 
+    authoritative_backend = os.environ.get(
+        "FRED_ECB_ASSETS_AUTHORITATIVE_BACKEND",
+        settings.get("ecb_assets_authoritative_backend"),
+    )
     return WarehouseConfig(
         primary_backend=settings.get("primary_backend", "local"),
         fallback_backends=settings.get("fallback_backends", []),
         backends=settings.get("backends", {"local": {"db_path": "fred.db"}}),
+        ecb_assets_authoritative_backend=authoritative_backend,
     )
 
 
@@ -129,6 +159,7 @@ class WarehouseFactory:
     def __init__(self, config: PipelineConfig, warehouse_config: WarehouseConfig):
         self.config = config
         self.warehouse_config = warehouse_config
+        self.selected_backend_name: str | None = None
 
     def build(self, force_dry_run: bool = False) -> Warehouse | None:
         """Build a warehouse, with fallback on error.
@@ -154,6 +185,7 @@ class WarehouseFactory:
         log = logging.getLogger("fred_pipeline")
 
         if force_dry_run:
+            self.selected_backend_name = None
             return None
 
         backends_to_try = [self.warehouse_config.primary_backend]
@@ -172,6 +204,7 @@ class WarehouseFactory:
             try:
                 warehouse = self._build_backend(backend_name)
                 if warehouse is not None:
+                    self.selected_backend_name = backend_name
                     return warehouse
             except Exception as e:  # noqa: BLE001 -- must survive any backend's
                 # own exception type (Delta, psycopg, sqlite3, ...) to fall

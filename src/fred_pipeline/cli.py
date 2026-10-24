@@ -752,6 +752,8 @@ def _cmd_run(args: argparse.Namespace) -> int:
 
     spark = None
     warehouse = None
+    selected_backend = None
+    warehouse_config = None
     persist = not args.dry_run
 
     if args.dry_run:
@@ -773,11 +775,13 @@ def _cmd_run(args: argparse.Namespace) -> int:
             warehouse_config = WarehouseConfig(
                 primary_backend="local",
                 backends={"local": {"db_path": getattr(args, "db_path", "fred.db")}},
+                ecb_assets_authoritative_backend="local",
             )
 
         factory = WarehouseFactory(config, warehouse_config)
         try:
             warehouse = factory.build(force_dry_run=False)
+            selected_backend = factory.selected_backend_name
         except WarehouseInitError as exc:
             # Fatal on purpose: continuing would extract against live APIs and
             # persist nothing. Fail before the first request, not after 2,895.
@@ -817,6 +821,27 @@ def _cmd_run(args: argparse.Namespace) -> int:
             ecb_assets_result = {
                 "status": "skipped",
                 "reason": "disabled by --no-ecb-assets",
+            }
+        elif warehouse_config is None:
+            ecb_assets_result = {
+                "status": "skipped",
+                "reason": "warehouse configuration was not resolved",
+            }
+        elif warehouse_config.ecb_assets_authoritative_backend == "disabled":
+            ecb_assets_result = {
+                "status": "skipped",
+                "reason": "disabled by ecb_assets_authoritative_backend",
+            }
+        elif selected_backend != warehouse_config.ecb_assets_authoritative_backend:
+            ecb_assets_result = {
+                "status": "skipped",
+                "reason": (
+                    "selected warehouse backend "
+                    f"{selected_backend!r} is not the authoritative ECB assets "
+                    "backend "
+                    f"{warehouse_config.ecb_assets_authoritative_backend!r}; "
+                    "run the dedicated ECB poller against that destination"
+                ),
             }
         elif not (hasattr(warehouse, "conn") and hasattr(warehouse, "_insert")):
             ecb_assets_result = {
@@ -1181,14 +1206,48 @@ def _cmd_ecb_assets(args: argparse.Namespace) -> int:
         warehouse_config = WarehouseConfig(
             primary_backend="local",
             backends={"local": {"db_path": args.db_path}},
+            ecb_assets_authoritative_backend="local",
         )
+    authoritative_backend = warehouse_config.ecb_assets_authoritative_backend
+    if args.action in {"poll", "ingest-release", "backfill-promote"}:
+        if authoritative_backend == "disabled":
+            print(
+                "ERROR: ECB eligible-assets writes are disabled by "
+                "ecb_assets_authoritative_backend",
+                file=sys.stderr,
+            )
+            return 2
     try:
-        warehouse = WarehouseFactory(config, warehouse_config).build()
+        factory = WarehouseFactory(config, warehouse_config)
+        warehouse = factory.build()
     except WarehouseInitError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 2
     if warehouse is None:
         print("ERROR: ecb-assets requires a durable warehouse", file=sys.stderr)
+        return 2
+    if (
+        args.action in {"poll", "ingest-release", "backfill-promote"}
+        and factory.selected_backend_name != authoritative_backend
+    ):
+        warehouse.close()
+        print(
+            "ERROR: refusing ECB eligible-assets write: selected backend "
+            f"{factory.selected_backend_name!r} is not the configured "
+            f"authoritative backend {authoritative_backend!r}",
+            file=sys.stderr,
+        )
+        return 2
+    if args.action in {"poll", "ingest-release"} and not (
+        hasattr(warehouse, "conn") and hasattr(warehouse, "_insert")
+    ):
+        warehouse.close()
+        print(
+            "ERROR: the configured authoritative backend "
+            f"{authoritative_backend!r} has no forward ECB eligible-assets "
+            "writer; local and postgres are currently supported",
+            file=sys.stderr,
+        )
         return 2
 
     if args.action == "backfill-promote":

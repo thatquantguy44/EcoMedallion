@@ -33,9 +33,15 @@ def test_ecb_schedule_warehouse_uses_secret_dsn_env():
     config = yaml.safe_load(path.read_text())
     settings = config["default"]
     assert settings["primary_backend"] == "postgres"
+    assert settings["ecb_assets_authoritative_backend"] == "postgres"
     postgres = settings["backends"]["postgres"]
     assert postgres == {
         "target": "service",
         "dsn_env": "FRED_POSTGRES_SERVICE_DSN",
     }
     assert "dsn" not in postgres
+
+
+def test_ecb_schedule_env_pins_authoritative_backend_to_postgres():
+    env = (ROOT / "resources" / "ecb-assets.env.example").read_text()
+    assert "FRED_ECB_ASSETS_AUTHORITATIVE_BACKEND=postgres" in env

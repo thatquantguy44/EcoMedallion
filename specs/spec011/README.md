@@ -9,7 +9,8 @@ contracts are implemented. A PostgreSQL systemd polling schedule is implemented;
 deployment activation, Databricks runtime proof, and live alert delivery remain
 open. A deterministic non-network drill proves late, quarantine,
 signature-failure, and ingestion-failure alert classification, routing,
-rendering, and file delivery.**
+rendering, and file delivery. PostgreSQL is the configurable authoritative
+production destination for forward eligible-assets ingestion.**
 
 Last verified: 2026-10-24 (2026-10-22 MID release message, signed full/update
 XML and CSV artifacts, dictionary, live SQLite/PostgreSQL ingestions, and
@@ -508,6 +509,9 @@ Delivered in Phase 1:
   release-aligned as-of queries;
 - default polling after `fred_pipeline run` on SQLite/PostgreSQL, with a
   `--no-ecb-assets` operator escape hatch and combined non-zero failure status;
+- an explicit `ecb_assets_authoritative_backend` warehouse setting, currently
+  pinned to PostgreSQL in production, that prevents fallback or another
+  observation backend from silently becoming the ECB system of record;
 - ECB-specific health alerts, using the shared alert routes/transports, for
   failed or quarantined releases, invalid verification, late publication after
   a configurable grace period, coverage gaps, and unusual N/U/D volume; and
