@@ -7,7 +7,10 @@ reconciliation, quarantine acknowledgement, and atomic PostgreSQL promotion are
 implemented. Phase 3 Delta staging, catalog-transaction promotion, and query
 contracts are implemented. A PostgreSQL systemd polling schedule is implemented;
 deployment activation, Databricks runtime proof, and live alert delivery remain
-open. A deterministic non-network drill proves late, quarantine,
+open. Brevo SMTP configuration was validated locally and the live drill reached
+the provider on 2026-10-24, but Brevo rejected the runner with `525 5.7.1
+Unauthorized IP address`; no message was accepted. A deterministic non-network
+drill proves late, quarantine,
 signature-failure, and ingestion-failure alert classification, routing,
 rendering, and file delivery. PostgreSQL is the configurable authoritative
 production destination for forward eligible-assets ingestion.**
@@ -18,12 +21,38 @@ Frankfurt-time scheduler resource validation)
 
 Primary owner: Not recorded, by request
 
+Review status: **Reviewed**
+
 Target: a point-in-time-safe history of the ECB's List of eligible marketable
 assets in SQLite, PostgreSQL, and Delta, with a current view and an auditable
 answer to "which securities did the ECB list as eligible at this cutoff?"
 
 Depends on: `specs/spec004` (warehouse parity), `specs/spec006` (licensing
 gate), and the existing Bronze/Silver/Gold and run-audit conventions.
+
+### Operational pickup checkpoint
+
+Resume production-readiness work in this order:
+
+1. Use the production Linux host's stable outbound IP, authorize that IP in
+   Brevo, and verify the configured sender identity. Rotate the SMTP key that
+   was shared during setup before installing the production secret.
+2. Install the PostgreSQL warehouse, alerting, and service environment files on
+   that host. Keep credentials in protected environment variables; do not put
+   an SMTP key or PostgreSQL DSN in tracked YAML.
+3. Run `ecb-assets alert-drill --env prod --live-alert-delivery`. Acceptance
+   requires all four messages to be accepted by the provider, a persisted
+   manifest, and recipient confirmation for late-release, quarantine,
+   signature-failure, and ingestion-failure mail.
+4. Run one manual production `ecb-assets poll`, then prove the release ledger,
+   current view, history, and audit status were written to the new PostgreSQL
+   ECB objects without modifying the observation-series tables.
+5. Only after steps 3-4 pass, enable the systemd timer and observe at least one
+   scheduled weekday cycle through PostgreSQL and the real alert route.
+
+The exact commands and evidence checklist are in
+[`docs/handoffs/ecb_eligible_assets.md`](../../docs/handoffs/ecb_eligible_assets.md)
+and the [deployment runbook](../../docs/deployment/ecb_eligible_assets_runbook.md).
 
 ---
 
@@ -670,8 +699,12 @@ The first Phase 3 slice is implemented:
   semantics.
 
 Remaining work is to run those cases on Databricks, measure and choose
-clustering, activate the shipped PostgreSQL RSS timer in the deployment, prove
-live alert delivery, and execute the replay/backup/restore drill. Benchmark
+clustering, complete the Brevo IP/sender authorization and live mailbox proof,
+run a manual poll against the authoritative production PostgreSQL destination,
+activate the shipped PostgreSQL RSS timer, and execute the
+replay/backup/restore drill. The production activation order and evidence
+required at each gate are recorded in the operational pickup checkpoint above.
+Benchmark
 archive rebuild and common point-in-time queries on all three backends before
 choosing optimization layout.
 

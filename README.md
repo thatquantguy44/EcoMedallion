@@ -32,6 +32,8 @@ BIS, BEA, Census, SEC (company financials), Tiingo, Stooq, and iShares — see
 > [`docs/handoffs/powerbi_report_build_plan.md`](./docs/handoffs/powerbi_report_build_plan.md).
 > Run alerting (who gets emailed when a stage fails) is in
 > [`docs/handoffs/run_alerting.md`](./docs/handoffs/run_alerting.md).
+> The active ECB eligible-assets production pickup point is in
+> [`docs/handoffs/ecb_eligible_assets.md`](./docs/handoffs/ecb_eligible_assets.md).
 
 ## What it does
 

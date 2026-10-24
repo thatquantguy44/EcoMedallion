@@ -27,6 +27,44 @@ PostgreSQL service backend.
   `config/data_licensing.yml` before external redistribution or use in a
   commercial compliance decision.
 
+## Current production checkpoint
+
+Review status: **Reviewed**. No individual owner is recorded.
+
+The code, PostgreSQL-authoritative configuration contract, weekday systemd
+resources, deterministic file alert drill, and explicit live alert drill are
+implemented. A local ignored Brevo configuration was validated on 2026-10-24:
+the transport, production-only policy, protected credential reference, and
+partial/failure routes all loaded successfully. The live drill reached
+`smtp-relay.brevo.com:587`, but Brevo returned `525 5.7.1 Unauthorized IP
+address` before accepting the first message. Therefore no live delivery
+manifest or mailbox-receipt proof exists yet, and the timer must remain
+disabled.
+
+The next operator should continue at **Authorize and prove live delivery**
+below. Do not commit the local alert YAML, SMTP key, sender/recipient addresses,
+or PostgreSQL DSN.
+
+### Authorize and prove live delivery
+
+1. Run from the production Linux host with a stable outbound IP. Authorize that
+   IP in Brevo and verify the configured sender identity.
+2. Rotate the SMTP key shared during initial setup. Install the replacement as
+   `FRED_SMTP_PASSWORD` in the mode-`0600` service environment file; the YAML
+   must contain only `password_env: FRED_SMTP_PASSWORD`.
+3. Load the production environment and run the live drill shown under
+   **Prove ECB alert classification, routing, and rendering**. Do not weaken IP
+   controls merely to make a workstation proof pass.
+4. Retain `manifest.json`, provider acceptance/message IDs when available, and
+   recipient confirmation that all four clearly marked synthetic messages
+   arrived. Provider acceptance alone is not mailbox-delivery proof.
+5. Proceed to one manual PostgreSQL poll, database verification, and timer
+   activation only after the live drill passes.
+
+The focused handoff at
+[`docs/handoffs/ecb_eligible_assets.md`](../handoffs/ecb_eligible_assets.md)
+contains the complete resume order and completion evidence.
+
 ## Initial forward load
 
 Use a dedicated database in a test environment first:
