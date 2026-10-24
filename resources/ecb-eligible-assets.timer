@@ -1,0 +1,17 @@
+[Unit]
+Description=Poll ECB eligible-assets RSS on ECB operating-day cadence
+
+[Timer]
+# Pre-publication discovery, post-stated-publication retry, and SLA/grace check.
+# The explicit IANA zone applies CET/CEST automatically. TARGET holidays still
+# run, but the pipeline's calendar logic expects the prior operating day and
+# therefore does not emit a false missing-release alert.
+OnCalendar=Mon..Fri *-*-* 17:45:00 Europe/Berlin
+OnCalendar=Mon..Fri *-*-* 18:25:00 Europe/Berlin
+OnCalendar=Mon..Fri *-*-* 21:20:00 Europe/Berlin
+AccuracySec=1min
+Persistent=true
+Unit=ecb-eligible-assets.service
+
+[Install]
+WantedBy=timers.target

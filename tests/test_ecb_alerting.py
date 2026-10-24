@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+from pathlib import Path
 
 import pytest
 
@@ -6,12 +7,14 @@ from fred_pipeline.governance.alerting_config import (
     AlertingConfig,
     ECBAssetsAlertConfig,
     RouteConfig,
+    TransportConfig,
 )
 from fred_pipeline.governance.ecb_alerting import (
     assess_ecb_assets,
     expected_release_date,
     send_ecb_assets_alert,
 )
+from fred_pipeline.governance.ecb_alert_drill import run_ecb_alert_drill
 
 
 LATEST = {
@@ -156,3 +159,99 @@ def test_failure_alert_uses_ecb_subject_and_existing_failure_route():
     assert "[ECB][prod] FAILURE" in message.subject
     assert "MID unavailable" in message.text_body
     assert message.to == ("oncall@example.com",)
+
+
+def test_alert_drill_delivers_all_four_scenarios_without_network_or_warehouse(
+    tmp_path,
+):
+    config = AlertingConfig(
+        enabled=False,
+        policy="failure",
+        from_address="pipeline@example.com",
+        routes={
+            "failure": RouteConfig(to=("oncall@example.com",)),
+            "partial": RouteConfig(to=("oncall@example.com",)),
+        },
+    )
+
+    report = run_ecb_alert_drill(config, output_dir=tmp_path)
+
+    assert report["passed"] is True
+    assert report["non_mutating"] is True
+    assert report["warehouse_opened"] is False
+    assert report["network_used"] is False
+    assert [row["scenario"] for row in report["scenarios"]] == [
+        "late_release",
+        "quarantined_release",
+        "signature_failure",
+        "ingestion_failure",
+    ]
+    assert [row["verdict"] for row in report["scenarios"]] == [
+        "partial",
+        "failure",
+        "failure",
+        "failure",
+    ]
+    assert all(
+        len(digest) == 64
+        for row in report["scenarios"]
+        for digest in row["sha256"].values()
+    )
+    run_dir = tmp_path / report["output_directory"].split("/")[-1]
+    assert (run_dir / "manifest.json").is_file()
+    assert len(list(run_dir.glob("*.html"))) == 4
+    assert len(list(run_dir.glob("*.txt"))) == 4
+
+
+def test_live_alert_drill_requires_enabled_external_transport(tmp_path):
+    with pytest.raises(ValueError, match="alerting.enabled"):
+        run_ecb_alert_drill(AlertingConfig(), output_dir=tmp_path, live_delivery=True)
+
+
+def test_live_alert_drill_refuses_placeholder_sender_and_recipient(tmp_path):
+    config = AlertingConfig(
+        enabled=True,
+        policy="failure",
+        from_address="REPLACE_WITH_SENDER@example.com",
+        transport=TransportConfig(kind="smtp", host="smtp.example.com"),
+        routes={
+            "failure": RouteConfig(to=("REPLACE_WITH_ONCALL@example.com",)),
+            "partial": RouteConfig(to=("REPLACE_WITH_ONCALL@example.com",)),
+        },
+    )
+
+    with pytest.raises(ValueError, match="placeholder configuration"):
+        run_ecb_alert_drill(config, output_dir=tmp_path, live_delivery=True)
+
+
+def test_live_alert_drill_sends_four_messages_to_configured_routes(tmp_path):
+    transport = _CapturingTransport()
+    config = AlertingConfig(
+        enabled=True,
+        policy="failure",
+        from_address="pipeline@example.com",
+        environments=("prod",),
+        transport=TransportConfig(kind="smtp", host="smtp.example.com"),
+        routes={
+            "failure": RouteConfig(to=("oncall@example.com",)),
+            "partial": RouteConfig(to=("oncall@example.com",)),
+        },
+    )
+
+    report = run_ecb_alert_drill(
+        config,
+        output_dir=tmp_path,
+        live_delivery=True,
+        environment="prod",
+        transport=transport,
+    )
+
+    assert report["passed"] is True
+    assert report["mode"] == "live"
+    assert report["network_used"] is True
+    assert report["delivery_environment"] == "prod"
+    assert len(transport.sent) == 4
+    assert all("[DRILL][ECB][prod]" in message.subject for message in transport.sent)
+    run_dir = Path(report["output_directory"])
+    assert list(run_dir.glob("*.html")) == []
+    assert (run_dir / "manifest.json").is_file()

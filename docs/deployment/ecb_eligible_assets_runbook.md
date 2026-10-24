@@ -1,15 +1,19 @@
 # ECB Eligible Assets — Forward-Ingestion Runbook
 
-This runbook operates the Phase 1 implementation from
+This runbook operates the Phase 1-3 implementation from
 [Spec 011](../../specs/spec011/README.md). It maintains a release-aligned,
 point-in-time history of securities appearing on the ECB's List of eligible
 marketable assets. It does not independently determine legal collateral
 eligibility.
 
-Phase 1 supports SQLite and PostgreSQL forward ingestion. Phase 2 can inventory
-and normalize registered historical archive schemas, but the atomic staging
-backfill is not implemented yet. The Spark/Delta writer also remains a later
-phase; the checked-in Delta DDL is a schema contract, not a production writer.
+Phase 1 supports SQLite and PostgreSQL forward ingestion. Phase 2 inventories,
+normalizes, stages, reconciles, and atomically promotes the historical archive.
+Phase 3 provides run-partitioned Delta archive staging, catalog-transaction
+promotion, and current/history/as-of/change query contracts. Local Spark/Delta
+fixtures prove those contracts; Databricks Runtime 18+ execution remains a
+deployment acceptance step. The normal Spark-backed observation run still does
+not poll forward MID releases, so the production schedule below targets the
+PostgreSQL service backend.
 
 ## Prerequisites
 
@@ -19,9 +23,47 @@ phase; the checked-in Delta DDL is a schema contract, not a production writer.
   ECB digest matches the downloaded bytes.
 - The selected SQLite file or PostgreSQL database is on durable storage and is
   included in the normal backup policy.
-- A named reviewer has completed the ECB entry in
+- A reviewer has completed the ECB entry in
   `config/data_licensing.yml` before external redistribution or use in a
   commercial compliance decision.
+
+## Current production checkpoint
+
+Review status: **Reviewed**. No individual owner is recorded.
+
+The code, PostgreSQL-authoritative configuration contract, weekday systemd
+resources, deterministic file alert drill, and explicit live alert drill are
+implemented. A local ignored Brevo configuration was validated on 2026-10-24:
+the transport, production-only policy, protected credential reference, and
+partial/failure routes all loaded successfully. The live drill reached
+`smtp-relay.brevo.com:587`, but Brevo returned `525 5.7.1 Unauthorized IP
+address` before accepting the first message. Therefore no live delivery
+manifest or mailbox-receipt proof exists yet, and the timer must remain
+disabled.
+
+The next operator should continue at **Authorize and prove live delivery**
+below. Do not commit the local alert YAML, SMTP key, sender/recipient addresses,
+or PostgreSQL DSN.
+
+### Authorize and prove live delivery
+
+1. Run from the production Linux host with a stable outbound IP. Authorize that
+   IP in Brevo and verify the configured sender identity.
+2. Rotate the SMTP key shared during initial setup. Install the replacement as
+   `FRED_SMTP_PASSWORD` in the mode-`0600` service environment file; the YAML
+   must contain only `password_env: FRED_SMTP_PASSWORD`.
+3. Load the production environment and run the live drill shown under
+   **Prove ECB alert classification, routing, and rendering**. Do not weaken IP
+   controls merely to make a workstation proof pass.
+4. Retain `manifest.json`, provider acceptance/message IDs when available, and
+   recipient confirmation that all four clearly marked synthetic messages
+   arrived. Provider acceptance alone is not mailbox-delivery proof.
+5. Proceed to one manual PostgreSQL poll, database verification, and timer
+   activation only after the live drill passes.
+
+The focused handoff at
+[`docs/handoffs/ecb_eligible_assets.md`](../handoffs/ecb_eligible_assets.md)
+contains the complete resume order and completion evidence.
 
 ## Initial forward load
 
@@ -52,25 +94,186 @@ tables.
 ## Routine polling
 
 `python -m fred_pipeline run --env dev` polls eligible-assets releases by
-default after the observation pipeline finishes on SQLite or PostgreSQL. The
-observation writes are already committed if ECB polling fails, but the combined
-command exits non-zero and reports `ecb_assets.status=failed` so operations do
-not mistake a partial refresh for complete success. Use `--no-ecb-assets` only
-for a deliberate observation-only run; `--dry-run` skips ECB because it has no
-durable warehouse.
+default after the observation pipeline finishes when the selected SQLite or
+PostgreSQL backend equals `ecb_assets_authoritative_backend`. The observation
+writes are already committed if ECB polling fails, but the combined command
+exits non-zero and reports `ecb_assets.status=failed` so operations do not
+mistake a partial refresh for complete success. If the observation warehouse is
+not authoritative for ECB, the combined run reports an explicit skip and the
+dedicated poller owns ingestion. Use `--no-ecb-assets` only for a deliberate
+observation-only run; `--dry-run` skips ECB because it has no durable warehouse.
 
-The standalone `ecb-assets poll` command remains available for targeted retry
-and for a separately scheduled check after the normal ECB publication window.
-The ECB states that the list is normally published on weekdays except TARGET
-closing days. If scheduled separately, use the `Europe/Frankfurt` timezone and
-run a later retry so a delayed release can still be discovered.
+### Authoritative destination
 
-Spark/Delta currently has schema DDL but no ECB writer. A Databricks-backed
-`run` reports ECB polling as skipped rather than failing the observation run;
-Phase 3 replaces that skip with the Delta writer.
+PostgreSQL is the current authoritative production destination. It is selected
+independently from the observation-series warehouse so Databricks can remain
+the production observation backend without receiving duplicate ECB writes:
 
-The repository does not ship a separate enabled ECB schedule: deployment
-owners must choose any additional retry cadence and alert destination.
+```yaml
+default:
+  primary_backend: postgres
+  ecb_assets_authoritative_backend: postgres
+```
+
+The setting lives in the warehouse profile and can be overridden at deployment
+time with `FRED_ECB_ASSETS_AUTHORITATIVE_BACKEND`. Valid values are `local`,
+`postgres`, `databricks`, and `disabled`. Dedicated `poll`, `ingest-release`,
+and `backfill-promote` writes fail closed if warehouse fallback selects a
+different backend. `databricks` reserves the configuration contract, but
+forward MID polling there is not yet implemented; selecting it for `poll` or
+`ingest-release` produces a clear error before any ECB request. `local` is for
+development only, and `disabled` turns authoritative writes off explicitly.
+
+To change the production authority later, update both the poller's
+`primary_backend` and `ecb_assets_authoritative_backend`, provision the target,
+run backend parity and restore drills, then cut the scheduler over. Never run
+two authoritative pollers during a cutover.
+
+The standalone `ecb-assets poll` command is the production scheduler entry
+point. The repository ships a systemd service/timer template under
+`resources/ecb-eligible-assets.*`. It runs three idempotent weekday checks in
+Frankfurt local time, using the canonical IANA zone `Europe/Berlin`:
+
+| Local time | Purpose |
+| --- | --- |
+| 17:45 | Discover an early release, matching the timing observed in live evidence |
+| 18:25 | Retry after the ECB's stated 18:15 publication time |
+| 21:20 | Retry after the configured 180-minute grace period and alert if late |
+
+The explicit timezone follows CET/CEST automatically. The timer still fires on
+a TARGET closing day, but `is_target_operating_day()` makes the health check
+expect the preceding operating date, so the run is an idempotent no-op without
+a false missing-release alert. systemd will not overlap the oneshot service if
+one poll is still active when the next trigger arrives.
+
+### Install the PostgreSQL production timer
+
+The checked-in `config/warehouse.yml` selects Databricks for production
+observation series while explicitly declaring PostgreSQL authoritative for ECB.
+Do not use it unchanged for this host-side poller because its primary backend
+still initializes Databricks. Install the provided PostgreSQL service profile
+and an environment file whose DSN comes from a protected environment variable:
+
+```bash
+sudo install -d -m 0750 /etc/fred-pipeline
+sudo install -m 0640 resources/ecb-assets-warehouse.yml.example \
+  /etc/fred-pipeline/warehouse.yml
+sudo install -m 0600 resources/ecb-assets.env.example \
+  /etc/fred-pipeline/ecb-assets.env
+sudo install -m 0644 resources/ecb-eligible-assets.service \
+  /etc/systemd/system/ecb-eligible-assets.service
+sudo install -m 0644 resources/ecb-eligible-assets.timer \
+  /etc/systemd/system/ecb-eligible-assets.timer
+```
+
+Edit `/etc/fred-pipeline/ecb-assets.env` and replace the DSN placeholder. Copy
+the application and alerting configs to the paths named there. In the alerting
+config, set `enabled: true`, retain `policy: failure`, restrict `environments`
+to `[prod]`, configure real recipients/transport, and keep
+`ecb_assets.expected_release_time_local: "18:15"` with
+`grace_period_minutes: 180` unless operations approves a different SLA.
+Create the unprivileged `fred-pipeline` user, install the repository and virtual
+environment at `/opt/fred-bronze-to-gold-pipeline`, and grant that user only the
+required database and configuration access.
+
+### Alert transport choices
+
+The alert layer supports generic SMTP, Outlook/Microsoft 365 SMTP, and Outlook
+through Microsoft Graph without changing pipeline code.
+
+For a no-cost, low-volume production setup, the recommended starting point is
+the Brevo SMTP template:
+
+```bash
+sudo install -m 0640 resources/ecb-alerting.brevo-smtp.yml.example \
+  /etc/fred-pipeline/alerting.yml
+```
+
+Brevo's free plan currently includes 300 sends per day. Configure a verified
+sender/domain, replace the SMTP login and recipient placeholders, and store the
+Brevo SMTP key only in `FRED_SMTP_PASSWORD`. The relay is
+`smtp-relay.brevo.com:587` with STARTTLS. Gmail SMTP is another free option for
+very small installations (`smtp.gmail.com:587`), but it requires 2-Step
+Verification and an app password and is less suitable for a service identity.
+
+For an existing Outlook/Microsoft 365 tenant, prefer Microsoft Graph:
+
+```bash
+sudo install -m 0640 resources/ecb-alerting.outlook-graph.yml.example \
+  /etc/fred-pipeline/alerting.yml
+```
+
+Replace the tenant/client IDs, sender, and recipients, grant the Entra
+application `Mail.Send` application permission with admin consent, and store
+only the client secret in `FRED_GRAPH_CLIENT_SECRET`. The existing
+`outlook_smtp` transport remains available for a tenant that explicitly permits
+SMTP AUTH, but it uses username/password authentication; Microsoft recommends
+OAuth/Graph and is retiring Basic authentication for SMTP AUTH. Do not choose
+Outlook SMTP for a new unattended deployment.
+
+Any other relay uses `kind: smtp` with its host, port, username, and a
+`password_env` reference. No secret belongs in YAML. Whichever transport is
+selected, run the safe file drill first and the explicit live drill second.
+
+Validate the exact next trigger times, then run one manual production poll
+before enabling the timer:
+
+```bash
+systemd-analyze calendar \
+  'Mon..Fri *-*-* 17:45:00 Europe/Berlin' \
+  'Mon..Fri *-*-* 18:25:00 Europe/Berlin' \
+  'Mon..Fri *-*-* 21:20:00 Europe/Berlin'
+sudo systemctl daemon-reload
+sudo systemctl start ecb-eligible-assets.service
+sudo systemctl status ecb-eligible-assets.service
+sudo systemctl enable --now ecb-eligible-assets.timer
+systemctl list-timers ecb-eligible-assets.timer
+```
+
+Inspect scheduled-run output with:
+
+```bash
+journalctl -u ecb-eligible-assets.service --since today
+```
+
+Keep the timer disabled until the manual poll succeeds and alert delivery has
+been proven. A Databricks-backed `fred_pipeline run` continues to report
+forward ECB polling as skipped; the implemented Delta path currently covers
+historical staging/promotion and query parity, not this forward scheduler.
+
+### Prove ECB alert classification, routing, and rendering
+
+Run the safe drill before configuring a live mailbox:
+
+```bash
+PYTHONPATH=src python -m fred_pipeline ecb-assets alert-drill \
+  --output /tmp/ecb-alert-drill --env prod
+```
+
+The command does not open a warehouse, call the ECB, or contact an email
+service. It forces the configured partial/failure routes through the file
+transport for four deterministic cases: late release, quarantined release,
+signature failure, and ingestion failure. A unique output directory contains
+four HTML/text pairs and `manifest.json`; a missing delivery, wrong verdict, or
+missing rendition makes the command exit non-zero. Placeholder routes are used
+only when the loaded alerting config has no recipient for that verdict.
+
+This proves application-side classification, routing, rendering, and transport
+invocation. Production acceptance additionally requires configuring a real
+SMTP or Microsoft Graph transport. After confirming the recipients know that
+four synthetic messages are coming, run:
+
+```bash
+PYTHONPATH=src python -m fred_pipeline ecb-assets alert-drill \
+  --env prod --live-alert-delivery \
+  --output /var/lib/fred-pipeline/ecb-alert-drill
+```
+
+Live mode refuses disabled alerting, console/file transports, `policy: never`,
+environment mismatches, or missing partial/failure routes. Its manifest proves
+that the real transport accepted each message; record recipient confirmation
+and provider message IDs in the deployment record to prove mailbox receipt.
+Do not enable the timer based only on transport acceptance or console logs.
 
 ## Historical archive inventory and schema review
 
@@ -141,6 +344,13 @@ timestamp, and replaces the bootstrap-only Silver versions/changes in one
 transaction. A missing or incorrect acknowledgement fails before mutation. Any
 post-merge invariant failure rolls back the transaction. Repeating a successful
 promotion is an idempotent no-op.
+
+When the configured warehouse exposes Spark, the same `backfill-stage` and
+`backfill-promote` commands select the Delta staging adapter and promoter.
+Delta promotion requires Databricks Runtime 18.0+ Unity Catalog managed tables
+because it uses one catalog `BEGIN ATOMIC` transaction; unsupported runtimes
+fail closed before replacing live history. Run the fixture parity suite and a
+non-production catalog promotion before enabling a production Delta workflow.
 
 The development PostgreSQL proof run `ecb-history-2010-2026` completed through
 `2026-10-22`: 4,248 accepted snapshots, nine missing TARGET dates, eight

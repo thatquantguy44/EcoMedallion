@@ -1,0 +1,10 @@
+# PostgreSQL warehouse profile for the dedicated production ECB poller.
+# The DSN remains outside this file in FRED_POSTGRES_SERVICE_DSN.
+default:
+  primary_backend: postgres
+  ecb_assets_authoritative_backend: postgres
+  fallback_backends: []
+  backends:
+    postgres:
+      target: service
+      dsn_env: FRED_POSTGRES_SERVICE_DSN

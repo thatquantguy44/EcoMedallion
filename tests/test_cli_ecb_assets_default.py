@@ -25,7 +25,7 @@ class _Run:
         return {"run_id": "observation-run", "status": "succeeded"}
 
 
-def _install_run_fakes(monkeypatch):
+def _install_run_fakes(monkeypatch, *, selected_backend="postgres"):
     config = PipelineConfig(environment=Environment.DEV, fred_api_key="")
     warehouse = _Warehouse()
 
@@ -42,7 +42,7 @@ def _install_run_fakes(monkeypatch):
 
     class _Factory:
         def __init__(self, *_args, **_kwargs):
-            pass
+            self.selected_backend_name = selected_backend
 
         def build(self, *, force_dry_run):
             assert not force_dry_run
@@ -132,3 +132,19 @@ def test_run_opt_out_does_not_poll(monkeypatch, capsys):
     assert warehouse.closed
     output = capsys.readouterr().out
     assert "disabled by --no-ecb-assets" in output
+
+
+def test_run_does_not_write_ecb_to_non_authoritative_fallback(monkeypatch, capsys):
+    warehouse = _install_run_fakes(monkeypatch, selected_backend="local")
+
+    def unexpected(*_args):
+        raise AssertionError("ECB poll must not write to a fallback backend")
+
+    monkeypatch.setattr(cli, "_poll_ecb_assets_for_run", unexpected)
+    args = cli.build_parser().parse_args(["run"])
+
+    assert cli._cmd_run(args) == 0
+    assert warehouse.closed
+    output = capsys.readouterr().out
+    assert '"status": "skipped"' in output
+    assert "not the authoritative ECB assets backend 'postgres'" in output

@@ -5,13 +5,23 @@ inventory, reviewed schema registry, and historical row normalizer are
 implemented. The isolated resumable staging rebuild, exact boundary
 reconciliation, quarantine acknowledgement, and atomic PostgreSQL promotion are
 implemented. Phase 3 Delta staging, catalog-transaction promotion, and query
-contracts are implemented; Databricks runtime proof and production scheduling
-remain open.**
+contracts are implemented. A PostgreSQL systemd polling schedule is implemented;
+deployment activation, Databricks runtime proof, and live alert delivery remain
+open. Brevo SMTP configuration was validated locally and the live drill reached
+the provider on 2026-10-24, but Brevo rejected the runner with `525 5.7.1
+Unauthorized IP address`; no message was accepted. A deterministic non-network
+drill proves late, quarantine,
+signature-failure, and ingestion-failure alert classification, routing,
+rendering, and file delivery. PostgreSQL is the configurable authoritative
+production destination for forward eligible-assets ingestion.**
 
-Last verified: 2026-10-23 (2026-10-22 MID release message, signed full/update
-XML and CSV artifacts, dictionary, and live SQLite/PostgreSQL ingestions)
+Last verified: 2026-10-24 (2026-10-22 MID release message, signed full/update
+XML and CSV artifacts, dictionary, live SQLite/PostgreSQL ingestions, and
+Frankfurt-time scheduler resource validation)
 
-Primary owner: TBD
+Primary owner: Not recorded, by request
+
+Review status: **Reviewed**
 
 Target: a point-in-time-safe history of the ECB's List of eligible marketable
 assets in SQLite, PostgreSQL, and Delta, with a current view and an auditable
@@ -19,6 +29,30 @@ answer to "which securities did the ECB list as eligible at this cutoff?"
 
 Depends on: `specs/spec004` (warehouse parity), `specs/spec006` (licensing
 gate), and the existing Bronze/Silver/Gold and run-audit conventions.
+
+### Operational pickup checkpoint
+
+Resume production-readiness work in this order:
+
+1. Use the production Linux host's stable outbound IP, authorize that IP in
+   Brevo, and verify the configured sender identity. Rotate the SMTP key that
+   was shared during setup before installing the production secret.
+2. Install the PostgreSQL warehouse, alerting, and service environment files on
+   that host. Keep credentials in protected environment variables; do not put
+   an SMTP key or PostgreSQL DSN in tracked YAML.
+3. Run `ecb-assets alert-drill --env prod --live-alert-delivery`. Acceptance
+   requires all four messages to be accepted by the provider, a persisted
+   manifest, and recipient confirmation for late-release, quarantine,
+   signature-failure, and ingestion-failure mail.
+4. Run one manual production `ecb-assets poll`, then prove the release ledger,
+   current view, history, and audit status were written to the new PostgreSQL
+   ECB objects without modifying the observation-series tables.
+5. Only after steps 3-4 pass, enable the systemd timer and observe at least one
+   scheduled weekday cycle through PostgreSQL and the real alert route.
+
+The exact commands and evidence checklist are in
+[`docs/handoffs/ecb_eligible_assets.md`](../../docs/handoffs/ecb_eligible_assets.md)
+and the [deployment runbook](../../docs/deployment/ecb_eligible_assets_runbook.md).
 
 ---
 
@@ -458,11 +492,12 @@ verification procedure against an official sample and a live release. Until
 then, the pipeline may archive a release but may not call its signature
 `verified`.
 
-`config/data_licensing.yml` currently marks `ecb` as provisional. A named human
-must review the applicable ECB copyright/reuse terms and record `reviewed_by`
-before this dataset is redistributed or used for a commercial compliance
-decision. Attribution to the ECB is retained in Gold metadata and downstream
-exports.
+`config/data_licensing.yml` marks `ecb` as verified. The
+primary-source evidence and reuse controls are prepared in
+`docs/governance/ecb_eligible_assets_licensing_review.md`. The repository
+maintainer accepted the review on 2026-10-24; the register records a role-based
+attestation without a personal identity or pipeline owner, as requested.
+Attribution to the ECB is retained in Gold metadata and downstream exports.
 
 ## 8. CLI and operator contract
 
@@ -474,6 +509,7 @@ python -m fred_pipeline ecb-assets ingest-release --release-url <release-url>
 python -m fred_pipeline ecb-assets verify --release-id <id>
 python -m fred_pipeline ecb-assets status
 python -m fred_pipeline ecb-assets as-of --as-of <ISO-8601 UTC timestamp>
+python -m fred_pipeline ecb-assets alert-drill --output <directory>
 ```
 
 `poll` and `ingest-release` are safe to repeat. `verify` currently re-runs the
@@ -502,6 +538,9 @@ Delivered in Phase 1:
   release-aligned as-of queries;
 - default polling after `fred_pipeline run` on SQLite/PostgreSQL, with a
   `--no-ecb-assets` operator escape hatch and combined non-zero failure status;
+- an explicit `ecb_assets_authoritative_backend` warehouse setting, currently
+  pinned to PostgreSQL in production, that prevents fallback or another
+  observation backend from silently becoming the ECB system of record;
 - ECB-specific health alerts, using the shared alert routes/transports, for
   failed or quarantined releases, invalid verification, late publication after
   a configurable grace period, coverage gaps, and unusual N/U/D volume; and
@@ -584,8 +623,9 @@ checks, and catalog-transaction promotion are implemented. The Delta fixture
 tests pass on local Spark/Delta with a temporary Java 17 runtime, including
 idempotent staged partition replacement, boundary key/hash parity, and the
 current/history/as-of/change query contract. Databricks catalog-transaction
-execution, production scheduling, live alert-delivery proof/runbook, and the
-named licensing review remain explicit open work.
+execution and production schedule activation remain open. The safe
+file-delivery alert drill is implemented and repeatable; real-mailbox receipt
+remains explicit open work. The licensing review is complete.
 
 Live inventory validation found 190 snapshots and one legacy schema in 2010,
 255 snapshots and one modern schema in 2025, and 207 snapshots across two
@@ -658,11 +698,15 @@ The first Phase 3 slice is implemented:
   with real Spark/Delta integration cases for idempotent staging and row-value
   semantics.
 
-Remaining work is to run those cases on Java/Delta and Databricks, measure and
-choose clustering, schedule RSS polling, prove live alert delivery, and finish
-the replay/backup/restore runbook. Benchmark archive rebuild and common
-point-in-time queries on all three backends before choosing optimization
-layout.
+Remaining work is to run those cases on Databricks, measure and choose
+clustering, complete the Brevo IP/sender authorization and live mailbox proof,
+run a manual poll against the authoritative production PostgreSQL destination,
+activate the shipped PostgreSQL RSS timer, and execute the
+replay/backup/restore drill. The production activation order and evidence
+required at each gate are recorded in the operational pickup checkpoint above.
+Benchmark
+archive rebuild and common point-in-time queries on all three backends before
+choosing optimization layout.
 
 Exit: SQLite, PostgreSQL, and Delta return identical ordered rows and hashes for
 the same fixture cutoffs, and a failed/quarantined release leaves the prior
@@ -684,7 +728,7 @@ Gold state live.
 | AC-010 | SQLite, PostgreSQL, and Delta return identical sorted row sets and canonical hashes for current, single-security-history, full-universe-as-of, and between-release change queries |
 | AC-011 | A tampered artifact, invalid signature, schema drift, or release/update mismatch is present in Bronze/audit but cannot advance Silver/Gold |
 | AC-012 | Missing RSS delivery can be recovered from the stable latest endpoints/download page without inventing a publication timestamp or duplicating a release |
-| AC-013 | The ECB licensing entry is verified by a named reviewer before external redistribution; source attribution survives Gold/export paths |
+| AC-013 | The ECB licensing entry has a documented review attestation before external redistribution; source attribution survives Gold/export paths |
 | AC-014 | The live runbook demonstrates alerting on late, quarantined, and failed releases and recovery without hand-editing database rows |
 
 ## 11. Non-goals

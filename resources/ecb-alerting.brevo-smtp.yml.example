@@ -1,0 +1,36 @@
+# Free/low-volume ECB production alerting through Brevo SMTP.
+#
+# Brevo's free tier currently allows 300 sends/day. Create an SMTP key, put the
+# key in FRED_SMTP_PASSWORD on the scheduler host, and never store it here.
+# Replace every REPLACE_* value before deployment.
+enabled: true
+policy: failure
+from_address: REPLACE_WITH_VERIFIED_SENDER@example.com
+from_name: ECB Eligible Assets Pipeline
+subject_prefix: "[FRED]"
+environments: [prod]
+attach_run_json: true
+max_failures_listed: 25
+
+ecb_assets:
+  enabled: true
+  expected_release_time_local: "18:15"
+  grace_period_minutes: 180
+  max_change_percent: 20.0
+  alert_on_gap: true
+  alert_on_quarantine: true
+
+transport:
+  kind: smtp
+  host: smtp-relay.brevo.com
+  port: 587
+  use_starttls: true
+  username: REPLACE_WITH_BREVO_SMTP_LOGIN
+  password_env: FRED_SMTP_PASSWORD
+  timeout_seconds: 30
+
+routes:
+  failure:
+    to: [REPLACE_WITH_ONCALL@example.com]
+  partial:
+    to: [REPLACE_WITH_ONCALL@example.com]

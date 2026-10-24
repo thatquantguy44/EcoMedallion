@@ -22,6 +22,14 @@ default:
   # Primary backend for all environments. Override per-environment below.
   primary_backend: postgres
 
+  # Authoritative destination for the dedicated ECB eligible-assets history.
+  # This is separate from primary_backend because observation-series runs and
+  # the ECB MID poller may intentionally use different stores. Override with
+  # FRED_ECB_ASSETS_AUTHORITATIVE_BACKEND. Forward writes currently support
+  # local (development) and postgres; databricks is reserved for the future
+  # forward Delta writer and fails closed for dedicated write commands today.
+  ecb_assets_authoritative_backend: postgres
+
   # Fallback chain if primary fails. Leave empty for no fallbacks.
   fallback_backends: []
     # - duckdb
@@ -100,6 +108,7 @@ environments:
   test:
     # test environment can use either local SQLite or Databricks
     primary_backend: local
+    ecb_assets_authoritative_backend: local
     fallback_backends: []
     backends:
       local:
@@ -108,6 +117,9 @@ environments:
   prod:
     # Production uses Databricks with in-memory fallback
     primary_backend: databricks
+    # The host-side systemd poller uses the separate PostgreSQL warehouse
+    # profile in resources/ecb-assets-warehouse.yml.example.
+    ecb_assets_authoritative_backend: postgres
     fallback_backends:
       - duckdb
       - local
@@ -154,5 +166,7 @@ environments:
 #   - FRED_POSTGRES_SERVICE_DSN : Managed/service Postgres DSN
 #   - FRED_POSTGRES_DSN         : Generic Postgres DSN fallback
 #   - DATABASE_URL              : Service Postgres DSN fallback
+#   - FRED_ECB_ASSETS_AUTHORITATIVE_BACKEND : local | postgres | databricks |
+#                                              disabled
 #
 # Logs will show which backend was selected and any fallback attempts.

@@ -14,6 +14,7 @@ from fred_pipeline.io.warehouse_factory import (
     WarehouseConfig,
     WarehouseFactory,
     WarehouseInitError,
+    load_warehouse_config,
 )
 
 
@@ -71,6 +72,7 @@ def test_a_working_fallback_still_rescues_the_run(monkeypatch):
     )
 
     assert factory.build() is sentinel
+    assert factory.selected_backend_name == "local"
 
 
 def test_explicit_none_fallback_permits_in_memory(monkeypatch):
@@ -100,6 +102,49 @@ def test_a_working_primary_is_returned_untouched(monkeypatch):
     factory = _factory(monkeypatch, "local", working={"local": sentinel})
 
     assert factory.build() is sentinel
+    assert factory.selected_backend_name == "local"
+
+
+def test_ecb_authoritative_backend_defaults_to_primary():
+    config = WarehouseConfig(primary_backend="postgres")
+    assert config.ecb_assets_authoritative_backend == "postgres"
+
+
+def test_ecb_authoritative_backend_rejects_unknown_value():
+    with pytest.raises(ValueError, match="ecb_assets_authoritative_backend"):
+        WarehouseConfig(
+            primary_backend="postgres",
+            ecb_assets_authoritative_backend="somewhere",
+        )
+
+
+def test_ecb_authoritative_backend_env_overrides_file(tmp_path, monkeypatch):
+    path = tmp_path / "warehouse.yml"
+    path.write_text(
+        """
+default:
+  primary_backend: databricks
+  ecb_assets_authoritative_backend: databricks
+  backends: {}
+""".strip()
+    )
+    monkeypatch.setenv("FRED_ECB_ASSETS_AUTHORITATIVE_BACKEND", "postgres")
+
+    config = load_warehouse_config(str(path), environment="prod")
+
+    assert config.primary_backend == "databricks"
+    assert config.ecb_assets_authoritative_backend == "postgres"
+
+
+def test_ecb_authoritative_backend_env_applies_without_config_file(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("FRED_ECB_ASSETS_AUTHORITATIVE_BACKEND", "disabled")
+
+    config = load_warehouse_config(str(tmp_path / "missing.yml"))
+
+    assert config.primary_backend == "local"
+    assert config.ecb_assets_authoritative_backend == "disabled"
 
 
 # ---- CLI: the failure must stop the run before any extraction --------------
