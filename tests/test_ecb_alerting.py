@@ -208,6 +208,22 @@ def test_live_alert_drill_requires_enabled_external_transport(tmp_path):
         run_ecb_alert_drill(AlertingConfig(), output_dir=tmp_path, live_delivery=True)
 
 
+def test_live_alert_drill_refuses_placeholder_sender_and_recipient(tmp_path):
+    config = AlertingConfig(
+        enabled=True,
+        policy="failure",
+        from_address="REPLACE_WITH_SENDER@example.com",
+        transport=TransportConfig(kind="smtp", host="smtp.example.com"),
+        routes={
+            "failure": RouteConfig(to=("REPLACE_WITH_ONCALL@example.com",)),
+            "partial": RouteConfig(to=("REPLACE_WITH_ONCALL@example.com",)),
+        },
+    )
+
+    with pytest.raises(ValueError, match="placeholder configuration"):
+        run_ecb_alert_drill(config, output_dir=tmp_path, live_delivery=True)
+
+
 def test_live_alert_drill_sends_four_messages_to_configured_routes(tmp_path):
     transport = _CapturingTransport()
     config = AlertingConfig(

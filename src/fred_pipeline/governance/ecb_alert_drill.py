@@ -76,12 +76,31 @@ def _live_drill_config(config: AlertingConfig, *, environment: str) -> AlertingC
         )
     if config.policy == "never":
         raise ValueError("live alert drill cannot run with policy: never")
+    configured_values = {
+        "from_address": config.from_address,
+        "transport.username": config.transport.username,
+        "transport.tenant_id": config.transport.tenant_id,
+        "transport.client_id": config.transport.client_id,
+    }
     for verdict in ("partial", "failure"):
         if not config.should_send(verdict, environment):
             raise ValueError(
                 f"live alert drill has no enabled {verdict} route for "
                 f"environment {environment!r}"
             )
+        route = config.route_for(verdict)
+        for index, address in enumerate((*route.to, *route.cc, *route.bcc)):
+            configured_values[f"routes.{verdict}[{index}]"] = address
+    placeholders = [
+        name
+        for name, value in configured_values.items()
+        if value and "REPLACE_WITH" in value.upper()
+    ]
+    if placeholders:
+        raise ValueError(
+            "live alert drill refuses placeholder configuration values: "
+            + ", ".join(placeholders)
+        )
     return replace(config, subject_prefix=f"{config.subject_prefix}[DRILL]")
 
 
