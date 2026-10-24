@@ -1,15 +1,19 @@
 # ECB Eligible Assets — Forward-Ingestion Runbook
 
-This runbook operates the Phase 1 implementation from
+This runbook operates the Phase 1-3 implementation from
 [Spec 011](../../specs/spec011/README.md). It maintains a release-aligned,
 point-in-time history of securities appearing on the ECB's List of eligible
 marketable assets. It does not independently determine legal collateral
 eligibility.
 
-Phase 1 supports SQLite and PostgreSQL forward ingestion. Phase 2 can inventory
-and normalize registered historical archive schemas, but the atomic staging
-backfill is not implemented yet. The Spark/Delta writer also remains a later
-phase; the checked-in Delta DDL is a schema contract, not a production writer.
+Phase 1 supports SQLite and PostgreSQL forward ingestion. Phase 2 inventories,
+normalizes, stages, reconciles, and atomically promotes the historical archive.
+Phase 3 provides run-partitioned Delta archive staging, catalog-transaction
+promotion, and current/history/as-of/change query contracts. Local Spark/Delta
+fixtures prove those contracts; Databricks Runtime 18+ execution remains a
+deployment acceptance step. The normal Spark-backed observation run still does
+not poll forward MID releases, so the production schedule below targets the
+PostgreSQL service backend.
 
 ## Prerequisites
 
@@ -59,18 +63,77 @@ not mistake a partial refresh for complete success. Use `--no-ecb-assets` only
 for a deliberate observation-only run; `--dry-run` skips ECB because it has no
 durable warehouse.
 
-The standalone `ecb-assets poll` command remains available for targeted retry
-and for a separately scheduled check after the normal ECB publication window.
-The ECB states that the list is normally published on weekdays except TARGET
-closing days. If scheduled separately, use the `Europe/Frankfurt` timezone and
-run a later retry so a delayed release can still be discovered.
+The standalone `ecb-assets poll` command is the production scheduler entry
+point. The repository ships a systemd service/timer template under
+`resources/ecb-eligible-assets.*`. It runs three idempotent weekday checks in
+Frankfurt local time, using the canonical IANA zone `Europe/Berlin`:
 
-Spark/Delta currently has schema DDL but no ECB writer. A Databricks-backed
-`run` reports ECB polling as skipped rather than failing the observation run;
-Phase 3 replaces that skip with the Delta writer.
+| Local time | Purpose |
+| --- | --- |
+| 17:45 | Discover an early release, matching the timing observed in live evidence |
+| 18:25 | Retry after the ECB's stated 18:15 publication time |
+| 21:20 | Retry after the configured 180-minute grace period and alert if late |
 
-The repository does not ship a separate enabled ECB schedule: deployment
-owners must choose any additional retry cadence and alert destination.
+The explicit timezone follows CET/CEST automatically. The timer still fires on
+a TARGET closing day, but `is_target_operating_day()` makes the health check
+expect the preceding operating date, so the run is an idempotent no-op without
+a false missing-release alert. systemd will not overlap the oneshot service if
+one poll is still active when the next trigger arrives.
+
+### Install the PostgreSQL production timer
+
+The checked-in `config/warehouse.yml` selects Databricks for `prod`; do not use
+it unchanged for this host-side poller. Install the provided PostgreSQL service
+profile and an environment file whose DSN comes from a protected environment
+variable:
+
+```bash
+sudo install -d -m 0750 /etc/fred-pipeline
+sudo install -m 0640 resources/ecb-assets-warehouse.yml.example \
+  /etc/fred-pipeline/warehouse.yml
+sudo install -m 0600 resources/ecb-assets.env.example \
+  /etc/fred-pipeline/ecb-assets.env
+sudo install -m 0644 resources/ecb-eligible-assets.service \
+  /etc/systemd/system/ecb-eligible-assets.service
+sudo install -m 0644 resources/ecb-eligible-assets.timer \
+  /etc/systemd/system/ecb-eligible-assets.timer
+```
+
+Edit `/etc/fred-pipeline/ecb-assets.env` and replace the DSN placeholder. Copy
+the application and alerting configs to the paths named there. In the alerting
+config, set `enabled: true`, retain `policy: failure`, restrict `environments`
+to `[prod]`, configure real recipients/transport, and keep
+`ecb_assets.expected_release_time_local: "18:15"` with
+`grace_period_minutes: 180` unless operations approves a different SLA.
+Create the unprivileged `fred-pipeline` user, install the repository and virtual
+environment at `/opt/fred-bronze-to-gold-pipeline`, and grant that user only the
+required database and configuration access.
+
+Validate the exact next trigger times, then run one manual production poll
+before enabling the timer:
+
+```bash
+systemd-analyze calendar \
+  'Mon..Fri *-*-* 17:45:00 Europe/Berlin' \
+  'Mon..Fri *-*-* 18:25:00 Europe/Berlin' \
+  'Mon..Fri *-*-* 21:20:00 Europe/Berlin'
+sudo systemctl daemon-reload
+sudo systemctl start ecb-eligible-assets.service
+sudo systemctl status ecb-eligible-assets.service
+sudo systemctl enable --now ecb-eligible-assets.timer
+systemctl list-timers ecb-eligible-assets.timer
+```
+
+Inspect scheduled-run output with:
+
+```bash
+journalctl -u ecb-eligible-assets.service --since today
+```
+
+Keep the timer disabled until the manual poll succeeds and alert delivery has
+been proven. A Databricks-backed `fred_pipeline run` continues to report
+forward ECB polling as skipped; the implemented Delta path currently covers
+historical staging/promotion and query parity, not this forward scheduler.
 
 ## Historical archive inventory and schema review
 
@@ -141,6 +204,13 @@ timestamp, and replaces the bootstrap-only Silver versions/changes in one
 transaction. A missing or incorrect acknowledgement fails before mutation. Any
 post-merge invariant failure rolls back the transaction. Repeating a successful
 promotion is an idempotent no-op.
+
+When the configured warehouse exposes Spark, the same `backfill-stage` and
+`backfill-promote` commands select the Delta staging adapter and promoter.
+Delta promotion requires Databricks Runtime 18.0+ Unity Catalog managed tables
+because it uses one catalog `BEGIN ATOMIC` transaction; unsupported runtimes
+fail closed before replacing live history. Run the fixture parity suite and a
+non-production catalog promotion before enabling a production Delta workflow.
 
 The development PostgreSQL proof run `ecb-history-2010-2026` completed through
 `2026-10-22`: 4,248 accepted snapshots, nine missing TARGET dates, eight

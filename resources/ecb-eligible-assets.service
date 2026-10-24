@@ -1,0 +1,18 @@
+[Unit]
+Description=ECB eligible-assets RSS poll
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=fred-pipeline
+Group=fred-pipeline
+WorkingDirectory=/opt/fred-bronze-to-gold-pipeline
+EnvironmentFile=/etc/fred-pipeline/ecb-assets.env
+ExecStart=/opt/fred-bronze-to-gold-pipeline/.venv/bin/python -m fred_pipeline ecb-assets poll --env prod
+TimeoutStartSec=30min
+NoNewPrivileges=true
+PrivateTmp=true
+
+# systemd will not start a second instance while this oneshot is still active,
+# so the three daily retries cannot overlap.

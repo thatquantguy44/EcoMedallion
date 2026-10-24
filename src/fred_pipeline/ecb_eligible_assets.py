@@ -65,7 +65,8 @@ class _EuropeFrankfurtFallback(tzinfo):
 
 
 try:
-    ECB_ZONE: tzinfo = ZoneInfo("Europe/Frankfurt")
+    # Europe/Berlin is the canonical IANA zone for Frankfurt's CET/CEST rules.
+    ECB_ZONE: tzinfo = ZoneInfo("Europe/Berlin")
 except Exception:  # pragma: no cover - depends on host tzdata installation
     ECB_ZONE = _EuropeFrankfurtFallback()
 

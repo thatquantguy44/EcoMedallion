@@ -5,11 +5,13 @@ inventory, reviewed schema registry, and historical row normalizer are
 implemented. The isolated resumable staging rebuild, exact boundary
 reconciliation, quarantine acknowledgement, and atomic PostgreSQL promotion are
 implemented. Phase 3 Delta staging, catalog-transaction promotion, and query
-contracts are implemented; Databricks runtime proof and production scheduling
-remain open.**
+contracts are implemented. A PostgreSQL systemd polling schedule is implemented;
+deployment activation, Databricks runtime proof, and live alert delivery remain
+open.**
 
-Last verified: 2026-10-23 (2026-10-22 MID release message, signed full/update
-XML and CSV artifacts, dictionary, and live SQLite/PostgreSQL ingestions)
+Last verified: 2026-10-24 (2026-10-22 MID release message, signed full/update
+XML and CSV artifacts, dictionary, live SQLite/PostgreSQL ingestions, and
+Frankfurt-time scheduler resource validation)
 
 Primary owner: TBD
 
@@ -584,7 +586,7 @@ checks, and catalog-transaction promotion are implemented. The Delta fixture
 tests pass on local Spark/Delta with a temporary Java 17 runtime, including
 idempotent staged partition replacement, boundary key/hash parity, and the
 current/history/as-of/change query contract. Databricks catalog-transaction
-execution, production scheduling, live alert-delivery proof/runbook, and the
+execution, production schedule activation, live alert-delivery proof, and the
 named licensing review remain explicit open work.
 
 Live inventory validation found 190 snapshots and one legacy schema in 2010,
@@ -658,11 +660,11 @@ The first Phase 3 slice is implemented:
   with real Spark/Delta integration cases for idempotent staging and row-value
   semantics.
 
-Remaining work is to run those cases on Java/Delta and Databricks, measure and
-choose clustering, schedule RSS polling, prove live alert delivery, and finish
-the replay/backup/restore runbook. Benchmark archive rebuild and common
-point-in-time queries on all three backends before choosing optimization
-layout.
+Remaining work is to run those cases on Databricks, measure and choose
+clustering, activate the shipped PostgreSQL RSS timer in the deployment, prove
+live alert delivery, and execute the replay/backup/restore drill. Benchmark
+archive rebuild and common point-in-time queries on all three backends before
+choosing optimization layout.
 
 Exit: SQLite, PostgreSQL, and Delta return identical ordered rows and hashes for
 the same fixture cutoffs, and a failed/quarantined release leaves the prior
