@@ -138,6 +138,45 @@ Create the unprivileged `fred-pipeline` user, install the repository and virtual
 environment at `/opt/fred-bronze-to-gold-pipeline`, and grant that user only the
 required database and configuration access.
 
+### Alert transport choices
+
+The alert layer supports generic SMTP, Outlook/Microsoft 365 SMTP, and Outlook
+through Microsoft Graph without changing pipeline code.
+
+For a no-cost, low-volume production setup, the recommended starting point is
+the Brevo SMTP template:
+
+```bash
+sudo install -m 0640 resources/ecb-alerting.brevo-smtp.yml.example \
+  /etc/fred-pipeline/alerting.yml
+```
+
+Brevo's free plan currently includes 300 sends per day. Configure a verified
+sender/domain, replace the SMTP login and recipient placeholders, and store the
+Brevo SMTP key only in `FRED_SMTP_PASSWORD`. The relay is
+`smtp-relay.brevo.com:587` with STARTTLS. Gmail SMTP is another free option for
+very small installations (`smtp.gmail.com:587`), but it requires 2-Step
+Verification and an app password and is less suitable for a service identity.
+
+For an existing Outlook/Microsoft 365 tenant, prefer Microsoft Graph:
+
+```bash
+sudo install -m 0640 resources/ecb-alerting.outlook-graph.yml.example \
+  /etc/fred-pipeline/alerting.yml
+```
+
+Replace the tenant/client IDs, sender, and recipients, grant the Entra
+application `Mail.Send` application permission with admin consent, and store
+only the client secret in `FRED_GRAPH_CLIENT_SECRET`. The existing
+`outlook_smtp` transport remains available for a tenant that explicitly permits
+SMTP AUTH, but it uses username/password authentication; Microsoft recommends
+OAuth/Graph and is retiring Basic authentication for SMTP AUTH. Do not choose
+Outlook SMTP for a new unattended deployment.
+
+Any other relay uses `kind: smtp` with its host, port, username, and a
+`password_env` reference. No secret belongs in YAML. Whichever transport is
+selected, run the safe file drill first and the explicit live drill second.
+
 Validate the exact next trigger times, then run one manual production poll
 before enabling the timer:
 

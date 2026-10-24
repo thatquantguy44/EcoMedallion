@@ -2,6 +2,8 @@ from pathlib import Path
 
 import yaml
 
+from fred_pipeline.governance.alerting_config import load_alerting_config
+
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -45,3 +47,23 @@ def test_ecb_schedule_warehouse_uses_secret_dsn_env():
 def test_ecb_schedule_env_pins_authoritative_backend_to_postgres():
     env = (ROOT / "resources" / "ecb-assets.env.example").read_text()
     assert "FRED_ECB_ASSETS_AUTHORITATIVE_BACKEND=postgres" in env
+
+
+def test_free_brevo_smtp_alert_template_is_loadable_and_secret_safe():
+    path = ROOT / "resources" / "ecb-alerting.brevo-smtp.yml.example"
+    config = load_alerting_config(str(path))
+    assert config.enabled is True
+    assert config.transport.kind == "smtp"
+    assert config.transport.host == "smtp-relay.brevo.com"
+    assert config.transport.port == 587
+    assert config.transport.use_starttls is True
+    assert config.transport.password_env == "FRED_SMTP_PASSWORD"
+
+
+def test_outlook_graph_alert_template_is_loadable_and_secret_safe():
+    path = ROOT / "resources" / "ecb-alerting.outlook-graph.yml.example"
+    config = load_alerting_config(str(path))
+    assert config.enabled is True
+    assert config.transport.kind == "microsoft_graph"
+    assert config.transport.client_secret_env == "FRED_GRAPH_CLIENT_SECRET"
+    assert config.route_for("failure").has_recipients
