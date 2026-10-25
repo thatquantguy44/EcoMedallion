@@ -16,6 +16,9 @@ Task checklist: [tasks/todo.md](../../tasks/todo.md)
 
 Pickup point: [Dagster handoff](../../docs/handoffs/dagster_orchestration.md)
 
+**Continue implementation on the existing branch `spec012-dagster-orchestration`**,
+tracking `origin/spec012-dagster-orchestration`.
+
 **Next task: complete T1 — optional runtime installation and verification.**
 Matching candidate package metadata and README bootstrap instructions are
 established; clean installs, transitive constraints and core-only verification

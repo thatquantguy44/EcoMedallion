@@ -3,6 +3,9 @@
 Status: Draft for review. All implementation tasks are pending; T1 published
 package metadata research is complete, but runtime verification is not.
 
+**Continue on the existing branch `spec012-dagster-orchestration`**,
+tracking `origin/spec012-dagster-orchestration`.
+
 **Next task: complete T1**, following the [canonical handoff](../docs/handoffs/dagster_orchestration.md#next-task-t1).
 
 Requirements: [spec](../specs/spec012/README.md). Sequence: [plan](plan.md).

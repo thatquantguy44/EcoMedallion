@@ -38,6 +38,7 @@ BIS, BEA, Census, SEC (company financials), Tiingo, Stooq, and iShares — see
 > [`specs/spec012/README.md`](./specs/spec012/README.md), with the next build
 > task, **T1 — complete optional runtime installation and verification**, in
 > [`docs/handoffs/dagster_orchestration.md`](./docs/handoffs/dagster_orchestration.md#next-task-t1).
+> Continue that work on the existing branch `spec012-dagster-orchestration`.
 
 ## What it does
 

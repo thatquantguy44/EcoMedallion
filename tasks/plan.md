@@ -3,6 +3,9 @@
 Status: Draft for review, 2026-10-25. T1 package metadata research is complete;
 installation, locking and integration verification remain pending.
 
+**Continuation branch: `spec012-dagster-orchestration`** (existing branch;
+tracking `origin/spec012-dagster-orchestration`). Continue implementation here.
+
 This is the active implementation plan for [Spec 012](../specs/spec012/README.md).
 Tasks are tracked in [todo.md](todo.md); acceptance IDs refer to the spec.
 This plan does not replace the remaining Spec 011 production-host proof.

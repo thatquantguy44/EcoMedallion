@@ -20,6 +20,12 @@ below, then [Spec 012](../../specs/spec012/README.md),
 
 ## Next task: T1
 
+**Continue working on the existing branch `spec012-dagster-orchestration`**
+(tracking `origin/spec012-dagster-orchestration`). Keep the next implementation
+commits on this branch; do not start a replacement branch from `main`. Confirm
+the checkout with `git branch --show-current` and inspect `git status` before
+making changes.
+
 **Complete T1 — Resolve the optional runtime.** Do this before starting T2.
 The specification remains a draft; documentation commits and published package
 compatibility are not implementation acceptance or production approval.

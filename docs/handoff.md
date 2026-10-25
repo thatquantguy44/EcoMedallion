@@ -2,7 +2,9 @@
 
 Last verified: 2026-10-25 (documentation and repository state only).
 
-On branch `spec012-dagster-orchestration`, the active work is
+**Continue working on the existing branch `spec012-dagster-orchestration`**,
+tracking `origin/spec012-dagster-orchestration`. Keep subsequent Spec 012
+implementation commits on this branch. The active work is
 [Spec 012: Dagster Orchestration](../specs/spec012/README.md).
 
 **Next task: complete T1 — optional Dagster runtime installation and
