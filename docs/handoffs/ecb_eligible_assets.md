@@ -48,15 +48,21 @@ was correct and fail-closed:
 - Silver/Gold stayed on 2026-10-22 with 31,331 current securities; and
 - the ECB run ID appeared in zero `silver.fred_observation` rows.
 
-This is a production-path and isolation proof on local PostgreSQL, not evidence
-that an external production host or its timer has been activated. The successful
-manual poll gate remains open because no new release was promoted.
+Review then proved that the three extra declared `U` rows had identical
+prior-full, current-full, and update canonical hashes. After implementing the
+narrow `source_noop` rule, a normal repoll accepted the release without
+`--allow-gap`: coverage is complete, Gold contains 31,340 current securities,
+all three rows are auditable with null computed change types, and none created
+a new SCD2 interval. An immediate repoll returned no work. This is a successful
+production-path proof on local PostgreSQL, not evidence that an external
+production host or its timer has been activated.
 
 ## Pick up here
 
-Alert identity and live delivery gates are complete. The PostgreSQL path was
-proven to fail closed; continue at the reconciliation incident below, repeat a
-successful manual poll, then activate the timer. Do not activate it early.
+Alert identity, live delivery, reconciliation recovery, and the local
+PostgreSQL write gate are complete. Continue by installing and proving the same
+configuration on the production Linux host, then activate the timer. Do not
+activate it before the production-host manual poll passes.
 
 ### 1. Establish the production alert identity — complete
 
@@ -89,10 +95,10 @@ The 2026-10-24 run satisfied all four conditions. If a future run returns
 review sender/domain verification. Do not replace the live drill with the file
 drill.
 
-### 3. Resolve the reconciliation incident — pick up here
+### 3. Resolve the reconciliation incident — implementation complete
 
-Release `2026-10-23T15:56:12Z` is quarantined because its update has three
-extra keys relative to the authoritative full-snapshot diff:
+Release `2026-10-23T15:56:12Z` was initially quarantined because its update had
+three extra keys relative to the authoritative full-snapshot diff:
 
 ```text
 ISIN:EU000A4E1NP4
@@ -100,13 +106,16 @@ ISIN:EU000A4E2KT0
 ISIN:XS3420368998
 ```
 
-Compare the signed update rows with the prior accepted and new full snapshots.
-If the ECB republishes corrected data, repeat the normal poll. If review
-concludes that the signed full snapshot should be accepted despite the update
-mismatch, record that decision and use the existing explicit `--allow-gap`
-operator path. Do not modify intervals or release status by hand.
+Review found that all three rows are declared `U` records present in both full
+snapshots, with identical prior-full, current-full, and update canonical hashes.
+The same ECB source pattern occurred on the preceding boundary. Forward
+reconciliation now treats only this hash-proven pattern as an auditable
+`source_noop`; extra `N`/`D` rows, wrong codes, missing computed changes, and
+extra `U` rows with any hash mismatch still fail closed. Repeat the normal poll
+without `--allow-gap`, then verify the three change rows and unchanged history
+intervals as part of the PostgreSQL write proof.
 
-### 4. Complete the authoritative PostgreSQL write proof
+### 4. Complete the authoritative PostgreSQL write proof — local gate complete
 
 Install `resources/ecb-assets-warehouse.yml.example` and
 `resources/ecb-assets.env.example` as described in the
@@ -124,6 +133,10 @@ is terminal, and the writes are confined to the dedicated new ECB tables/views.
 At minimum, inspect the release ledger, version/change history, current view,
 and coverage status named in Spec 011. Do not count an automatic warehouse
 fallback as a successful proof.
+
+The repository-hosted PostgreSQL proof passed on 2026-10-25. Repeat it on the
+production Linux host before enabling the timer; the host deployment is still
+the open gate.
 
 ### 5. Activate and observe the schedule
 

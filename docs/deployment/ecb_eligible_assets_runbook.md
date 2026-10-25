@@ -36,8 +36,7 @@ resources, deterministic file alert drill, and explicit live alert drill are
 implemented. Live Brevo SMTP delivery was proven on 2026-10-24: all four
 deterministic alert scenarios were accepted, the drill produced a passing
 manifest, and the recipient confirmed mailbox receipt. The setup SMTP key was
-then rotated. The next operator should continue with one manual authoritative
-PostgreSQL poll and database verification.
+then rotated.
 
 A production-profile poll against the local PostgreSQL `macro_medallion`
 service on 2026-10-25 found the 2026-10-23 release, retained and verified all
@@ -45,13 +44,18 @@ five signed artifacts, then quarantined the release because its update contained
 three keys absent from the computed full-snapshot diff. The real failure route
 delivered an alert. Silver/Gold correctly remained at the accepted 2026-10-22
 release and 31,331 current securities; no observation-series row carried the
-ECB run ID. This proves the authoritative PostgreSQL path fails closed and uses
-separate objects, but it is not a successful production promotion.
+ECB run ID. This proved the authoritative PostgreSQL path fails closed and uses
+separate objects. Review then established that the three rows were ECB-declared
+`U` records with identical prior-full, current-full, and update canonical
+hashes. The narrow `source_noop` rule was implemented, and a normal repoll
+accepted the release without `--allow-gap`: coverage is complete, Gold has
+31,340 current securities, all three no-ops are audited, and none created a new
+history interval. An immediate repoll was idempotent.
 
-The next operator must review that reconciliation incident and repeat a
-successful manual poll on the production host. The timer must remain disabled
-until that gate passes. Do not commit the local alert YAML, SMTP key,
-sender/recipient addresses, or PostgreSQL DSN.
+The next operator must install the protected configuration and repeat the
+successful manual poll on the production Linux host. The timer must remain
+disabled until that host-level gate passes. Do not commit the local alert YAML,
+SMTP key, sender/recipient addresses, or PostgreSQL DSN.
 
 ### Authorize and prove live delivery — complete
 
@@ -408,6 +412,76 @@ Normal recovery is to fix the underlying trust-store, transport, parser, or
 source-data issue and repeat the same `poll` or `ingest-release` command. A
 quarantined release does not advance Silver/Gold. Never hand-edit intervals or
 mark a signature as verified.
+
+The ECB can declare a `U` row even when no published field changed. The normal
+poll accepts that row without an override only when the key exists in both
+adjacent full snapshots and all three canonical hashes (prior full, current
+full, and update) are identical. The release records
+`reconciliation_status=matched_with_source_noops`; the change audit records
+`change_origin=source_noop` with a null computed change type, and no new history
+interval is created. Any other extra update row remains a reconciliation
+failure. Poll and ingest JSON, plus ECB alert details, expose the number of
+tolerated rows as `source_noop_count`.
+
+For a release with `matched_with_source_noops`, open
+`psql "$FRED_POSTGRES_SERVICE_DSN"` and paste this copy-ready check. Replace the
+placeholder with the accepted release ID:
+
+```sql
+\set release_id 'REPLACE_WITH_RELEASE_ID'
+
+WITH change_counts AS (
+    SELECT
+        COUNT(*) AS audit_rows,
+        COUNT(*) FILTER (
+            WHERE computed_change_type IS NOT NULL
+        ) AS computed_change_rows,
+        COUNT(*) FILTER (
+            WHERE change_origin = 'source_noop'
+        ) AS source_noop_rows
+    FROM silver.ecb_eligible_asset_change
+    WHERE release_id = :'release_id'
+)
+SELECT
+    r.update_count,
+    r.new_count + r.updated_count + r.deleted_count AS computed_release_changes,
+    c.audit_rows,
+    c.computed_change_rows,
+    c.source_noop_rows,
+    r.reconciliation_status,
+    r.coverage_status
+FROM silver.ecb_eligible_asset_release AS r
+CROSS JOIN change_counts AS c
+WHERE r.release_id = :'release_id';
+
+SELECT
+    c.asset_key,
+    c.declared_change_type,
+    c.computed_change_type,
+    c.change_origin,
+    c.prior_row_hash = c.new_row_hash AS hashes_equal,
+    COUNT(*) FILTER (
+        WHERE v.valid_from_release_id = :'release_id'
+    ) AS versions_created_by_release
+FROM silver.ecb_eligible_asset_change AS c
+LEFT JOIN silver.ecb_eligible_asset_version AS v
+    ON v.asset_key = c.asset_key
+WHERE c.release_id = :'release_id'
+  AND c.change_origin = 'source_noop'
+GROUP BY
+    c.asset_key,
+    c.declared_change_type,
+    c.computed_change_type,
+    c.change_origin,
+    c.prior_row_hash,
+    c.new_row_hash
+ORDER BY c.asset_key;
+```
+
+The first result must satisfy `update_count = audit_rows` and
+`computed_release_changes = computed_change_rows`; their difference is
+`source_noop_rows`. Every row in the second result must have declared `U`, a
+null computed type, equal hashes, and zero versions created by the release.
 
 `--allow-gap` is an explicit operator override for a verified full snapshot
 whose update attachment cannot reconcile. It publishes the authoritative full

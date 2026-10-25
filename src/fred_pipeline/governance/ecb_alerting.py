@@ -90,6 +90,9 @@ def assess_ecb_assets(
         "action": action,
         "releases_processed": len(results),
         "current_eligible_count": current_count,
+        "source_noop_count": sum(
+            int(row.get("source_noop_count") or 0) for row in results
+        ),
     }
 
     if error:

@@ -16,9 +16,11 @@ from fred_pipeline.ecb_eligible_assets import (
     ECBReconciliationError,
     ECBReleaseValidationError,
     SignatureResult,
+    diff_assets,
     parse_assets_xml,
     parse_release_message,
     parse_rss,
+    reconcile_update,
     verify_attachment_signature,
 )
 from fred_pipeline.local_store import LocalWarehouse
@@ -264,6 +266,7 @@ def test_two_releases_build_point_in_time_history_and_are_idempotent(tmp_path):
             "new_count": 2,
             "updated_count": 0,
             "deleted_count": 0,
+            "source_noop_count": 0,
             "coverage_status": "starts_here",
             "reconciliation_status": "initial_snapshot",
         }
@@ -357,6 +360,133 @@ def test_update_mismatch_quarantines_without_advancing_current_state(tmp_path):
         assert "reconciliation failed" in status["quarantined"][0]["error_detail"]
     finally:
         warehouse.close()
+
+
+def test_declared_unchanged_update_is_audited_without_creating_a_version(tmp_path):
+    client, release_1_url, release_2_url = _fixture_client()
+    unchanged = _asset("DE0000000004", issuer="Unchanged issuer")
+    client.artifacts["https://example/240101/full.xml.gz"] = _full(
+        _asset("DE0000000001"),
+        _asset("DE0000000002", haircut="2.0"),
+        unchanged,
+    )
+    client.artifacts["https://example/240101/full.csv.gz"] = _csv_payload(
+        client.artifacts["https://example/240101/full.xml.gz"]
+    )
+    client.artifacts["https://example/240102/full.xml.gz"] = _full(
+        _asset("DE0000000001", haircut="1.5"),
+        _asset("DE0000000003", issuer="New issuer"),
+        unchanged,
+    )
+    client.artifacts["https://example/240102/full.csv.gz"] = _csv_payload(
+        client.artifacts["https://example/240102/full.xml.gz"]
+    )
+    client.artifacts["https://example/240102/update.xml.gz"] = _update(
+        _asset("DE0000000001", haircut="1.5", change="U"),
+        _asset("DE0000000002", haircut="2.0", change="D"),
+        _asset("DE0000000003", issuer="New issuer", change="N"),
+        _asset("DE0000000004", issuer="Unchanged issuer", change="U"),
+    )
+    client.artifacts["https://example/240102/update.csv.gz"] = _csv_payload(
+        client.artifacts["https://example/240102/update.xml.gz"], update=True
+    )
+    warehouse = _warehouse(tmp_path)
+    pipeline = ECBEligibleAssetsPipeline(
+        warehouse, client=client, signature_verifier=_verified
+    )
+    try:
+        pipeline.ingest_release(release_1_url)
+        result = pipeline.ingest_release(release_2_url)
+
+        assert result.reconciliation_status == "matched_with_source_noops"
+        assert result.source_noop_count == 1
+        assert result.to_dict()["source_noop_count"] == 1
+        noop_versions = warehouse.query(
+            "SELECT * FROM silver_ecb_eligible_asset_version "
+            "WHERE asset_key = ? ORDER BY valid_from_utc",
+            ("ISIN:DE0000000004",),
+        )
+        assert len(noop_versions) == 1
+        assert noop_versions[0]["valid_to_utc"] is None
+        noop_change = warehouse.query(
+            "SELECT * FROM silver_ecb_eligible_asset_change "
+            "WHERE release_id = ? AND asset_key = ?",
+            (result.release_id, "ISIN:DE0000000004"),
+        )[0]
+        assert noop_change["declared_change_type"] == "U"
+        assert noop_change["computed_change_type"] is None
+        assert noop_change["change_origin"] == "source_noop"
+        assert noop_change["prior_row_hash"] == noop_change["new_row_hash"]
+    finally:
+        warehouse.close()
+
+
+@pytest.mark.parametrize("declared_change_type", ["N", "D"])
+def test_reconciliation_rejects_extra_non_update_codes(declared_change_type):
+    prior = parse_assets_xml(_full(_asset("DE0000000004"))).rows
+    current = parse_assets_xml(_full(_asset("DE0000000004"))).rows
+    update = parse_assets_xml(
+        _update(_asset("DE0000000004", change=declared_change_type))
+    ).rows
+
+    result = reconcile_update({}, update, prior=prior, current=current)
+
+    assert not result.matched
+    assert result.source_noop_updates == ()
+
+
+def test_reconciliation_rejects_extra_update_with_different_payload():
+    prior = parse_assets_xml(_full(_asset("DE0000000004", haircut="1.0"))).rows
+    current = parse_assets_xml(_full(_asset("DE0000000004", haircut="1.0"))).rows
+    update = parse_assets_xml(
+        _update(_asset("DE0000000004", haircut="9.0", change="U"))
+    ).rows
+
+    result = reconcile_update({}, update, prior=prior, current=current)
+
+    assert not result.matched
+    assert result.source_noop_updates == ()
+
+
+@pytest.mark.parametrize("declared_change_type", ["N", "D"])
+def test_reconciliation_rejects_wrong_change_code(declared_change_type):
+    prior = parse_assets_xml(_full(_asset("DE0000000004", haircut="1.0"))).rows
+    current = parse_assets_xml(_full(_asset("DE0000000004", haircut="2.0"))).rows
+    update = parse_assets_xml(
+        _update(_asset("DE0000000004", haircut="2.0", change=declared_change_type))
+    ).rows
+
+    result = reconcile_update(
+        diff_assets(prior, current), update, prior=prior, current=current
+    )
+
+    assert not result.matched
+    assert "wrong=['ISIN:DE0000000004']" in result.detail
+
+
+def test_reconciliation_rejects_missing_computed_change():
+    prior = parse_assets_xml(_full(_asset("DE0000000004", haircut="1.0"))).rows
+    current = parse_assets_xml(_full(_asset("DE0000000004", haircut="2.0"))).rows
+
+    result = reconcile_update(
+        diff_assets(prior, current), {}, prior=prior, current=current
+    )
+
+    assert not result.matched
+    assert "missing=['ISIN:DE0000000004']" in result.detail
+
+
+@pytest.mark.parametrize("row_hash", [None, ""])
+def test_reconciliation_rejects_source_noop_without_canonical_hashes(row_hash):
+    key = "ISIN:DE0000000004"
+    prior = {key: {"row_hash": row_hash}}
+    current = {key: {"row_hash": row_hash}}
+    update = {key: {"row_hash": row_hash, "declared_change_type": "U"}}
+
+    result = reconcile_update({}, update, prior=prior, current=current)
+
+    assert not result.matched
+    assert result.source_noop_updates == ()
 
 
 def test_xml_csv_mismatch_quarantines_before_publish(tmp_path):

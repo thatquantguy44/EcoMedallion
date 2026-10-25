@@ -70,6 +70,34 @@ def test_fresh_feed_without_a_new_item_is_success():
     assert "no new release" in assessment.reason
 
 
+def test_source_noop_count_is_visible_in_alert_details():
+    assessment = assess_ecb_assets(
+        action="poll",
+        results=[
+            {
+                "status": "accepted",
+                "coverage_status": "complete",
+                "full_count": 31_340,
+                "new_count": 108,
+                "updated_count": 168,
+                "deleted_count": 99,
+                "source_noop_count": 3,
+            }
+        ],
+        status=_status(
+            latest_accepted={
+                **LATEST,
+                "publication_at_utc": "2026-10-23T15:56:07+00:00",
+                "reconciliation_status": "matched_with_source_noops",
+            }
+        ),
+        now=datetime(2026, 10, 23, 17, 0, tzinfo=timezone.utc),
+    )
+
+    assert assessment.verdict == "success"
+    assert assessment.details["source_noop_count"] == 3
+
+
 def test_late_feed_is_partial_and_names_expected_date():
     assessment = assess_ecb_assets(
         action="poll",
