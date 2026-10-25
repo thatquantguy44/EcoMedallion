@@ -420,7 +420,68 @@ full, and update) are identical. The release records
 `reconciliation_status=matched_with_source_noops`; the change audit records
 `change_origin=source_noop` with a null computed change type, and no new history
 interval is created. Any other extra update row remains a reconciliation
-failure.
+failure. Poll and ingest JSON, plus ECB alert details, expose the number of
+tolerated rows as `source_noop_count`.
+
+For a release with `matched_with_source_noops`, open
+`psql "$FRED_POSTGRES_SERVICE_DSN"` and paste this copy-ready check. Replace the
+placeholder with the accepted release ID:
+
+```sql
+\set release_id 'REPLACE_WITH_RELEASE_ID'
+
+WITH change_counts AS (
+    SELECT
+        COUNT(*) AS audit_rows,
+        COUNT(*) FILTER (
+            WHERE computed_change_type IS NOT NULL
+        ) AS computed_change_rows,
+        COUNT(*) FILTER (
+            WHERE change_origin = 'source_noop'
+        ) AS source_noop_rows
+    FROM silver.ecb_eligible_asset_change
+    WHERE release_id = :'release_id'
+)
+SELECT
+    r.update_count,
+    r.new_count + r.updated_count + r.deleted_count AS computed_release_changes,
+    c.audit_rows,
+    c.computed_change_rows,
+    c.source_noop_rows,
+    r.reconciliation_status,
+    r.coverage_status
+FROM silver.ecb_eligible_asset_release AS r
+CROSS JOIN change_counts AS c
+WHERE r.release_id = :'release_id';
+
+SELECT
+    c.asset_key,
+    c.declared_change_type,
+    c.computed_change_type,
+    c.change_origin,
+    c.prior_row_hash = c.new_row_hash AS hashes_equal,
+    COUNT(*) FILTER (
+        WHERE v.valid_from_release_id = :'release_id'
+    ) AS versions_created_by_release
+FROM silver.ecb_eligible_asset_change AS c
+LEFT JOIN silver.ecb_eligible_asset_version AS v
+    ON v.asset_key = c.asset_key
+WHERE c.release_id = :'release_id'
+  AND c.change_origin = 'source_noop'
+GROUP BY
+    c.asset_key,
+    c.declared_change_type,
+    c.computed_change_type,
+    c.change_origin,
+    c.prior_row_hash,
+    c.new_row_hash
+ORDER BY c.asset_key;
+```
+
+The first result must satisfy `update_count = audit_rows` and
+`computed_release_changes = computed_change_rows`; their difference is
+`source_noop_rows`. Every row in the second result must have declared `U`, a
+null computed type, equal hashes, and zero versions created by the release.
 
 `--allow-gap` is an explicit operator override for a verified full snapshot
 whose update attachment cannot reconcile. It publishes the authoritative full

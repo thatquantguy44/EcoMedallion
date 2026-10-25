@@ -224,6 +224,7 @@ class IngestResult:
     new_count: int = 0
     updated_count: int = 0
     deleted_count: int = 0
+    source_noop_count: int = 0
     coverage_status: str = "unknown"
     reconciliation_status: str = "not_run"
 
@@ -236,6 +237,7 @@ class IngestResult:
             "new_count": self.new_count,
             "updated_count": self.updated_count,
             "deleted_count": self.deleted_count,
+            "source_noop_count": self.source_noop_count,
             "coverage_status": self.coverage_status,
             "reconciliation_status": self.reconciliation_status,
         }
@@ -948,6 +950,7 @@ class ECBEligibleAssetRepository:
     ) -> IngestResult:
         if self.accepted(release.release_id):
             return IngestResult(release.release_id, "duplicate")
+        source_noop_updates = tuple(source_noop_updates)
         latest = self.latest_release()
         now = _utc_now()
         prior_defer = bool(getattr(self.warehouse, "_defer_commits", False))
@@ -1097,6 +1100,7 @@ class ECBEligibleAssetRepository:
             new_count=counts["N"],
             updated_count=counts["U"],
             deleted_count=counts["D"],
+            source_noop_count=len(source_noop_updates),
             coverage_status=coverage_status,
             reconciliation_status=reconciliation_status,
         )

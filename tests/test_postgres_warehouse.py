@@ -552,6 +552,113 @@ def test_ecb_point_in_time_history_persists_with_local_postgres_parity(
         postgres.close()
 
 
+def test_ecb_source_noop_is_audited_without_new_postgres_version(postgres_dsn):
+    postgres = PostgresWarehouse(_config(), dsn=postgres_dsn)
+    repo = ECBEligibleAssetRepository(postgres)
+    dictionary = [
+        {
+            "domain": "assetTypes",
+            "code": "AT01",
+            "definition": "Bond",
+            "short_definition": None,
+            "attributes_json": "{}",
+        }
+    ]
+    full = parse_assets_xml(
+        ("<assets>" + _ecb_asset_xml("DE0000000004", "1.0") + "</assets>").encode()
+    ).rows
+    update = parse_assets_xml(
+        (
+            "<assetsUpdates>"
+            + _ecb_asset_xml("DE0000000004", "1.0", change="U")
+            + "</assetsUpdates>"
+        ).encode()
+    ).rows
+    release_1 = _ecb_release("source-noop-one", "2024-01-01")
+    release_2 = _ecb_release("source-noop-two", "2024-01-02")
+    key = "ISIN:DE0000000004"
+    try:
+        repo.record_release(release_1, run_id="source-noop-run-one")
+        repo.publish(
+            release_1,
+            full,
+            {},
+            {},
+            diff_assets({}, full),
+            dictionary,
+            dictionary_hash="dictionary-v1",
+            schema_hash="schema-v1",
+            reconciliation_status="initial_snapshot",
+            coverage_status="starts_here",
+            change_origin="initial_full_snapshot",
+            run_id="source-noop-run-one",
+        )
+        repo.record_release(release_2, run_id="source-noop-run-two")
+        result = repo.publish(
+            release_2,
+            full,
+            repo.current_assets(),
+            update,
+            {},
+            dictionary,
+            dictionary_hash="dictionary-v1",
+            schema_hash="schema-v1",
+            reconciliation_status="matched_with_source_noops",
+            coverage_status="complete",
+            change_origin="source_reconciled",
+            run_id="source-noop-run-two",
+            source_noop_updates=(key,),
+        )
+
+        assert result.source_noop_count == 1
+        assert postgres.query(
+            "SELECT declared_change_type, computed_change_type, change_origin "
+            "FROM silver.ecb_eligible_asset_change "
+            "WHERE release_id = %s AND asset_key = %s",
+            (release_2.release_id, key),
+        ) == [
+            {
+                "declared_change_type": "U",
+                "computed_change_type": None,
+                "change_origin": "source_noop",
+            }
+        ]
+        assert postgres.query(
+            "SELECT COUNT(*) AS n FROM silver.ecb_eligible_asset_version "
+            "WHERE asset_key = %s",
+            (key,),
+        ) == [{"n": 1}]
+        assert postgres.query(
+            "SELECT COUNT(*) AS n FROM gold.ecb_eligible_security_current "
+            "WHERE asset_key = %s",
+            (key,),
+        ) == [{"n": 1}]
+
+        duplicate = repo.publish(
+            release_2,
+            full,
+            repo.current_assets(),
+            update,
+            {},
+            dictionary,
+            dictionary_hash="dictionary-v1",
+            schema_hash="schema-v1",
+            reconciliation_status="matched_with_source_noops",
+            coverage_status="complete",
+            change_origin="source_reconciled",
+            run_id="source-noop-run-two",
+            source_noop_updates=(key,),
+        )
+        assert duplicate.status == "duplicate"
+        assert postgres.query(
+            "SELECT COUNT(*) AS n FROM silver.ecb_eligible_asset_change "
+            "WHERE release_id = %s",
+            (release_2.release_id,),
+        ) == [{"n": 1}]
+    finally:
+        postgres.close()
+
+
 # ---------------------------------------------------------------------------
 # Upsert keys. A database seeded by scripts/copy_sqlite_to_postgres.py has the
 # tables but none of their primary keys, so the first ON CONFLICT upsert failed

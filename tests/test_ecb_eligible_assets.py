@@ -16,6 +16,7 @@ from fred_pipeline.ecb_eligible_assets import (
     ECBReconciliationError,
     ECBReleaseValidationError,
     SignatureResult,
+    diff_assets,
     parse_assets_xml,
     parse_release_message,
     parse_rss,
@@ -265,6 +266,7 @@ def test_two_releases_build_point_in_time_history_and_are_idempotent(tmp_path):
             "new_count": 2,
             "updated_count": 0,
             "deleted_count": 0,
+            "source_noop_count": 0,
             "coverage_status": "starts_here",
             "reconciliation_status": "initial_snapshot",
         }
@@ -397,6 +399,8 @@ def test_declared_unchanged_update_is_audited_without_creating_a_version(tmp_pat
         result = pipeline.ingest_release(release_2_url)
 
         assert result.reconciliation_status == "matched_with_source_noops"
+        assert result.source_noop_count == 1
+        assert result.to_dict()["source_noop_count"] == 1
         noop_versions = warehouse.query(
             "SELECT * FROM silver_ecb_eligible_asset_version "
             "WHERE asset_key = ? ORDER BY valid_from_utc",
@@ -437,6 +441,47 @@ def test_reconciliation_rejects_extra_update_with_different_payload():
     update = parse_assets_xml(
         _update(_asset("DE0000000004", haircut="9.0", change="U"))
     ).rows
+
+    result = reconcile_update({}, update, prior=prior, current=current)
+
+    assert not result.matched
+    assert result.source_noop_updates == ()
+
+
+@pytest.mark.parametrize("declared_change_type", ["N", "D"])
+def test_reconciliation_rejects_wrong_change_code(declared_change_type):
+    prior = parse_assets_xml(_full(_asset("DE0000000004", haircut="1.0"))).rows
+    current = parse_assets_xml(_full(_asset("DE0000000004", haircut="2.0"))).rows
+    update = parse_assets_xml(
+        _update(_asset("DE0000000004", haircut="2.0", change=declared_change_type))
+    ).rows
+
+    result = reconcile_update(
+        diff_assets(prior, current), update, prior=prior, current=current
+    )
+
+    assert not result.matched
+    assert "wrong=['ISIN:DE0000000004']" in result.detail
+
+
+def test_reconciliation_rejects_missing_computed_change():
+    prior = parse_assets_xml(_full(_asset("DE0000000004", haircut="1.0"))).rows
+    current = parse_assets_xml(_full(_asset("DE0000000004", haircut="2.0"))).rows
+
+    result = reconcile_update(
+        diff_assets(prior, current), {}, prior=prior, current=current
+    )
+
+    assert not result.matched
+    assert "missing=['ISIN:DE0000000004']" in result.detail
+
+
+@pytest.mark.parametrize("row_hash", [None, ""])
+def test_reconciliation_rejects_source_noop_without_canonical_hashes(row_hash):
+    key = "ISIN:DE0000000004"
+    prior = {key: {"row_hash": row_hash}}
+    current = {key: {"row_hash": row_hash}}
+    update = {key: {"row_hash": row_hash, "declared_change_type": "U"}}
 
     result = reconcile_update({}, update, prior=prior, current=current)
 
