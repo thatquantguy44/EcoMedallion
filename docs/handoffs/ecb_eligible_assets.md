@@ -59,6 +59,13 @@ production host or its timer has been activated.
 
 ## Pick up here
 
+Dagster orchestration is now proposed in [Spec 012](../../specs/spec012/README.md)
+and its [handoff](dagster_orchestration.md). This is a specification, not an
+activated replacement. The manual production-host PostgreSQL and real-alert
+gates below still apply. If Dagster is selected for initial host scheduling,
+follow its cutover gate instead of first activating systemd; never activate
+both authoritative schedulers.
+
 Alert identity, live delivery, reconciliation recovery, and the local
 PostgreSQL write gate are complete. Continue by installing and proving the same
 configuration on the production Linux host, then activate the timer. Do not
