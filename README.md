@@ -36,7 +36,8 @@ BIS, BEA, Census, SEC (company financials), Tiingo, Stooq, and iShares — see
 > [`docs/handoffs/ecb_eligible_assets.md`](./docs/handoffs/ecb_eligible_assets.md).
 > Proposed Dagster orchestration (specification only) is scoped in
 > [`specs/spec012/README.md`](./specs/spec012/README.md), with the next build
-> steps in [`docs/handoffs/dagster_orchestration.md`](./docs/handoffs/dagster_orchestration.md).
+> task, **T1 — complete optional runtime installation and verification**, in
+> [`docs/handoffs/dagster_orchestration.md`](./docs/handoffs/dagster_orchestration.md#next-task-t1).
 
 ## What it does
 
@@ -171,7 +172,9 @@ source .venv/bin/activate
 
 The Dagster jobs and schedules are not implemented yet. Installing these
 packages does not start ECB polling or activate production schedules. See the
-[Dagster handoff](docs/handoffs/dagster_orchestration.md) for the next build steps.
+[canonical T1 handoff](docs/handoffs/dagster_orchestration.md#next-task-t1) for
+the remaining clean-install, constraints and core-only verification work.
+The commands above are bootstrap instructions, not evidence that T1 has passed.
 
 ### Run fully locally and save to a database file
 

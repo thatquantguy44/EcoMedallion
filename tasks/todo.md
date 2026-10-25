@@ -1,6 +1,9 @@
 # Spec 012 Task Checklist
 
-Status: Draft for review. All implementation tasks are pending.
+Status: Draft for review. All implementation tasks are pending; T1 published
+package metadata research is complete, but runtime verification is not.
+
+**Next task: complete T1**, following the [canonical handoff](../docs/handoffs/dagster_orchestration.md#next-task-t1).
 
 Requirements: [spec](../specs/spec012/README.md). Sequence: [plan](plan.md).
 Each task includes code/docs and focused tests for its behavior; preserve the
@@ -9,13 +12,20 @@ repository's existing suites. Listed new files are proposals, not existing code.
 ## Phase 1: Execution foundation
 
 - [ ] **T1 — Resolve the optional runtime** (S/M; no dependency)
+  - Established: candidate pins are `dagster==1.13.26`,
+    `dagster-webserver==1.13.26`, `dagster-postgres==0.29.26`; PyPI declares
+    matching dependencies and Python 3.12 support. No clean install recorded.
   - Acceptance: Python 3.12 resolves a compatible exact Dagster/webserver/Postgres
     set; core installation still works without Dagster; resolved versions and
     commands are recorded (AC-01).
   - Verify: clean core and orchestration virtual environments; `pip check`;
     CLI help in both environments; dependency import smoke.
   - Files: `pyproject.toml`, `requirements-dagster.lock.txt`, planned
-    `docs/deployment/dagster_runbook.md`, optional-dependency test.
+    `docs/deployment/dagster_runbook.md`,
+    `tests/test_dagster_optional_dependencies.py`, README install section.
+  - Handoff: record actual two-environment results; keep T1 unchecked until
+    they pass, then update all pickup pointers to T2. Definitions import safety
+    is the later T4 portion of AC-01, not a missing module to implement in T1.
 
 - [ ] **T2 — Share the ECB poll service** (M; no dependency)
   - Acceptance: CLI and main-run hook delegate through one service; report has

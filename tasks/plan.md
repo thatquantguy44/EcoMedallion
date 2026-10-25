@@ -1,10 +1,14 @@
 # Implementation Plan: Spec 012 Dagster Orchestration
 
-Status: Draft for review, 2026-10-25. No implementation tasks started.
+Status: Draft for review, 2026-10-25. T1 package metadata research is complete;
+installation, locking and integration verification remain pending.
 
 This is the active implementation plan for [Spec 012](../specs/spec012/README.md).
 Tasks are tracked in [todo.md](todo.md); acceptance IDs refer to the spec.
 This plan does not replace the remaining Spec 011 production-host proof.
+
+**Next task: complete T1.** Use the [canonical pickup instructions](../docs/handoffs/dagster_orchestration.md#next-task-t1)
+for established candidate versions, remaining work and completion evidence.
 
 ## Decisions
 
@@ -75,7 +79,11 @@ AC-01–AC-12 gate. Completion is evidence-based, not inferred from a green CI r
 
 ## Next action
 
-Review the spec, then implement T1 and T2 as the first small delivery slices.
-No host credentials or running production scheduler are needed for those slices.
+Complete T1 using `dagster==1.13.26`, `dagster-webserver==1.13.26` and
+`dagster-postgres==0.29.26`, whose published metadata matches Python 3.12.
+Clean installation, transitive constraints and core-only verification are still
+required; see the [T1 handoff](../docs/handoffs/dagster_orchestration.md#next-task-t1).
+After evidence passes, mark T1 complete and move the pickup pointer to T2.
+No host credentials or running production scheduler are needed for these slices.
 Production hostname, access, protected paths, monitor route, capacity and
 backup target must be resolved before T9–T11 production execution.
