@@ -6,18 +6,25 @@ implemented. The isolated resumable staging rebuild, exact boundary
 reconciliation, quarantine acknowledgement, and atomic PostgreSQL promotion are
 implemented. Phase 3 Delta staging, catalog-transaction promotion, and query
 contracts are implemented. A PostgreSQL systemd polling schedule is implemented;
-deployment activation, Databricks runtime proof, and live alert delivery remain
-open. Brevo SMTP configuration was validated locally and the live drill reached
-the provider on 2026-10-24, but Brevo rejected the runner with `525 5.7.1
-Unauthorized IP address`; no message was accepted. A deterministic non-network
-drill proves late, quarantine,
-signature-failure, and ingestion-failure alert classification, routing,
-rendering, and file delivery. PostgreSQL is the configurable authoritative
-production destination for forward eligible-assets ingestion.**
+deployment activation and Databricks runtime proof remain open. Live Brevo SMTP
+delivery is proven: on 2026-10-24 the provider accepted all four deterministic
+late-release, quarantine, signature-failure, and ingestion-failure messages,
+the recipient confirmed mailbox delivery, and the setup credential was rotated.
+PostgreSQL is the configurable authoritative production destination for forward
+eligible-assets ingestion.**
 
-Last verified: 2026-10-24 (2026-10-22 MID release message, signed full/update
-XML and CSV artifacts, dictionary, live SQLite/PostgreSQL ingestions, and
-Frankfurt-time scheduler resource validation)
+On 2026-10-25 a production-profile poll against the repository PostgreSQL
+`macro_medallion` database discovered the 2026-10-23 release and failed closed
+on a real full/update mismatch: the update contained three extra ISIN keys.
+All five signed artifacts were retained and re-verified, the release was
+quarantined, a real failure alert was delivered, and Silver/Gold remained on
+the accepted 2026-10-22 release with 31,331 current securities. This proves the
+PostgreSQL authority boundary and quarantine behavior, but it does not complete
+the successful manual production-poll gate.
+
+Last verified: 2026-10-25 (2026-10-22 MID release message, signed full/update
+XML and CSV artifacts, dictionary, live SQLite/PostgreSQL ingestions,
+Frankfurt-time scheduler resource validation, and confirmed live SMTP delivery)
 
 Primary owner: Not recorded, by request
 
@@ -32,22 +39,21 @@ gate), and the existing Bronze/Silver/Gold and run-audit conventions.
 
 ### Operational pickup checkpoint
 
+Live delivery and credential rotation are complete. The first
+production-profile PostgreSQL poll also proved fail-closed quarantine behavior.
 Resume production-readiness work in this order:
 
-1. Use the production Linux host's stable outbound IP, authorize that IP in
-   Brevo, and verify the configured sender identity. Rotate the SMTP key that
-   was shared during setup before installing the production secret.
+1. Review the 2026-10-23 reconciliation incident. The full snapshot and update
+   disagree for three ISINs; do not advance Silver/Gold unless the source is
+   corrected or an explicit, recorded `--allow-gap` decision accepts the signed
+   full snapshot as authoritative.
 2. Install the PostgreSQL warehouse, alerting, and service environment files on
-   that host. Keep credentials in protected environment variables; do not put
-   an SMTP key or PostgreSQL DSN in tracked YAML.
-3. Run `ecb-assets alert-drill --env prod --live-alert-delivery`. Acceptance
-   requires all four messages to be accepted by the provider, a persisted
-   manifest, and recipient confirmation for late-release, quarantine,
-   signature-failure, and ingestion-failure mail.
-4. Run one manual production `ecb-assets poll`, then prove the release ledger,
+   the production Linux host. Keep credentials in protected environment
+   variables; do not put an SMTP key or PostgreSQL DSN in tracked YAML.
+3. Repeat a manual production `ecb-assets poll`, then prove the release ledger,
    current view, history, and audit status were written to the new PostgreSQL
    ECB objects without modifying the observation-series tables.
-5. Only after steps 3-4 pass, enable the systemd timer and observe at least one
+4. Only after the manual poll passes, enable the systemd timer and observe one
    scheduled weekday cycle through PostgreSQL and the real alert route.
 
 The exact commands and evidence checklist are in
@@ -698,13 +704,13 @@ The first Phase 3 slice is implemented:
   with real Spark/Delta integration cases for idempotent staging and row-value
   semantics.
 
-Remaining work is to run those cases on Databricks, measure and choose
-clustering, complete the Brevo IP/sender authorization and live mailbox proof,
-run a manual poll against the authoritative production PostgreSQL destination,
-activate the shipped PostgreSQL RSS timer, and execute the
-replay/backup/restore drill. The production activation order and evidence
-required at each gate are recorded in the operational pickup checkpoint above.
-Benchmark
+Remaining work is to investigate or explicitly acknowledge the quarantined
+2026-10-23 full/update mismatch, run a successful manual poll against the
+authoritative production PostgreSQL destination, activate the shipped
+PostgreSQL RSS timer, execute the replay/backup/restore drill, and run the Delta
+cases on Databricks before choosing a clustering layout. The production
+activation order and evidence required at each gate are recorded in the
+operational pickup checkpoint above. Benchmark
 archive rebuild and common point-in-time queries on all three backends before
 choosing optimization layout.
 

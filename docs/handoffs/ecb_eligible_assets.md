@@ -4,7 +4,7 @@ Review status: **Reviewed**
 
 Primary owner: Not recorded, by request
 
-Last verified: 2026-10-24
+Last verified: 2026-10-25
 
 This is the active pickup point for
 [Spec 011](../../specs/spec011/README.md). PostgreSQL is the authoritative
@@ -29,24 +29,36 @@ The repository provides:
   alerts through shared SMTP/Microsoft Graph transports; and
 - deterministic file and explicit live delivery drills.
 
-The local, gitignored Brevo profile was validated on 2026-10-24. It loaded an
-enabled production-only SMTP transport, a protected environment credential,
-and both partial/failure recipient routes. The live drill reached Brevo but
-failed before sending its first message:
-
-```text
-525 5.7.1 Unauthorized IP address
-```
-
-No provider accepted a test message, no live manifest was produced, and inbox
-delivery is not yet proven. The production timer is not active from this macOS
+Live alert delivery is complete. On 2026-10-24 Brevo accepted all four
+deterministic scenarios, the drill exited zero with a passing manifest, and the
+recipient confirmed mailbox receipt. The SMTP key exposed during initial setup
+was subsequently rotated. The production timer is not active from this macOS
 workspace, which has no systemd service manager or production PostgreSQL DSN.
+
+On 2026-10-25 the dedicated production warehouse profile was exercised against
+the repository's healthy PostgreSQL `macro_medallion` service. The poll found
+the signed 2026-10-23 release but quarantined it because the update declared
+three ISIN changes not present in the computed full-snapshot diff. The behavior
+was correct and fail-closed:
+
+- all five artifacts were stored and their ECB signatures re-verified;
+- the real failure alert was delivered;
+- all nine dedicated Bronze/Silver/Gold ECB relations were present;
+- the release stayed in Bronze as `quarantined`;
+- Silver/Gold stayed on 2026-10-22 with 31,331 current securities; and
+- the ECB run ID appeared in zero `silver.fred_observation` rows.
+
+This is a production-path and isolation proof on local PostgreSQL, not evidence
+that an external production host or its timer has been activated. The successful
+manual poll gate remains open because no new release was promoted.
 
 ## Pick up here
 
-Complete these gates in order. Do not activate the timer early.
+Alert identity and live delivery gates are complete. The PostgreSQL path was
+proven to fail closed; continue at the reconciliation incident below, repeat a
+successful manual poll, then activate the timer. Do not activate it early.
 
-### 1. Establish the production alert identity
+### 1. Establish the production alert identity — complete
 
 - Use the production Linux host and determine its stable outbound IP.
 - Authorize that IP in Brevo and verify the configured sender identity.
@@ -55,7 +67,7 @@ Complete these gates in order. Do not activate the timer early.
 - Install the tracked Brevo example as `/etc/fred-pipeline/alerting.yml`, fill
   in real sender/routes there, and keep the credential itself out of YAML.
 
-### 2. Prove real delivery
+### 2. Prove real delivery — complete
 
 With the production environment loaded:
 
@@ -65,18 +77,36 @@ PYTHONPATH=src python -m fred_pipeline ecb-assets alert-drill \
   --output /var/lib/fred-pipeline/ecb-alert-drill
 ```
 
-The gate passes only when:
+The completed gate required:
 
 - the command exits zero;
 - `manifest.json` records four accepted scenarios;
 - the provider acceptance or message IDs are retained when available; and
 - the recipient confirms all four synthetic messages arrived.
 
-If Brevo again returns `525`, fix its authorized-IP configuration. If it
-rejects the sender, complete sender/domain verification. Do not replace the
-live drill with the file drill; the latter is already proven.
+The 2026-10-24 run satisfied all four conditions. If a future run returns
+`525`, review Brevo's authorized-IP configuration; if it rejects the sender,
+review sender/domain verification. Do not replace the live drill with the file
+drill.
 
-### 3. Prove the authoritative PostgreSQL write
+### 3. Resolve the reconciliation incident — pick up here
+
+Release `2026-10-23T15:56:12Z` is quarantined because its update has three
+extra keys relative to the authoritative full-snapshot diff:
+
+```text
+ISIN:EU000A4E1NP4
+ISIN:EU000A4E2KT0
+ISIN:XS3420368998
+```
+
+Compare the signed update rows with the prior accepted and new full snapshots.
+If the ECB republishes corrected data, repeat the normal poll. If review
+concludes that the signed full snapshot should be accepted despite the update
+mismatch, record that decision and use the existing explicit `--allow-gap`
+operator path. Do not modify intervals or release status by hand.
+
+### 4. Complete the authoritative PostgreSQL write proof
 
 Install `resources/ecb-assets-warehouse.yml.example` and
 `resources/ecb-assets.env.example` as described in the
@@ -89,13 +119,13 @@ PYTHONPATH=src python -m fred_pipeline ecb-assets status --env prod
 ```
 
 Record the run ID and verify that the poll is successful or an idempotent
-no-op, the latest accepted release/current count are sensible, the audit row is
-terminal, and the writes are confined to the dedicated new ECB tables/views.
+no-op, the latest accepted release/current count are sensible, the release row
+is terminal, and the writes are confined to the dedicated new ECB tables/views.
 At minimum, inspect the release ledger, version/change history, current view,
 and coverage status named in Spec 011. Do not count an automatic warehouse
 fallback as a successful proof.
 
-### 4. Activate and observe the schedule
+### 5. Activate and observe the schedule
 
 Validate the calendar expressions, manually start the service once, and enable
 the timer using the commands in the runbook. Capture:
@@ -109,7 +139,7 @@ Observe at least one weekday scheduled cycle. A no-new-release result is valid
 if the run is successful and idempotent. Exercise or observe a real failure
 route and confirm the production recipient receives it.
 
-### 5. Finish the remaining Phase 3 proof
+### 6. Finish the remaining Phase 3 proof
 
 After PostgreSQL production activation, run the replay/backup/restore drill and
 the Databricks Runtime 18+ catalog-transaction cases. Benchmark common
