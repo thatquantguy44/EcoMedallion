@@ -33,19 +33,27 @@ Review status: **Reviewed**. No individual owner is recorded.
 
 The code, PostgreSQL-authoritative configuration contract, weekday systemd
 resources, deterministic file alert drill, and explicit live alert drill are
-implemented. A local ignored Brevo configuration was validated on 2026-10-24:
-the transport, production-only policy, protected credential reference, and
-partial/failure routes all loaded successfully. The live drill reached
-`smtp-relay.brevo.com:587`, but Brevo returned `525 5.7.1 Unauthorized IP
-address` before accepting the first message. Therefore no live delivery
-manifest or mailbox-receipt proof exists yet, and the timer must remain
-disabled.
+implemented. Live Brevo SMTP delivery was proven on 2026-10-24: all four
+deterministic alert scenarios were accepted, the drill produced a passing
+manifest, and the recipient confirmed mailbox receipt. The setup SMTP key was
+then rotated. The next operator should continue with one manual authoritative
+PostgreSQL poll and database verification.
 
-The next operator should continue at **Authorize and prove live delivery**
-below. Do not commit the local alert YAML, SMTP key, sender/recipient addresses,
-or PostgreSQL DSN.
+A production-profile poll against the local PostgreSQL `macro_medallion`
+service on 2026-10-25 found the 2026-10-23 release, retained and verified all
+five signed artifacts, then quarantined the release because its update contained
+three keys absent from the computed full-snapshot diff. The real failure route
+delivered an alert. Silver/Gold correctly remained at the accepted 2026-10-22
+release and 31,331 current securities; no observation-series row carried the
+ECB run ID. This proves the authoritative PostgreSQL path fails closed and uses
+separate objects, but it is not a successful production promotion.
 
-### Authorize and prove live delivery
+The next operator must review that reconciliation incident and repeat a
+successful manual poll on the production host. The timer must remain disabled
+until that gate passes. Do not commit the local alert YAML, SMTP key,
+sender/recipient addresses, or PostgreSQL DSN.
+
+### Authorize and prove live delivery — complete
 
 1. Run from the production Linux host with a stable outbound IP. Authorize that
    IP in Brevo and verify the configured sender identity.
@@ -58,8 +66,8 @@ or PostgreSQL DSN.
 4. Retain `manifest.json`, provider acceptance/message IDs when available, and
    recipient confirmation that all four clearly marked synthetic messages
    arrived. Provider acceptance alone is not mailbox-delivery proof.
-5. Proceed to one manual PostgreSQL poll, database verification, and timer
-   activation only after the live drill passes.
+5. The 2026-10-24 proof satisfied this gate. Proceed to one manual PostgreSQL
+   poll and database verification before timer activation.
 
 The focused handoff at
 [`docs/handoffs/ecb_eligible_assets.md`](../handoffs/ecb_eligible_assets.md)
