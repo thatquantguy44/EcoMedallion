@@ -36,8 +36,7 @@ resources, deterministic file alert drill, and explicit live alert drill are
 implemented. Live Brevo SMTP delivery was proven on 2026-10-24: all four
 deterministic alert scenarios were accepted, the drill produced a passing
 manifest, and the recipient confirmed mailbox receipt. The setup SMTP key was
-then rotated. The next operator should continue with one manual authoritative
-PostgreSQL poll and database verification.
+then rotated.
 
 A production-profile poll against the local PostgreSQL `macro_medallion`
 service on 2026-10-25 found the 2026-10-23 release, retained and verified all
@@ -45,13 +44,18 @@ five signed artifacts, then quarantined the release because its update contained
 three keys absent from the computed full-snapshot diff. The real failure route
 delivered an alert. Silver/Gold correctly remained at the accepted 2026-10-22
 release and 31,331 current securities; no observation-series row carried the
-ECB run ID. This proves the authoritative PostgreSQL path fails closed and uses
-separate objects, but it is not a successful production promotion.
+ECB run ID. This proved the authoritative PostgreSQL path fails closed and uses
+separate objects. Review then established that the three rows were ECB-declared
+`U` records with identical prior-full, current-full, and update canonical
+hashes. The narrow `source_noop` rule was implemented, and a normal repoll
+accepted the release without `--allow-gap`: coverage is complete, Gold has
+31,340 current securities, all three no-ops are audited, and none created a new
+history interval. An immediate repoll was idempotent.
 
-The next operator must review that reconciliation incident and repeat a
-successful manual poll on the production host. The timer must remain disabled
-until that gate passes. Do not commit the local alert YAML, SMTP key,
-sender/recipient addresses, or PostgreSQL DSN.
+The next operator must install the protected configuration and repeat the
+successful manual poll on the production Linux host. The timer must remain
+disabled until that host-level gate passes. Do not commit the local alert YAML,
+SMTP key, sender/recipient addresses, or PostgreSQL DSN.
 
 ### Authorize and prove live delivery — complete
 
@@ -408,6 +412,15 @@ Normal recovery is to fix the underlying trust-store, transport, parser, or
 source-data issue and repeat the same `poll` or `ingest-release` command. A
 quarantined release does not advance Silver/Gold. Never hand-edit intervals or
 mark a signature as verified.
+
+The ECB can declare a `U` row even when no published field changed. The normal
+poll accepts that row without an override only when the key exists in both
+adjacent full snapshots and all three canonical hashes (prior full, current
+full, and update) are identical. The release records
+`reconciliation_status=matched_with_source_noops`; the change audit records
+`change_origin=source_noop` with a null computed change type, and no new history
+interval is created. Any other extra update row remains a reconciliation
+failure.
 
 `--allow-gap` is an explicit operator override for a verified full snapshot
 whose update attachment cannot reconcile. It publishes the authoritative full

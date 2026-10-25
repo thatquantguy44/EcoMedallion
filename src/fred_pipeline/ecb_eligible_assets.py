@@ -209,6 +209,13 @@ class ParsedAssets:
 
 
 @dataclass(frozen=True)
+class UpdateReconciliation:
+    matched: bool
+    detail: str
+    source_noop_updates: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
 class IngestResult:
     release_id: str
     status: str
@@ -731,20 +738,49 @@ def diff_assets(
 
 
 def reconcile_update(
-    computed: Mapping[str, str], update_rows: Mapping[str, Mapping[str, Any]]
-) -> tuple[bool, str]:
+    computed: Mapping[str, str],
+    update_rows: Mapping[str, Mapping[str, Any]],
+    *,
+    prior: Mapping[str, Mapping[str, Any]] | None = None,
+    current: Mapping[str, Mapping[str, Any]] | None = None,
+) -> UpdateReconciliation:
     declared = {
         key: str(row.get("declared_change_type") or "")
         for key, row in update_rows.items()
     }
     if dict(computed) == declared:
-        return True, "matched"
+        return UpdateReconciliation(True, "matched")
     missing = sorted(set(computed) - set(declared))
     extra = sorted(set(declared) - set(computed))
     wrong = sorted(
         key for key in set(computed) & set(declared) if computed[key] != declared[key]
     )
-    return False, f"missing={missing[:10]} extra={extra[:10]} wrong={wrong[:10]}"
+    prior = prior or {}
+    current = current or {}
+    source_noops = tuple(
+        key
+        for key in extra
+        if declared[key] == "U"
+        and key in prior
+        and key in current
+        and bool(current[key].get("row_hash"))
+        and prior[key].get("row_hash") == current[key].get("row_hash")
+        and update_rows[key].get("row_hash") == current[key].get("row_hash")
+    )
+    unresolved_extra = sorted(set(extra) - set(source_noops))
+    if not missing and not unresolved_extra and not wrong:
+        return UpdateReconciliation(
+            True,
+            f"matched_with_source_noops count={len(source_noops)} "
+            f"keys={list(source_noops[:10])}",
+            source_noops,
+        )
+    return UpdateReconciliation(
+        False,
+        f"missing={missing[:10]} extra={unresolved_extra[:10]} "
+        f"wrong={wrong[:10]} source_noops={list(source_noops[:10])}",
+        source_noops,
+    )
 
 
 def _assert_format_parity(
@@ -908,6 +944,7 @@ class ECBEligibleAssetRepository:
         coverage_status: str,
         change_origin: str,
         run_id: str,
+        source_noop_updates: Iterable[str] = (),
     ) -> IngestResult:
         if self.accepted(release.release_id):
             return IngestResult(release.release_id, "duplicate")
@@ -976,6 +1013,21 @@ class ECBEligibleAssetRepository:
                         "new_row_hash": current.get(asset_key, {}).get("row_hash"),
                         "reconciliation_status": reconciliation_status,
                         "change_origin": change_origin,
+                        "publication_at_utc": release.publication_at_utc,
+                        "run_id": run_id,
+                    }
+                )
+            for asset_key in sorted(source_noop_updates):
+                change_rows.append(
+                    {
+                        "release_id": release.release_id,
+                        "asset_key": asset_key,
+                        "declared_change_type": "U",
+                        "computed_change_type": None,
+                        "prior_row_hash": prior[asset_key].get("row_hash"),
+                        "new_row_hash": current[asset_key].get("row_hash"),
+                        "reconciliation_status": reconciliation_status,
+                        "change_origin": "source_noop",
                         "publication_at_utc": release.publication_at_utc,
                         "run_id": run_id,
                     }
@@ -1203,15 +1255,29 @@ class ECBEligibleAssetsPipeline:
             dictionary_rows = parse_dictionary_xml(dictionary_bytes)
             prior = self.repository.current_assets()
             changes = diff_assets(prior, full.rows)
+            source_noop_updates: tuple[str, ...] = ()
             if prior:
-                matched, detail = reconcile_update(changes, update.rows)
-                if not matched and not allow_gap:
+                reconciliation_result = reconcile_update(
+                    changes, update.rows, prior=prior, current=full.rows
+                )
+                source_noop_updates = reconciliation_result.source_noop_updates
+                if not reconciliation_result.matched and not allow_gap:
                     raise ECBReconciliationError(
-                        f"full/update reconciliation failed: {detail}"
+                        "full/update reconciliation failed: "
+                        f"{reconciliation_result.detail}"
                     )
-                reconciliation = "matched" if matched else "derived_full_diff"
-                coverage = "complete" if matched else "gapped"
-                change_origin = "source_reconciled" if matched else "derived_full_diff"
+                if reconciliation_result.matched:
+                    reconciliation = (
+                        "matched_with_source_noops"
+                        if source_noop_updates
+                        else "matched"
+                    )
+                    coverage = "complete"
+                    change_origin = "source_reconciled"
+                else:
+                    reconciliation = "derived_full_diff"
+                    coverage = "gapped"
+                    change_origin = "derived_full_diff"
             else:
                 reconciliation = "initial_snapshot"
                 coverage = "starts_here"
@@ -1229,6 +1295,7 @@ class ECBEligibleAssetsPipeline:
                 coverage_status=coverage,
                 change_origin=change_origin,
                 run_id=run_id,
+                source_noop_updates=source_noop_updates,
             )
         except Exception as exc:
             self.repository.set_bronze_status(

@@ -618,9 +618,13 @@ attributes and haircuts, raw source fields, canonical row hash, change type,
 dictionary/schema lineage, and ineligible tombstones for deletions.
 
 #### `silver.ecb_eligible_asset_change`
-One changed security per accepted release, retaining both the ECB-declared and
-full-snapshot-computed N/U/D code, before/after hashes, reconciliation status,
-change origin, publication time, and run id.
+One full-snapshot-computed or ECB-declared security change per accepted
+release, retaining the ECB-declared code, nullable full-snapshot-computed
+N/U/D code, before/after hashes, reconciliation status, change origin,
+publication time, and run id. `change_origin=source_noop` with declared `U` and
+a null computed code means the signed update declared a change while prior,
+current, and update canonical hashes were identical; it does not create a new
+SCD2 version.
 
 #### `silver.ecb_eligible_asset_dictionary`
 Versioned ECB code definitions keyed by dictionary hash × domain × code.

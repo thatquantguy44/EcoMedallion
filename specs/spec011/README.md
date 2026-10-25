@@ -18,11 +18,15 @@ On 2026-10-25 a production-profile poll against the repository PostgreSQL
 on a real full/update mismatch: the update contained three extra ISIN keys.
 All five signed artifacts were retained and re-verified, the release was
 quarantined, a real failure alert was delivered, and Silver/Gold remained on
-the accepted 2026-10-22 release with 31,331 current securities. This proves the
-PostgreSQL authority boundary and quarantine behavior, but it does not complete
-the successful manual production-poll gate.
+the accepted 2026-10-22 release with 31,331 current securities. Review proved
+that all three rows were ECB-declared `U` records with identical prior-full,
+current-full, and update canonical hashes. The narrow `source_noop` rule was
+implemented and regression-tested, and a normal repoll accepted the release
+without `--allow-gap`: coverage is complete, Gold has 31,340 current
+securities, the three audit rows have null computed changes, and none created
+a history version. An immediate repoll returned no work.
 
-Last verified: 2026-10-25 (2026-10-22 MID release message, signed full/update
+Last verified: 2026-10-25 (2026-10-23 MID release message, signed full/update
 XML and CSV artifacts, dictionary, live SQLite/PostgreSQL ingestions,
 Frankfurt-time scheduler resource validation, and confirmed live SMTP delivery)
 
@@ -43,18 +47,15 @@ Live delivery and credential rotation are complete. The first
 production-profile PostgreSQL poll also proved fail-closed quarantine behavior.
 Resume production-readiness work in this order:
 
-1. Review the 2026-10-23 reconciliation incident. The full snapshot and update
-   disagree for three ISINs; do not advance Silver/Gold unless the source is
-   corrected or an explicit, recorded `--allow-gap` decision accepts the signed
-   full snapshot as authoritative.
-2. Install the PostgreSQL warehouse, alerting, and service environment files on
+1. Install the PostgreSQL warehouse, alerting, and service environment files on
    the production Linux host. Keep credentials in protected environment
    variables; do not put an SMTP key or PostgreSQL DSN in tracked YAML.
-3. Repeat a manual production `ecb-assets poll`, then prove the release ledger,
+2. Repeat a manual production-host `ecb-assets poll`, then prove the release ledger,
    current view, history, and audit status were written to the new PostgreSQL
    ECB objects without modifying the observation-series tables.
-4. Only after the manual poll passes, enable the systemd timer and observe one
+3. Only after the production-host poll passes, enable the systemd timer and observe one
    scheduled weekday cycle through PostgreSQL and the real alert route.
+4. Complete the replay/backup/restore drill and Databricks Runtime 18+ proof.
 
 The exact commands and evidence checklist are in
 [`docs/handoffs/ecb_eligible_assets.md`](../../docs/handoffs/ecb_eligible_assets.md)
@@ -238,9 +239,14 @@ interval.
 
 The ECB update attachment is an independent reconciliation input. On a normal
 consecutive daily load, its `N`/`D`/`U` keys must match the diff computed from
-the two full snapshots. A mismatch stores all raw evidence but does not publish
-the release to Silver/Gold until it is resolved. For the first snapshot after
-an archive gap, compute the net diff and mark it `derived_full_diff`; do not
+the two full snapshots, with one narrow source-semantic exception: an extra
+declared `U` is a `source_noop` when the key exists in both full snapshots, the
+prior and current canonical hashes are identical, and the update-row hash is
+also identical. These source-declared no-ops are retained in the change audit
+with a null computed change type, but do not close or open an SCD2 interval.
+Any missing computed change, wrong code, extra `N`/`D`, or extra `U` with a
+hash mismatch still quarantines the release. For the first snapshot after an
+archive gap, compute the net diff and mark it `derived_full_diff`; do not
 pretend the changes occurred on one of the missing dates.
 
 ### 3.4 Knowledge time versus effective security dates
@@ -339,10 +345,13 @@ Constraints:
 
 ### 4.5 `silver.ecb_eligible_asset_change`
 
-Grain: one row per `(release_id, asset_key)` changed by that release. Retain
-the ECB-declared change code, computed change code, prior/new row hashes, and
-reconciliation outcome. This is the audit-friendly delta table; it is not the
-authority for membership when the full snapshot disagrees.
+Grain: one row per `(release_id, asset_key)` changed by the full-snapshot diff
+or declared by the ECB update. Retain the ECB-declared change code, nullable
+computed change code, prior/new row hashes, and reconciliation outcome. A row
+with `change_origin=source_noop`, declared `U`, and null computed change type
+records an ECB-declared update whose published canonical state did not change.
+This is the audit-friendly delta table; it is not the authority for membership
+when the full snapshot disagrees.
 
 ### 4.6 Gold consumer objects
 
@@ -630,8 +639,9 @@ tests pass on local Spark/Delta with a temporary Java 17 runtime, including
 idempotent staged partition replacement, boundary key/hash parity, and the
 current/history/as-of/change query contract. Databricks catalog-transaction
 execution and production schedule activation remain open. The safe
-file-delivery alert drill is implemented and repeatable; real-mailbox receipt
-remains explicit open work. The licensing review is complete.
+file-delivery alert drill is repeatable, and real Brevo mailbox delivery for
+all four ECB alert scenarios was proven on 2026-10-24. The licensing review is
+complete.
 
 Live inventory validation found 190 snapshots and one legacy schema in 2010,
 255 snapshots and one modern schema in 2025, and 207 snapshots across two
@@ -704,9 +714,9 @@ The first Phase 3 slice is implemented:
   with real Spark/Delta integration cases for idempotent staging and row-value
   semantics.
 
-Remaining work is to investigate or explicitly acknowledge the quarantined
-2026-10-23 full/update mismatch, run a successful manual poll against the
-authoritative production PostgreSQL destination, activate the shipped
+The 2026-10-23 reconciliation incident is resolved and the release was accepted
+by a normal PostgreSQL repoll with complete coverage. Remaining work is to run
+the same manual proof on the production Linux host, activate the shipped
 PostgreSQL RSS timer, execute the replay/backup/restore drill, and run the Delta
 cases on Databricks before choosing a clustering layout. The production
 activation order and evidence required at each gate are recorded in the
@@ -725,7 +735,7 @@ Gold state live.
 | AC-001 | RSS processing selects only the exact eligible-assets title, then verifies `EligibleAssetsList` and the release title in the linked message |
 | AC-002 | Every accepted release retains immutable full/update/dictionary artifacts, SHA-256 hashes, and successfully verified MID signature evidence |
 | AC-003 | Reprocessing the same RSS item/release changes no row counts, intervals, hashes, or current-state result |
-| AC-004 | Full-snapshot diffs and source update codes reconcile for consecutive releases; mismatch quarantines rather than partially publishing |
+| AC-004 | Full-snapshot diffs and source update codes reconcile for consecutive releases; only hash-proven declared `U` source no-ops are tolerated and audited, while every other mismatch quarantines rather than partially publishing |
 | AC-005 | Fixture cutoffs immediately before and at a release boundary prove no future membership or attribute value leaks backward |
 | AC-006 | Tests cover new, update, delete, re-add, no-op, same-day correction, empty IDs, duplicate IDs, bad types, and interrupted transaction recovery |
 | AC-007 | Historical schemas before and after at least one real field addition load with correct null/schema semantics; unknown forward fields fail closed |
