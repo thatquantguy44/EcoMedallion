@@ -2,7 +2,7 @@
 
 Status: **G1/G2 implemented — explicit operator workflow (G3) is next.**
 Last verified: 2026-10-25 (repository code/config inspection).
-Primary owner: Joshua Lutkemuller
+Review status: manually reviewed
 Target: a source-backed, reviewable geography association for existing economic series, initially supporting United States, Australia, and Canada without changing observation values or inventing country labels.
 
 ## 1. Objective
