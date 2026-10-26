@@ -144,15 +144,15 @@ Add these settings to the standard checked-in configuration surface, example
 configuration, environment/config loader, and operator documentation:
 
 ```yaml
-persistence:
-  write_mode: run_batched          # run_batched | per_series
-  delta_target_file_size_mb: 256  # used by auto partition selection
-  delta_target_partitions: auto   # positive integer | auto
-  batch_max_buffer_bytes: 2147483648
+persistence_write_mode: run_batched                 # run_batched | per_series
+persistence_delta_target_file_size_mb: 256          # auto partition sizing
+persistence_delta_target_partitions: auto           # positive integer | auto
+persistence_batch_max_buffer_bytes: 2147483648
 ```
 
 - `run_batched` is the intended default after the acceptance criteria are
-  proven. It implements this specification.
+  proven. It implements this specification. During implementation it remains
+  opt-in, so existing deployments retain their tested `per_series` behavior.
 - `per_series` is compatibility mode, preserving immediate write ordering and
   live per-series audit updates. It is selectable in deployed configuration or
   its environment override before a run, with no code change or redeploy.

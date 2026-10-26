@@ -115,6 +115,16 @@ default:
   # for a series with `load_type: full`.
   restate_last_n: 90
 
+  # --- Persistence (Spec 014) ---
+  # `per_series` preserves today's streaming writes. `run_batched` collects
+  # completed series in memory and writes Bronze, clean Silver, and DQ results
+  # in run-scoped batches. Enable it only after the target environment's
+  # capacity proof; revert instantly with FRED_PERSISTENCE_WRITE_MODE=per_series.
+  persistence_write_mode: "per_series"  # FRED_PERSISTENCE_WRITE_MODE
+  persistence_delta_target_file_size_mb: 256  # FRED_PERSISTENCE_DELTA_TARGET_FILE_SIZE_MB
+  persistence_delta_target_partitions: "auto"  # FRED_PERSISTENCE_DELTA_TARGET_PARTITIONS
+  persistence_batch_max_buffer_bytes: 2147483648  # FRED_PERSISTENCE_BATCH_MAX_BUFFER_BYTES
+
   # --- Databricks secret scope (used when fred_api_key is empty on Databricks) ---
   secret_scope: "fred"
   secret_key: "api_key"
