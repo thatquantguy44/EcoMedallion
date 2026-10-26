@@ -1,7 +1,10 @@
 import uuid
+from dataclasses import replace
 
 import pytest
 
+from fred_pipeline.catalogs.manifest import load_manifests
+from fred_pipeline.catalogs.series_geography import build_initial_config_candidates
 from fred_pipeline.config import Environment, PipelineConfig
 from fred_pipeline.ecb_eligible_assets import (
     ECBEligibleAssetRepository,
@@ -11,8 +14,10 @@ from fred_pipeline.ecb_eligible_assets import (
 )
 from fred_pipeline.io.local_store import LocalWarehouse
 from fred_pipeline.io.postgres_store import PostgresWarehouse
+from fred_pipeline.io.series_geography_store import PostgresSeriesGeographyRepository
 from fred_pipeline.io.warehouse_factory import WarehouseConfig, WarehouseFactory
 from fred_pipeline.warehouse import Warehouse
+from fred_pipeline.gold_config.global_config import load_global_config
 
 
 def _config():
@@ -145,7 +150,7 @@ def test_postgres_warehouse_builds_core_gold_like_local(tmp_path, postgres_dsn):
             # Includes gold_incremental_checkpoint (spec003 Phase 3 checkpoint
             # infra) and mmkt_rate_snapshot (spec009).
             "gold": 58,
-            "meta": 6,
+            "meta": 7,
             # FRED observations, four spec011 PIT tables, and four archive
             # backfill staging tables.
             "silver": 9,
@@ -233,6 +238,105 @@ def test_postgres_warehouse_is_idempotent(postgres_dsn):
         assert value == 4.1
     finally:
         wh.close()
+
+
+def test_postgres_series_geography_seed_review_and_supersession(postgres_dsn):
+    warehouse = PostgresWarehouse(_config(), dsn=postgres_dsn)
+    manifests = load_manifests("manifests")
+    candidates = build_initial_config_candidates(
+        load_global_config("config/global_series.yml"), manifests
+    )
+    warehouse.sync_meta(manifests)
+    repository = PostgresSeriesGeographyRepository(warehouse, manifests)
+    try:
+        seeded = repository.seed_candidates(candidates)
+        assert len(seeded) == 6
+        assert repository.seed_candidates(candidates) == seeded
+        assert repository.approved_countries() == []
+
+        rejected_candidate = next(
+            row for row in seeded if row["series_id"] == "CANCPIALLMINMEI"
+        )
+        rejected = repository.review_candidate(
+            rejected_candidate["mapping_id"], status="rejected", reviewed_by="test"
+        )
+        assert rejected["status"] == "rejected"
+        assert repository.approved_countries() == []
+
+        usa_candidate = next(
+            row
+            for row in seeded
+            if row["series_id"] == "CPIAUCSL" and row["status"] == "candidate"
+        )
+        first_approval = repository.review_candidate(
+            usa_candidate["mapping_id"], status="approved", reviewed_by="test"
+        )
+        assert first_approval["status"] == "approved"
+        assert repository.approved_countries() == [
+            {
+                "source": "fred",
+                "series_id": "CPIAUCSL",
+                "country_iso3": "USA",
+                "evidence_kind": "global_config",
+                "evidence_ref": "config/global_series.yml",
+                "mapping_version": 1,
+                "reviewed_at_utc": first_approval["reviewed_at_utc"],
+            }
+        ]
+
+        revised_candidate = replace(candidates[0], evidence_hash="revised-evidence")
+        revised = repository.seed_candidates([revised_candidate])[0]
+        second_approval = repository.review_candidate(
+            revised["mapping_id"], status="approved", reviewed_by="test"
+        )
+        assert second_approval["mapping_version"] == 2
+        old = warehouse.query(
+            "SELECT status FROM meta.series_geography WHERE mapping_id = %s",
+            (first_approval["mapping_id"],),
+        )
+        assert old == [{"status": "superseded"}]
+        assert repository.approved_countries()[0]["mapping_version"] == 2
+    finally:
+        warehouse.close()
+
+
+def test_postgres_series_geography_refuses_source_and_country_conflicts(postgres_dsn):
+    warehouse = PostgresWarehouse(_config(), dsn=postgres_dsn)
+    manifests = load_manifests("manifests")
+    candidates = build_initial_config_candidates(
+        load_global_config("config/global_series.yml"), manifests
+    )
+    repository = PostgresSeriesGeographyRepository(warehouse, manifests)
+    try:
+        with pytest.raises(ValueError, match="not registered in meta.fred_series"):
+            repository.seed_candidates([candidates[0]])
+
+        warehouse.sync_meta(manifests)
+        bad_source = replace(candidates[0], source="worldbank")
+        with pytest.raises(ValueError, match="expected source"):
+            repository.seed_candidates([bad_source])
+        assert warehouse.query(
+            "SELECT COUNT(*) AS count FROM meta.series_geography"
+        ) == [{"count": 0}]
+
+        seeded = repository.seed_candidates([candidates[0]])[0]
+        repository.review_candidate(
+            seeded["mapping_id"], status="approved", reviewed_by="test"
+        )
+        conflicting_candidate = replace(
+            candidates[0],
+            country_iso3="CAN",
+            geo_code="CAN",
+            evidence_hash="conflicting-country",
+        )
+        conflicting = repository.seed_candidates([conflicting_candidate])[0]
+        with pytest.raises(ValueError, match="conflicts with approved country"):
+            repository.review_candidate(
+                conflicting["mapping_id"], status="approved", reviewed_by="test"
+            )
+        assert repository.approved_countries()[0]["country_iso3"] == "USA"
+    finally:
+        warehouse.close()
 
 
 def test_postgres_equity_total_return_incremental_matches_local(postgres_dsn, tmp_path):

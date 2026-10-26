@@ -1,6 +1,6 @@
 # Spec 012: Series Geography Metadata and Reviewed Country Map
 
-Status: **PostgreSQL implementation plan drafted — awaiting owner approval before coding.**
+Status: **G1/G2 implemented — explicit operator workflow (G3) is next.**
 Last verified: 2026-10-25 (repository code/config inspection).
 Primary owner: Joshua Lutkemuller
 Target: a source-backed, reviewable geography association for existing economic series, initially supporting United States, Australia, and Canada without changing observation values or inventing country labels.

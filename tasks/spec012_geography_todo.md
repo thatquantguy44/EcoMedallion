@@ -1,13 +1,13 @@
 # Spec 012 PostgreSQL Geography Tasks
 
-Status: **Draft — UUID-text `mapping_id` approved; await implementation-plan approval before coding.**
+Status: **G1/G2 complete — UUID-text `mapping_id` approved; G3 is next.**
 
 The Dagster work remains in `tasks/plan.md` and `tasks/todo.md`. This checklist
 is intentionally separate for [Spec 012](../specs/spec012/README.md).
 
 ## Phase 1 — Contract and PostgreSQL foundation
 
-- [ ] **G1 — Build the deterministic config-candidate contract** (M; no dependency)
+- [x] **G1 — Build the deterministic config-candidate contract** (M; no dependency)
   - Acceptance: the USA/CAN/AUS inflation and policy entries resolve once to
     the six confirmed manifest sources; all emitted rows are candidates; missing,
     duplicate, mismatched, or unselected entries fail closed.
@@ -16,8 +16,11 @@ is intentionally separate for [Spec 012](../specs/spec012/README.md).
     refusal paths without PostgreSQL or network access.
   - Likely files: `src/fred_pipeline/catalogs/series_geography.py`, a focused
     config helper, `tests/test_series_geography.py`.
+  - Completed 2026-10-26: seven focused tests prove the six selected rows,
+    deterministic evidence hashes, and refusal behavior. No PostgreSQL path was
+    changed.
 
-- [ ] **G2 — Add PostgreSQL-only geography storage and approved-country view** (M; G1)
+- [x] **G2 — Add PostgreSQL-only geography storage and approved-country view** (M; G1)
   - Acceptance: additive bootstrap creates `meta.series_geography` and
     `meta.v_approved_series_country`; source-aware validation occurs before
     mutation; one approved country per `(source, series_id)` is enforced;
@@ -27,6 +30,10 @@ is intentionally separate for [Spec 012](../specs/spec012/README.md).
     semantics.
   - Likely files: `src/fred_pipeline/io/postgres_store.py`,
     `src/fred_pipeline/io/series_geography_store.py`, focused tests.
+  - Completed 2026-10-26: disposable-PostgreSQL tests prove additive
+    bootstrap, idempotent seed, parent/source refusal, candidate/rejection
+    exclusion from the approved-only view, same-country supersession, and
+    different-country conflict rollback.
 
 ### Checkpoint A
 

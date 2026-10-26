@@ -1,6 +1,6 @@
 # Spec 012 PostgreSQL Implementation Plan
 
-Status: **Row-identity decision approved 2026-10-26 — implementation plan awaits approval before coding.**
+Status: **G1/G2 implemented 2026-10-26 — explicit operator workflow (G3) is next.**
 
 This plan delivers the first release of the reviewed series-geography contract
 in PostgreSQL only. It does not add a SQLite or Delta implementation.
@@ -72,6 +72,11 @@ duplicate, or source-mismatched series.
 - Likely files: `src/fred_pipeline/catalogs/series_geography.py`, a focused
   config helper, and `tests/test_series_geography.py`.
 
+Completed 2026-10-26. The implementation emits only the six selected
+USA/CAN/AUS rows as deterministic `candidate` records, hashes their exact
+config evidence, and refuses missing, changed, duplicate, or source-mismatched
+records. It does not write to PostgreSQL.
+
 ### G2 — PostgreSQL persistence and approved-country contract
 
 Add additive, restart-safe DDL in `PostgresWarehouse`: the child table,
@@ -88,6 +93,13 @@ view. It must validate the manifest-source evidence before any write.
 - Likely files: `src/fred_pipeline/io/postgres_store.py`,
   `src/fred_pipeline/io/series_geography_store.py`, the domain module, and
   focused unit/integration tests.
+
+Completed 2026-10-26. PostgreSQL bootstrap now adds only
+`meta.series_geography`, its approved-country partial-uniqueness index, and
+`meta.v_approved_series_country`; SQLite and Delta are unchanged. The
+repository validates both the manifest-backed source identity and the parent
+`meta.fred_series` record before a write or review, seeds idempotently, and
+reviews/supersedes transactionally.
 
 ### Checkpoint A
 
