@@ -1,6 +1,6 @@
 # Spec 012: Series Geography Metadata and Reviewed Country Map
 
-Status: **Draft — owner review required before implementation.**
+Status: **Owner-reviewed — ready for implementation planning and task breakdown.**
 Last verified: 2026-10-25 (repository code/config inspection).
 Primary owner: Joshua Lutkemuller
 Target: a source-backed, reviewable geography association for existing economic series, initially supporting United States, Australia, and Canada without changing observation values or inventing country labels.
@@ -10,6 +10,23 @@ Target: a source-backed, reviewable geography association for existing economic 
 Answer "which geography does this series measure?" using existing series identity and explicit evidence. FRED geography tags may suggest an answer, but are not themselves an approved country assignment. The same contract must work for non-FRED series such as World Bank and BIS. A consumer must be able to distinguish an approved country map from an ambiguous, regional, global, missing, or unreviewed candidate.
 
 This is a metadata feature, not a second series catalog. The existing series catalog remains the parent series inventory. The proposed mapping attaches geography to a series; it does not add a country column to every observation, rewrite the observation store, or infer a country from a series ID string.
+
+### Owner decision recorded
+
+On 2026-10-25, the owner approved a child series-geography association rather
+than a universal `country_iso3` column on the existing series catalog. The
+association retains `country_iso3` when `geo_type=country` and leaves it null
+for non-country or ambiguous geography scopes.
+
+The owner also approved manual first-release review for all mappings, including
+the six entries seeded from `config/global_series.yml`. They are candidates
+until an operator approves the exact evidence record; configuration evidence
+does not auto-approve a country map.
+
+The owner further approved SQLite, PostgreSQL and Delta parity as a first-release
+completion requirement. An unavailable or skipped backend remains unverified;
+the approved-country contract is not complete until all three persistence paths
+meet the same candidate, review and approved-map behavior.
 
 ### Initial user stories
 
@@ -126,10 +143,9 @@ Boundaries: always preserve raw evidence and run tests before promotion; ask the
 | AC-008 | Data dictionary and operator runbook describe refresh, review, provenance, drift, limitations and the exact query contract. |
 | AC-009 | Focused tests, repository suite and lint pass; a disposable-database smoke demonstrates US/AU/CA lookup and one ambiguous/refusal case. |
 
-## 9. Open decisions for owner review
+## 9. Approved decisions and next step
 
-1. Confirm series-geography association as a child association rather than adding a single `country_iso3` column to the existing series catalog. Recommended: child association, because geographic scope can be non-country or ambiguous.
-2. Confirm first-release approval is manual even for the six curated `global_series.yml` entries. Recommended: yes; seed candidates with strong config evidence, then approve in one recorded review.
-3. Confirm the first release must persist across all three backends before the approved-country contract is considered done. Recommended: yes, consistent with EcoMedallion's portability contract.
-
-No implementation, production migration, or consumer query authorization is implied by accepting this draft spec. After owner review, produce a separate implementation plan and task breakdown before coding.
+The owner has approved the child-association data model, manual first-release
+review, and SQLite/PostgreSQL/Delta parity requirement. The next step is a
+separate implementation plan and task breakdown before coding. No implementation,
+production migration, or consumer query authorization is implied by this review.
