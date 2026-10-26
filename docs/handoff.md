@@ -23,6 +23,14 @@ Last verified: 2026-10-26.
 - Spark write preparation now range-repartitions and sorts batched raw,
   cleaned, and DQ-result data by series-oriented keys. It never uses
   `partitionBy(series_id)`.
+- PostgreSQL runtime proof (2026-10-26): run
+  `4aac45fad0a34b8c8bfc987cd22a43b1` used `run_batched`, default due-date
+  gating, `--no-gold`, and `--no-ecb-assets`. It completed its data flush in
+  605.0 seconds: 250 succeeded, 35 failed, and 2,611 were skipped as not due;
+  it persisted 259 Bronze rows and 1,933 DQ rows. The failures were isolated
+  upstream responses/quotas and DQ rejects, not a batch or PostgreSQL writer
+  failure. This is a scheduled-workload smoke test, not a `--full` backfill or
+  a Gold benchmark.
 
 ## Next task
 
