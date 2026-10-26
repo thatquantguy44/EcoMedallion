@@ -9,12 +9,18 @@ and document links; Dagster runtime and production gates remain unverified).
 
 Branch: `spec012-dagster-orchestration`, created from `origin/main` at `5077ef8`.
 
+Continue on this same branch even though Dagster is now **Spec 013**.
+Main's `72f8499` (PR #91) introduced the geography document at
+[`specs/spec012/README.md`](../../specs/spec012/README.md). Dagster moved to
+[`specs/spec013/README.md`](../../specs/spec013/README.md) to preserve both specs;
+the branch name is unchanged and T1 remains the next task.
+
 Baseline documentation commit: `72703d5` — specification, plan, checklist,
 handoffs and README installation commands. Inspect current Git status/log on
 pickup; this hash is a checkpoint, not a claim about the latest branch head.
 
-This is the canonical pickup document for Spec 012. Read the next-task section
-below, then [Spec 012](../../specs/spec012/README.md),
+This is the canonical pickup document for Spec 013. Read the next-task section
+below, then [Spec 013](../../specs/spec013/README.md),
 [the implementation plan](../../tasks/plan.md) and
 [the task checklist](../../tasks/todo.md).
 

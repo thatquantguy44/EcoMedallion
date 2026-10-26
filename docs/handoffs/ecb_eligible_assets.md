@@ -59,9 +59,9 @@ production host or its timer has been activated.
 
 ## Pick up here
 
-For Spec 012 work, the next task is **complete T1 — optional Dagster runtime
+For Spec 013 work, the next task is **complete T1 — optional Dagster runtime
 installation and verification**. Start at its [canonical handoff](dagster_orchestration.md#next-task-t1)
-and [specification](../../specs/spec012/README.md). This is a specification, not an
+and [specification](../../specs/spec013/README.md). This is a specification, not an
 activated replacement. The manual production-host PostgreSQL and real-alert
 gates below still apply. If Dagster is selected for initial host scheduling,
 follow its cutover gate instead of first activating systemd; never activate

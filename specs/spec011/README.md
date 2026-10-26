@@ -43,7 +43,7 @@ gate), and the existing Bronze/Silver/Gold and run-audit conventions.
 
 ### Operational pickup checkpoint
 
-For the proposed Dagster integration, continue in [Spec 012](../spec012/README.md):
+For the proposed Dagster integration, continue in [Spec 013](../spec013/README.md):
 its next task is **T1 — complete optional runtime installation and verification**,
 with exact pickup instructions in the [Dagster handoff](../../docs/handoffs/dagster_orchestration.md#next-task-t1).
 That local implementation task does not require the production-host work below

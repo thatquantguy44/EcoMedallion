@@ -1,4 +1,4 @@
-# Implementation Plan: Spec 012 Dagster Orchestration
+# Implementation Plan: Spec 013 Dagster Orchestration
 
 Status: Draft for review, 2026-10-25. T1 package metadata research is complete;
 installation, locking and integration verification remain pending.
@@ -6,7 +6,9 @@ installation, locking and integration verification remain pending.
 **Continuation branch: `spec012-dagster-orchestration`** (existing branch;
 tracking `origin/spec012-dagster-orchestration`). Continue implementation here.
 
-This is the active implementation plan for [Spec 012](../specs/spec012/README.md).
+This is the active implementation plan for [Spec 013](../specs/spec013/README.md).
+Dagster was renumbered after main added the geography Spec 012; continue on
+the existing `spec012-dagster-orchestration` branch.
 Tasks are tracked in [todo.md](todo.md); acceptance IDs refer to the spec.
 This plan does not replace the remaining Spec 011 production-host proof.
 

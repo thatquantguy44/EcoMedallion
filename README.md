@@ -35,10 +35,12 @@ BIS, BEA, Census, SEC (company financials), Tiingo, Stooq, and iShares — see
 > The active ECB eligible-assets production pickup point is in
 > [`docs/handoffs/ecb_eligible_assets.md`](./docs/handoffs/ecb_eligible_assets.md).
 > Proposed Dagster orchestration (specification only) is scoped in
-> [`specs/spec012/README.md`](./specs/spec012/README.md), with the next build
+> [`specs/spec013/README.md`](./specs/spec013/README.md), with the next build
 > task, **T1 — complete optional runtime installation and verification**, in
 > [`docs/handoffs/dagster_orchestration.md`](./docs/handoffs/dagster_orchestration.md#next-task-t1).
 > Continue that work on the existing branch `spec012-dagster-orchestration`.
+> The series geography mapping specification from main is
+> [`Spec 012`](./specs/spec012/README.md); Dagster is Spec 013.
 
 ## What it does
 
@@ -153,7 +155,7 @@ been added yet. Published package metadata identifies
 [`dagster-webserver` 1.13.26](https://pypi.org/project/dagster-webserver/1.13.26/),
 and [`dagster-postgres` 0.29.26](https://pypi.org/project/dagster-postgres/0.29.26/)
 as a compatible set supporting Python 3.12; repository integration verification
-remains part of [Spec 012](specs/spec012/README.md).
+remains part of [Spec 013](specs/spec013/README.md).
 
 Verify the installation without polling ECB or writing to a database:
 

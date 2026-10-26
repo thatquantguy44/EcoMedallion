@@ -1,4 +1,4 @@
-# Spec 012 Task Checklist
+# Spec 013 Task Checklist
 
 Status: Draft for review. All implementation tasks are pending; T1 published
 package metadata research is complete, but runtime verification is not.
@@ -8,7 +8,9 @@ tracking `origin/spec012-dagster-orchestration`.
 
 **Next task: complete T1**, following the [canonical handoff](../docs/handoffs/dagster_orchestration.md#next-task-t1).
 
-Requirements: [spec](../specs/spec012/README.md). Sequence: [plan](plan.md).
+Requirements: [spec](../specs/spec013/README.md). Sequence: [plan](plan.md).
+Dagster is Spec 013; geography is Spec 012. The continuation branch remains
+`spec012-dagster-orchestration`.
 Each task includes code/docs and focused tests for its behavior; preserve the
 repository's existing suites. Listed new files are proposals, not existing code.
 
@@ -138,7 +140,7 @@ host gate is counted as complete.
     new accepted release, real mailbox receipt and rollback drill pass (AC-10/11).
   - Verify: systemd/Dagster schedule state, main-run `--no-ecb-assets`, database
     frontier/count/hash/history/no-observation-write evidence and monitor route.
-  - Files: Dagster runbook, Dagster handoff, ECB handoff, Spec 012 status,
+  - Files: Dagster runbook, Dagster handoff, ECB handoff, Spec 013 status,
     redacted production validation record. Requires actual production host access.
 
 Checkpoint D: all AC-01–AC-12 evidence is linked. Mark first release complete

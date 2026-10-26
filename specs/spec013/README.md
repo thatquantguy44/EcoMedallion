@@ -1,9 +1,12 @@
-# Spec 012: Dagster Orchestration
+# Spec 013: Dagster Orchestration
 
 Status: **Draft for review; specification only. No Dagster dependencies,
 definitions, services, or schedules have been installed or activated.**
 
 Date: 2026-10-25
+
+Renumbered from Spec 012 to preserve main's Series Geography specification.
+The existing branch name `spec012-dagster-orchestration` is intentionally unchanged.
 
 Review status: Pending user review
 
