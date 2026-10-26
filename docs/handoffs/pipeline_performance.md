@@ -1,5 +1,12 @@
 # Pipeline performance handoff: Gold rebuild fixed + incremental; extraction is the next lever
 
+> **Active-work notice (2026-10-26):** This document remains the detailed
+> historical handoff for Spec 003/007 Gold and extraction performance work.
+> The current repository pickup is [Spec 014](../../specs/spec014/README.md)
+> on branch `spec014-run-batched-persistence`; start at
+> [docs/handoff.md](../handoff.md) unless specifically resuming the older
+> Gold-incrementality work below.
+
 **Status: Phases 1–2 done. Phase 3 (Incremental Gold) has 6 tables/groups
 wired and the pattern is proven; the remaining candidate tables are
 deliberately deferred (see "Phase 3: what's left, and why it's parked"

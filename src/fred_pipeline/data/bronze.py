@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 from typing import Any, Optional
 
 from fred_pipeline.config import PipelineConfig
-from fred_pipeline.spark_io import append_rows, get_spark
+from fred_pipeline.spark_io import append_rows, get_spark, target_partitions_for_rows
 from fred_pipeline.transform import payload_summary
 
 
@@ -61,4 +61,21 @@ def write_bronze(
         return 0
     spark = get_spark(spark)
     table = config.table("bronze", "fred_api_response")
-    return append_rows(spark, rows, table)
+    target_partitions = None
+    if getattr(config, "persistence_write_mode", "per_series") == "run_batched":
+        target_partitions = target_partitions_for_rows(
+            rows,
+            target_file_size_mb=getattr(
+                config, "persistence_delta_target_file_size_mb", 256
+            ),
+            target_partitions=getattr(
+                config, "persistence_delta_target_partitions", "auto"
+            ),
+        )
+    return append_rows(
+        spark,
+        rows,
+        table,
+        target_partitions=target_partitions,
+        sort_columns=("source", "series_id", "ingested_at"),
+    )

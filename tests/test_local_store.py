@@ -1,6 +1,6 @@
 import pytest
 
-from fred_pipeline.audit import RunStatus
+from fred_pipeline.audit import EtlRun, RunStatus
 from fred_pipeline.config import Environment, PipelineConfig
 from fred_pipeline.local_store import LocalWarehouse
 from fred_pipeline.manifest import SeriesSpec
@@ -84,6 +84,29 @@ def test_local_run_persists_all_layers(tmp_path, observations_payload, fake_clie
     assert len(wh.query("SELECT * FROM audit_etl_run")) == 1
     assert len(wh.query("SELECT * FROM audit_etl_series_run")) == 1
     assert len(wh.query("SELECT * FROM audit_data_quality_result")) >= 1
+    wh.close()
+
+
+def test_local_final_audit_batches_all_series_rows(tmp_path):
+    wh = LocalWarehouse(_config(), db_path=str(tmp_path / "fred.db"))
+    run = EtlRun(environment="dev")
+    for series_id in ("A", "B"):
+        series_run = run.start_series(series_id, load_type="full")
+        series_run.complete(RunStatus.SUCCEEDED)
+    run.finalize()
+
+    inserts = []
+    original_insert = wh._insert
+
+    def recording_insert(table, rows, *args, **kwargs):
+        inserts.append((table, len(rows)))
+        return original_insert(table, rows, *args, **kwargs)
+
+    wh._insert = recording_insert
+    wh.persist_run(run)
+
+    assert inserts == [("audit_etl_run", 1), ("audit_etl_series_run", 2)]
+    assert len(wh.query("SELECT * FROM audit_etl_series_run")) == 2
     wh.close()
 
 
