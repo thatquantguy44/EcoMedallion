@@ -31,16 +31,23 @@ Last verified: 2026-10-26.
   upstream responses/quotas and DQ rejects, not a batch or PostgreSQL writer
   failure. This is a scheduled-workload smoke test, not a `--full` backfill or
   a Gold benchmark.
+- PostgreSQL Gold proof (2026-10-26): a direct
+  `PostgresWarehouse.build_gold()` rebuild completed in approximately
+  17 minutes against the existing development Silver history. Core output
+  checks found 20,563,593 `gold.fred_latest_observation` rows, 75,447,083
+  feature-daily rows, 20,501,275 revision-stat rows, 290 series-dimension
+  rows, and 121,252 date-dimension rows. The CLI command `gold --env dev`
+  is **not** currently equivalent: it unconditionally tries Spark and fails
+  without Java instead of resolving the configured PostgreSQL warehouse.
 
 ## Next task
 
-Run the Spark/Delta integration job in an environment where the pinned
-PySpark/Delta dependencies are available, then add an end-to-end dual-mode
-parity fixture that proves identical Bronze, Silver, DQ, and final audit
-records for `per_series` and `run_batched`. Capture real file/commit metrics
-with a measured buffer limit before proposing `run_batched` as an environment
-default. Do not change the shared default from `per_series` until that proof
-is recorded.
+First repair and test the `gold --env dev` CLI path so it resolves the same
+configured PostgreSQL warehouse as `run`, rather than unconditionally creating
+Spark. Then run the Spark/Delta integration job in an environment where the
+pinned dependencies are available, add an end-to-end dual-mode parity fixture,
+and capture real file/commit metrics with a measured buffer limit. Do not
+change the shared default from `per_series` until that proof is recorded.
 
 The authoritative acceptance criteria, failure-recovery contract, and
 configuration details are in [Spec 014](../specs/spec014/README.md). The
