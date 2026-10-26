@@ -3,6 +3,7 @@ from dataclasses import replace
 
 import pytest
 
+from fred_pipeline.audit import EtlRun, RunStatus
 from fred_pipeline.catalogs.manifest import load_manifests
 from fred_pipeline.catalogs.series_geography import build_initial_config_candidates
 from fred_pipeline.config import Environment, PipelineConfig
@@ -16,12 +17,21 @@ from fred_pipeline.io.local_store import LocalWarehouse
 from fred_pipeline.io.postgres_store import PostgresWarehouse
 from fred_pipeline.io.series_geography_store import PostgresSeriesGeographyRepository
 from fred_pipeline.io.warehouse_factory import WarehouseConfig, WarehouseFactory
+from fred_pipeline.fred_client import FredAPIError
+from fred_pipeline.manifest import SeriesSpec, ValidationProfile
+from fred_pipeline.pipeline import FredPipeline
 from fred_pipeline.warehouse import Warehouse
 from fred_pipeline.gold_config.global_config import load_global_config
 
 
 def _config():
     return PipelineConfig(environment=Environment.DEV, fred_api_key="k")
+
+
+def _spec(series_id: str, **kwargs) -> SeriesSpec:
+    kwargs.setdefault("title", series_id)
+    kwargs.setdefault("frequency", "d")
+    return SeriesSpec(series_id=series_id, **kwargs)
 
 
 def _silver_row(
@@ -238,6 +248,154 @@ def test_postgres_warehouse_is_idempotent(postgres_dsn):
         assert value == 4.1
     finally:
         wh.close()
+
+
+def _spec014_snapshot(warehouse: PostgresWarehouse, run_id: str) -> dict[str, list]:
+    """Comparable durable output for a single Spec014 fixture run."""
+    return {
+        "bronze": warehouse.query(
+            """
+            SELECT source, series_id, endpoint, request_params, response_payload,
+                   observation_count, payload_bytes
+            FROM bronze_fred_api_response
+            WHERE run_id = ?
+            ORDER BY source, series_id
+            """,
+            (run_id,),
+        ),
+        "silver": warehouse.query(
+            """
+            SELECT source, series_id, observation_date, realtime_start,
+                   realtime_end, value, raw_value, is_missing, row_hash,
+                   revision_number
+            FROM silver_fred_observation
+            ORDER BY source, series_id, observation_date, realtime_start
+            """,
+        ),
+        "dq": warehouse.query(
+            """
+            SELECT series_id, check_name, passed, severity, message, metric_value
+            FROM audit_data_quality_result
+            WHERE run_id = ?
+            ORDER BY series_id, check_name
+            """,
+            (run_id,),
+        ),
+        "series_audit": warehouse.query(
+            """
+            SELECT series_id, status, load_type, observations_extracted,
+                   rows_written_bronze, rows_merged_silver, dq_passed, error_message
+            FROM audit_etl_series_run
+            WHERE run_id = ?
+            ORDER BY series_id
+            """,
+            (run_id,),
+        ),
+    }
+
+
+def _clear_spec014_tables(warehouse: PostgresWarehouse) -> None:
+    """Reset only the fixture's mutable layers between parity-mode runs."""
+    with warehouse._pg_conn.cursor() as cur:
+        cur.execute(
+            """
+            TRUNCATE TABLE bronze.fred_api_response, silver.fred_observation,
+                           audit.data_quality_result, audit.etl_series_run,
+                           audit.etl_run
+            """
+        )
+    warehouse._pg_conn.commit()
+
+
+def test_postgres_run_batched_matches_per_series_for_mixed_outcomes(
+    postgres_dsn, observations_payload, fake_client_cls
+):
+    """PostgreSQL stores the same durable facts in either Spec014 write mode."""
+    all_missing = {
+        "observations": [
+            {
+                "date": "2024-01-01",
+                "value": ".",
+                "realtime_start": "2024-01-02",
+                "realtime_end": "9999-12-31",
+            }
+        ]
+    }
+    specs = [
+        _spec("GOOD"),
+        _spec("DQ_FAILED", validation_profile=ValidationProfile.STRICT),
+        _spec("EXTRACT_FAILED"),
+    ]
+    payloads = {"GOOD": observations_payload, "DQ_FAILED": all_missing}
+    errors = {"EXTRACT_FAILED": FredAPIError("upstream unavailable", 503)}
+    warehouse = PostgresWarehouse(_config(), dsn=postgres_dsn)
+    try:
+        per_series = FredPipeline(
+            PipelineConfig(
+                environment=Environment.DEV,
+                fred_api_key="k",
+                persistence_write_mode="per_series",
+            ),
+            client=fake_client_cls(payloads, errors=errors),
+            warehouse=warehouse,
+        ).run(specs, build_gold_layer=False, skip_not_due=False)
+        per_series_snapshot = _spec014_snapshot(warehouse, per_series.run_id)
+
+        _clear_spec014_tables(warehouse)
+
+        run_batched = FredPipeline(
+            PipelineConfig(
+                environment=Environment.DEV,
+                fred_api_key="k",
+                persistence_write_mode="run_batched",
+            ),
+            client=fake_client_cls(payloads, errors=errors),
+            warehouse=warehouse,
+        ).run(specs, build_gold_layer=False, skip_not_due=False)
+        run_batched_snapshot = _spec014_snapshot(warehouse, run_batched.run_id)
+
+        assert per_series.status == run_batched.status == RunStatus.PARTIAL
+        assert per_series_snapshot == run_batched_snapshot
+        assert [row["series_id"] for row in run_batched_snapshot["bronze"]] == [
+            "DQ_FAILED",
+            "GOOD",
+        ]
+        assert {row["series_id"] for row in run_batched_snapshot["silver"]} == {"GOOD"}
+        assert {row["series_id"] for row in run_batched_snapshot["dq"]} == {
+            "DQ_FAILED",
+            "GOOD",
+        }
+    finally:
+        warehouse.close()
+
+
+def test_postgres_final_audit_replaces_a_run_series_rows_in_bulk(postgres_dsn):
+    warehouse = PostgresWarehouse(_config(), dsn=postgres_dsn)
+    run = EtlRun(environment="dev")
+    for series_id in ("A", "B", "C"):
+        series_run = run.start_series(series_id, load_type="full")
+        series_run.complete(RunStatus.SUCCEEDED)
+    run.finalize()
+    try:
+        warehouse.persist_run(run)
+        warehouse.persist_run(run)
+
+        rows = warehouse.query(
+            """
+            SELECT series_id, status, load_type
+            FROM audit_etl_series_run
+            WHERE run_id = ?
+            ORDER BY series_id
+            """,
+            (run.run_id,),
+        )
+        assert rows == [
+            {"series_id": "A", "status": "succeeded", "load_type": "full"},
+            {"series_id": "B", "status": "succeeded", "load_type": "full"},
+            {"series_id": "C", "status": "succeeded", "load_type": "full"},
+        ]
+    finally:
+        warehouse.close()
 
 
 def test_postgres_series_geography_seed_review_and_supersession(postgres_dsn):
