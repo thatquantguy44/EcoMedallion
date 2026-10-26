@@ -244,10 +244,13 @@ class PostgresWarehouse:
                     f"ALTER TABLE {_pg_name(schema, table)} "
                     f"ADD COLUMN IF NOT EXISTS {_pg_ident(column)} {_pg_type(coltype)}"
                 )
+            for sql in _POSTGRES_SERIES_GEOGRAPHY_DDL:
+                cur.execute(sql)
             for sql in _POSTGRES_INDEX_SQL:
                 cur.execute(sql)
             self._ensure_upsert_keys(cur)
             cur.execute(_POSTGRES_VIEW_SQL)
+            cur.execute(_POSTGRES_SERIES_GEOGRAPHY_VIEW_SQL)
         self._pg_conn.commit()
 
     def _ensure_upsert_keys(self, cur: Any) -> None:
@@ -881,6 +884,72 @@ def _pg_column_list(columns: Sequence[str]) -> str:
 
 def _pg_ident(value: str) -> str:
     return '"' + value.replace('"', '""') + '"'
+
+
+_POSTGRES_SERIES_GEOGRAPHY_DDL = (
+    """
+    CREATE TABLE IF NOT EXISTS meta.series_geography (
+        mapping_id TEXT PRIMARY KEY,
+        source TEXT NOT NULL CHECK (source <> ''),
+        series_id TEXT NOT NULL CHECK (series_id <> ''),
+        geo_type TEXT NOT NULL CHECK (
+            geo_type IN ('country', 'subnational', 'region', 'supranational', 'global', 'unknown')
+        ),
+        geo_code TEXT NOT NULL CHECK (geo_code <> ''),
+        country_iso3 TEXT,
+        status TEXT NOT NULL CHECK (
+            status IN ('candidate', 'approved', 'rejected', 'superseded')
+        ),
+        evidence_kind TEXT NOT NULL CHECK (
+            evidence_kind IN ('global_config', 'fred_geo_tag', 'manual_review')
+        ),
+        evidence_ref TEXT NOT NULL CHECK (evidence_ref <> ''),
+        evidence_hash TEXT NOT NULL CHECK (evidence_hash <> ''),
+        observed_at_utc TIMESTAMPTZ NOT NULL,
+        reviewed_at_utc TIMESTAMPTZ,
+        reviewed_by TEXT,
+        mapping_version BIGINT NOT NULL CHECK (mapping_version >= 1),
+        created_at_utc TIMESTAMPTZ NOT NULL,
+        superseded_at_utc TIMESTAMPTZ,
+        CHECK (
+            (geo_type = 'country' AND country_iso3 = geo_code
+             AND country_iso3 ~ '^[A-Z]{3}$')
+            OR (geo_type <> 'country' AND country_iso3 IS NULL)
+        ),
+        CHECK (
+            (status = 'candidate' AND reviewed_at_utc IS NULL
+             AND reviewed_by IS NULL AND superseded_at_utc IS NULL)
+            OR (status IN ('approved', 'rejected') AND reviewed_at_utc IS NOT NULL
+                AND reviewed_by IS NOT NULL AND superseded_at_utc IS NULL)
+            OR (status = 'superseded' AND reviewed_at_utc IS NOT NULL
+                AND reviewed_by IS NOT NULL AND superseded_at_utc IS NOT NULL)
+        ),
+        UNIQUE (
+            source, series_id, geo_type, geo_code, evidence_kind, evidence_hash
+        )
+    )
+    """,
+    """
+    CREATE UNIQUE INDEX IF NOT EXISTS ux_series_geography_approved_country
+    ON meta.series_geography (source, series_id)
+    WHERE status = 'approved' AND geo_type = 'country'
+    """,
+)
+
+
+_POSTGRES_SERIES_GEOGRAPHY_VIEW_SQL = """
+CREATE OR REPLACE VIEW meta.v_approved_series_country AS
+SELECT
+    source,
+    series_id,
+    country_iso3,
+    evidence_kind,
+    evidence_ref,
+    mapping_version,
+    reviewed_at_utc
+FROM meta.series_geography
+WHERE status = 'approved' AND geo_type = 'country'
+"""
 
 
 _POSTGRES_INDEX_SQL = (

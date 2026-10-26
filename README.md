@@ -34,6 +34,13 @@ BIS, BEA, Census, SEC (company financials), Tiingo, Stooq, and iShares — see
 > [`docs/handoffs/run_alerting.md`](./docs/handoffs/run_alerting.md).
 > The active ECB eligible-assets production pickup point is in
 > [`docs/handoffs/ecb_eligible_assets.md`](./docs/handoffs/ecb_eligible_assets.md).
+> Proposed Dagster orchestration (specification only) is scoped in
+> [`specs/spec013/README.md`](./specs/spec013/README.md), with the next build
+> task, **T1 — complete optional runtime installation and verification**, in
+> [`docs/handoffs/dagster_orchestration.md`](./docs/handoffs/dagster_orchestration.md#next-task-t1).
+> Continue that work on the existing branch `spec012-dagster-orchestration`.
+> The series geography mapping specification from main is
+> [`Spec 012`](./specs/spec012/README.md); Dagster is Spec 013.
 
 ## What it does
 
@@ -120,6 +127,57 @@ PYTHONPATH=src python -m fred_pipeline run --env dev --dry-run
 ```
 
 Get a free FRED API key at <https://fredaccount.stlouisfed.org/apikeys>.
+
+### Install the optional Dagster development runtime
+
+Run these commands from the repository root (the directory containing
+`pyproject.toml`) using Python 3.12. The repository-local `.venv/` directory
+is already excluded by `.gitignore`. Create the environment once; skip the
+`venv` command if you already have a Python 3.12 environment at `.venv/`.
+
+```bash
+python3.12 -m venv .venv
+
+.venv/bin/python -m pip install --upgrade pip
+
+.venv/bin/python -m pip install \
+  -e '.[postgres,dev]' \
+  'dagster==1.13.26' \
+  'dagster-webserver==1.13.26' \
+  'dagster-postgres==0.29.26'
+```
+
+This installs the repository in editable mode with PostgreSQL and test
+dependencies, plus the matching Dagster packages. Dagster is specified
+explicitly because the planned `dagster` optional dependency group has not
+been added yet. Published package metadata identifies
+[`dagster` 1.13.26](https://pypi.org/project/dagster/1.13.26/),
+[`dagster-webserver` 1.13.26](https://pypi.org/project/dagster-webserver/1.13.26/),
+and [`dagster-postgres` 0.29.26](https://pypi.org/project/dagster-postgres/0.29.26/)
+as a compatible set supporting Python 3.12; repository integration verification
+remains part of [Spec 013](specs/spec013/README.md).
+
+Verify the installation without polling ECB or writing to a database:
+
+```bash
+.venv/bin/python -m pip check
+.venv/bin/python -m fred_pipeline --help
+.venv/bin/dagster --version
+.venv/bin/dagster-webserver --version
+```
+
+For subsequent terminal sessions, activate the environment from the repository
+root before using `python`, `pip`, or `dagster` without their `.venv/bin/` paths:
+
+```bash
+source .venv/bin/activate
+```
+
+The Dagster jobs and schedules are not implemented yet. Installing these
+packages does not start ECB polling or activate production schedules. See the
+[canonical T1 handoff](docs/handoffs/dagster_orchestration.md#next-task-t1) for
+the remaining clean-install, constraints and core-only verification work.
+The commands above are bootstrap instructions, not evidence that T1 has passed.
 
 ### Run fully locally and save to a database file
 

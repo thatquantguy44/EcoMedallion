@@ -43,6 +43,12 @@ gate), and the existing Bronze/Silver/Gold and run-audit conventions.
 
 ### Operational pickup checkpoint
 
+For the proposed Dagster integration, continue in [Spec 013](../spec013/README.md):
+its next task is **T1 — complete optional runtime installation and verification**,
+with exact pickup instructions in the [Dagster handoff](../../docs/handoffs/dagster_orchestration.md#next-task-t1).
+That local implementation task does not require the production-host work below
+and does not activate or replace the existing scheduler.
+
 Live delivery and credential rotation are complete. The first
 production-profile PostgreSQL poll also proved fail-closed quarantine behavior.
 Resume production-readiness work in this order:

@@ -1,6 +1,6 @@
 # Spec 012: Series Geography Metadata and Reviewed Country Map
 
-Status: **Draft — owner review required before implementation.**
+Status: **G1/G2 implemented — explicit operator workflow (G3) is next.**
 Last verified: 2026-10-25 (repository code/config inspection).
 Primary owner: Joshua Lutkemuller
 Target: a source-backed, reviewable geography association for existing economic series, initially supporting United States, Australia, and Canada without changing observation values or inventing country labels.
@@ -10,6 +10,23 @@ Target: a source-backed, reviewable geography association for existing economic 
 Answer "which geography does this series measure?" using existing series identity and explicit evidence. FRED geography tags may suggest an answer, but are not themselves an approved country assignment. The same contract must work for non-FRED series such as World Bank and BIS. A consumer must be able to distinguish an approved country map from an ambiguous, regional, global, missing, or unreviewed candidate.
 
 This is a metadata feature, not a second series catalog. The existing series catalog remains the parent series inventory. The proposed mapping attaches geography to a series; it does not add a country column to every observation, rewrite the observation store, or infer a country from a series ID string.
+
+### Owner decision recorded
+
+On 2026-10-25, the owner approved a child series-geography association rather
+than a universal `country_iso3` column on the existing series catalog. The
+association retains `country_iso3` when `geo_type=country` and leaves it null
+for non-country or ambiguous geography scopes.
+
+The owner also approved manual first-release review for all mappings, including
+the six entries seeded from `config/global_series.yml`. They are candidates
+until an operator approves the exact evidence record; configuration evidence
+does not auto-approve a country map.
+
+The owner narrowed the first release to PostgreSQL. SQLite and Delta support,
+including cross-backend parity, are deferred and are not first-release
+requirements. A future portability extension must explicitly design,
+implement, and prove those adapters before they are treated as supported.
 
 ### Initial user stories
 
@@ -37,7 +54,8 @@ Repository evidence: [global config](../../config/global_series.yml), [config lo
 - Deterministic candidate extraction from recognized FRED `geo` and `geot` tags, and from reviewed repository config.
 - Explicit human approval before a candidate is queryable as a country map.
 - Backfill for the six existing US/AU/CA global inflation/policy series; subsequent expansion can use the same contract.
-- SQLite, PostgreSQL and Spark/Delta persistence parity, matching the repository's supported backends.
+- PostgreSQL persistence and query-contract proof for the reviewed association
+  and country-map records.
 
 ### Out of scope
 
@@ -46,10 +64,16 @@ Repository evidence: [global config](../../config/global_series.yml), [config lo
 - Automatically assigning geography to the whole catalog based on title, prefix, publisher location, source country or an LLM.
 - A new SFMeridian query planner or automatic agent execution authorization. That consumer has its own semantic review gates.
 - Re-keying the existing series catalog. A source/series collision found during validation must fail closed and be raised as a separate catalog-identity migration decision.
+- SQLite and Spark/Delta persistence, migrations, and parity proof. These are
+  deferred until a separately scoped portability extension.
 
 ## 4. Proposed data contract
 
-Add a child series-geography association, not a duplicate series table. Choose its physical name according to each backend's established convention during planning; do not put private deployment identifiers in this public spec. One row represents one candidate or reviewed association between an existing series and one geographic scope.
+Add a child series-geography association, not a duplicate series table. Choose
+its PostgreSQL schema and physical table name during planning; do not put
+private deployment identifiers in this public spec. One row represents one
+candidate or reviewed association between an existing series and one geographic
+scope.
 
 | Field | Contract |
 | --- | --- |
@@ -88,13 +112,13 @@ Expose a read-only approved-country query contract (view or repository method) r
 
 - Use the existing Python package layout: FRED HTTP method under `src/fred_pipeline/sources/`, candidate/crosswalk and review logic under `src/fred_pipeline/catalogs/`, backend persistence under `src/fred_pipeline/io/`, DDL under `sql/`, tests under `tests/`, and dictionary/runbook updates under `docs/`.
 - Add the new table and approved-country read contract in an additive migration. Existing existing series catalog, observation store, global Gold output and manifest format remain unchanged. Existing deployments must bootstrap an empty table safely and be restart/idempotency safe.
-- Start with deterministic config candidates and review logic. Add FRED tag ingestion as a separate increment. Enable the approved-country consumer contract only after backend parity and collision tests pass.
-- If the actual PostgreSQL, SQLite and Delta catalog schemas disagree with this draft, update the spec and migration contract before coding. Do not edit vendored `agent-skills`.
+- Start with deterministic config candidates and review logic. Add FRED tag ingestion as a separate increment. Enable the approved-country consumer contract only after PostgreSQL migration and collision tests pass.
+- If the actual PostgreSQL catalog schema disagrees with this draft, update the spec and migration contract before coding. SQLite and Delta are intentionally unsupported for this contract in the first release. Do not edit vendored `agent-skills`.
 
 ## 7. Commands, style and verification
 
 Development setup: `python -m pip install -e '.[dev,postgres]'`.
-Focused tests to add and run: `python -m pytest -q tests/test_series_geography.py` and backend integration tests for SQLite/PostgreSQL/Spark where available.
+Focused tests to add and run: `python -m pytest -q tests/test_series_geography.py` and PostgreSQL integration tests for the candidate/review/approved lifecycle.
 Repository suite: `python -m pytest -q`.
 Lint: `ruff check src/fred_pipeline tests` (using the repository's configured rule set).
 Runtime smoke: run an explicit geography candidate refresh against a small selected FRED fixture/live series set, then check the approved-country contract against a disposable database. The implementation PR must document the exact new CLI invocation; this draft does not claim a command already exists.
@@ -108,7 +132,7 @@ assert candidate.country_iso3 == "USA"
 assert candidate.status == "candidate"
 ```
 
-Unit tests cover tag normalization, unknown/ambiguous tags, config precedence, review-state transitions, collisions and evidence hashes without network access. Integration tests cover idempotent persistence, migration from an existing database, source-aware joins, and one-row approved-country behavior on all supported backends. Live FRED tests are optional proof, not a substitute for deterministic fixtures.
+Unit tests cover tag normalization, unknown/ambiguous tags, config precedence, review-state transitions, collisions and evidence hashes without network access. PostgreSQL integration tests cover idempotent persistence, migration from an existing database, source-aware joins, and one-row approved-country behavior. Live FRED tests are optional proof, not a substitute for deterministic fixtures.
 
 Boundaries: always preserve raw evidence and run tests before promotion; ask the owner before changing the existing catalog key or automatically approving tags; never commit credentials, alter Silver observations, silently choose among multiple geographies, or edit vendored files.
 
@@ -121,15 +145,18 @@ Boundaries: always preserve raw evidence and run tests before promotion; ask the
 | AC-003 | No candidate becomes an approved country map without an exact-evidence human review action. Unknown, multi-country and conflicting tags fail closed. |
 | AC-004 | The approved-country contract yields at most one row per `(source, series_id)`, with ISO3 and provenance; it excludes unreviewed/rejected/superseded candidates. |
 | AC-005 | Existing Silver observation row counts/values/vintages and global Gold output are unchanged by the migration and refresh. No join fans out observation rows. |
-| AC-006 | SQLite, PostgreSQL and Delta fixtures produce equivalent candidate/review/approved results; a skipped live backend is reported as unverified, not passed. |
+| AC-006 | PostgreSQL migration, collision, and approved-mapping fixtures produce the expected association and country-map query results. SQLite and Delta support are explicitly deferred. |
 | AC-007 | Re-run is idempotent; changed source tags create drift evidence without silently changing approvals; rollback leaves the prior approved map readable. |
 | AC-008 | Data dictionary and operator runbook describe refresh, review, provenance, drift, limitations and the exact query contract. |
 | AC-009 | Focused tests, repository suite and lint pass; a disposable-database smoke demonstrates US/AU/CA lookup and one ambiguous/refusal case. |
 
-## 9. Open decisions for owner review
+## 9. Approved decisions and next step
 
-1. Confirm series-geography association as a child association rather than adding a single `country_iso3` column to the existing series catalog. Recommended: child association, because geographic scope can be non-country or ambiguous.
-2. Confirm first-release approval is manual even for the six curated `global_series.yml` entries. Recommended: yes; seed candidates with strong config evidence, then approve in one recorded review.
-3. Confirm the first release must persist across all three backends before the approved-country contract is considered done. Recommended: yes, consistent with EcoMedallion's portability contract.
-
-No implementation, production migration, or consumer query authorization is implied by accepting this draft spec. After owner review, produce a separate implementation plan and task breakdown before coding.
+The owner has approved the child-association data model, manual first-release
+review, and PostgreSQL as the first-release authoritative backend. SQLite and
+Delta parity are deferred to a separately scoped portability extension. The
+next step is a PostgreSQL implementation plan and task breakdown before coding.
+No implementation, production migration, or consumer query authorization is
+implied by this review. The proposed PostgreSQL delivery sequence and approved
+UUID-text table identity are recorded in
+[the implementation plan](postgresql_implementation_plan.md).
