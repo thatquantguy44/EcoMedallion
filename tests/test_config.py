@@ -18,6 +18,10 @@ _ENV_VARS = [
     "FRED_SOURCE_EXTRACT_WORKERS",
     "FRED_SOURCE_RATE_LIMITS",
     "FRED_RAW_VOLUME_PATH",
+    "FRED_PERSISTENCE_WRITE_MODE",
+    "FRED_PERSISTENCE_DELTA_TARGET_FILE_SIZE_MB",
+    "FRED_PERSISTENCE_DELTA_TARGET_PARTITIONS",
+    "FRED_PERSISTENCE_BATCH_MAX_BUFFER_BYTES",
     "FRED_CONFIG_FILE",
     "BLS_API_KEY",
     "EIA_API_KEY",
@@ -271,6 +275,43 @@ def test_restate_last_n_from_env(monkeypatch):
     monkeypatch.setenv("FRED_RESTATE_LAST_N", "15")
     cfg = PipelineConfig.resolve(environment="dev", config_file="nope.yaml")
     assert cfg.restate_last_n == 15  # coerced to int
+
+
+def test_persistence_settings_resolve_from_file_and_environment(tmp_path, monkeypatch):
+    path = _write(
+        tmp_path,
+        """
+        persistence_write_mode: run_batched
+        persistence_delta_target_file_size_mb: 128
+        persistence_delta_target_partitions: 12
+        persistence_batch_max_buffer_bytes: 4096
+        """,
+    )
+    monkeypatch.setenv("FRED_PERSISTENCE_WRITE_MODE", "per_series")
+    monkeypatch.setenv("FRED_PERSISTENCE_DELTA_TARGET_FILE_SIZE_MB", "256")
+    monkeypatch.setenv("FRED_PERSISTENCE_DELTA_TARGET_PARTITIONS", "auto")
+    monkeypatch.setenv("FRED_PERSISTENCE_BATCH_MAX_BUFFER_BYTES", "8192")
+
+    cfg = PipelineConfig.resolve(environment="dev", config_file=path)
+
+    assert cfg.persistence_write_mode == "per_series"
+    assert cfg.persistence_delta_target_file_size_mb == 256
+    assert cfg.persistence_delta_target_partitions == "auto"
+    assert cfg.persistence_batch_max_buffer_bytes == 8192
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("persistence_write_mode", "unknown"),
+        ("persistence_delta_target_file_size_mb", 0),
+        ("persistence_delta_target_partitions", "0"),
+        ("persistence_batch_max_buffer_bytes", -1),
+    ],
+)
+def test_persistence_settings_fail_closed_when_invalid(field, value):
+    with pytest.raises(ValueError, match="persistence"):
+        PipelineConfig(**{field: value})
 
 
 def test_shipped_example_config_is_valid():

@@ -8,6 +8,8 @@ requires PySpark to be installed.
 
 from __future__ import annotations
 
+import json
+import math
 from typing import Any, Iterable, Optional
 
 
@@ -74,7 +76,9 @@ def merge_delta(
         vals = ", ".join(f"s.{c}" for c in source_df.columns)
         matched_clause = ""
         if update:
-            condition = f" AND {match_update_condition}" if match_update_condition else ""
+            condition = (
+                f" AND {match_update_condition}" if match_update_condition else ""
+            )
             matched_clause = f"WHEN MATCHED{condition} THEN UPDATE SET {set_clause}"
         sql = f"""
             MERGE INTO {target_table} t
@@ -87,10 +91,69 @@ def merge_delta(
     return {"source_rows": src_count}
 
 
-def append_rows(spark: Any, rows: list[dict[str, Any]], target_table: str) -> int:
-    """Append plain dict rows to a Delta table. Returns rows written."""
+def estimated_rows_bytes(rows: list[dict[str, Any]]) -> int:
+    """Return a stable, conservative driver-side size estimate for dict rows."""
+    return len(json.dumps(rows, default=str, sort_keys=True).encode("utf-8"))
+
+
+def target_partitions_for_rows(
+    rows: list[dict[str, Any]],
+    *,
+    target_file_size_mb: int,
+    target_partitions: str | int,
+) -> int:
+    """Resolve an explicit or target-file-size-based shuffle partition count.
+
+    The input is already the bounded run buffer, so calculating its serialized
+    estimate here neither reads Delta nor causes a Spark action.  The result is
+    intentionally a lower bound of one: a small run should make one useful
+    file, rather than Spark's generic shuffle-partition count worth of tiny
+    fragments.
+    """
+    if target_partitions != "auto":
+        return int(target_partitions)
+    target_bytes = target_file_size_mb * 1024 * 1024
+    return max(1, math.ceil(estimated_rows_bytes(rows) / target_bytes))
+
+
+def cluster_dataframe_by_series(
+    df: Any, *, target_partitions: int, sort_columns: Iterable[str]
+) -> Any:
+    """Range-cluster a non-empty DataFrame without high-cardinality folders.
+
+    This deliberately uses a write shuffle and sort, rather than
+    ``partitionBy(series_id)``.  The latter would turn a large series catalog
+    into a directory and small-file problem.  Call after layer-specific casts
+    so range ordering uses the eventual Delta types.
+    """
+    columns = list(sort_columns)
+    missing = [column for column in columns if column not in df.columns]
+    if missing:
+        raise ValueError(f"Series clustering columns missing from DataFrame: {missing}")
+    from pyspark.sql import functions as F
+
+    return df.repartitionByRange(
+        target_partitions, *(F.col(c) for c in columns)
+    ).sortWithinPartitions(*columns)
+
+
+def append_rows(
+    spark: Any,
+    rows: list[dict[str, Any]],
+    target_table: str,
+    *,
+    target_partitions: int | None = None,
+    sort_columns: Iterable[str] = (),
+) -> int:
+    """Append plain dict rows to Delta, optionally range-clustered for a run."""
     if not rows:
         return 0
     df = spark.createDataFrame(rows)
+    if target_partitions is not None:
+        df = cluster_dataframe_by_series(
+            df,
+            target_partitions=target_partitions,
+            sort_columns=sort_columns,
+        )
     df.write.format("delta").mode("append").saveAsTable(target_table)
     return len(rows)

@@ -1,26 +1,55 @@
 # Active Work Pickup
 
-Last verified: 2026-10-25 (documentation and repository state only).
+Last verified: 2026-10-26.
 
-**Continue working on the existing branch `spec012-dagster-orchestration`**,
-tracking `origin/spec012-dagster-orchestration`. Keep subsequent Spec 013
-implementation commits on this branch. The active work is
-[Spec 013: Dagster Orchestration](../specs/spec013/README.md).
+**Continue on branch `spec014-run-batched-persistence`**, based on the current
+`origin/main`. This is the active workstream for
+[Spec 014: Run-Batched, Series-Clustered Persistence](../specs/spec014/README.md).
 
-Dagster was renumbered to Spec 013 after syncing main's
-[Spec 012: Series Geography Metadata and Reviewed Country Map](../specs/spec012/README.md).
-The branch name stays `spec012-dagster-orchestration`.
+## Current state
 
-**Next task: complete T1 — optional Dagster runtime installation and
-verification.** Start at the [canonical Dagster handoff](handoffs/dagster_orchestration.md#next-task-t1).
-It records the candidate versions, what was actually verified, remaining
-files/checks, and when to advance to T2. The [plan](../tasks/plan.md) and
-[checklist](../tasks/todo.md) define the subsequent order.
+- The standard, default-safe configuration remains
+  `persistence_write_mode: per_series`; operators can opt into
+  `run_batched` with configuration or `FRED_PERSISTENCE_WRITE_MODE`, and can
+  immediately revert without a code change.
+- In `run_batched` mode, results are collected before the three data phases:
+  one raw/Bronze append, one cleaned/Silver merge containing only DQ-passing
+  series, and one DQ-result append. Empty batches make no writes.
+- Batch write failures complete every buffered series as failed, record the
+  failed phase, preserve counts for earlier successful phases, then
+  best-effort persist final audit state before re-raising.
+- SQLite and PostgreSQL final audit persistence now replace one run's series
+  rows with a bulk insert rather than a transaction per series.
+- Spark write preparation now range-repartitions and sorts batched raw,
+  cleaned, and DQ-result data by series-oriented keys. It never uses
+  `partitionBy(series_id)`.
+- PostgreSQL runtime proof (2026-10-26): run
+  `4aac45fad0a34b8c8bfc987cd22a43b1` used `run_batched`, default due-date
+  gating, `--no-gold`, and `--no-ecb-assets`. It completed its data flush in
+  605.0 seconds: 250 succeeded, 35 failed, and 2,611 were skipped as not due;
+  it persisted 259 Bronze rows and 1,933 DQ rows. The failures were isolated
+  upstream responses/quotas and DQ rejects, not a batch or PostgreSQL writer
+  failure. This is a scheduled-workload smoke test, not a `--full` backfill or
+  a Gold benchmark.
+- PostgreSQL Gold proof (2026-10-26): a direct
+  `PostgresWarehouse.build_gold()` rebuild completed in approximately
+  17 minutes against the existing development Silver history. Core output
+  checks found 20,563,593 `gold.fred_latest_observation` rows, 75,447,083
+  feature-daily rows, 20,501,275 revision-stat rows, 290 series-dimension
+  rows, and 121,252 date-dimension rows. The CLI command `gold --env dev`
+  is **not** currently equivalent: it unconditionally tries Spark and fails
+  without Java instead of resolving the configured PostgreSQL warehouse.
 
-The specification and README bootstrap commands are committed at `72703d5`;
-runtime installation and integration remain unproven. Check Git status and
-the current head before continuing; do not infer completion from documented commands.
+## Next task
 
-For the existing ECB pipeline's separate production-host proof, use the
-[Spec 011 handoff](handoffs/ecb_eligible_assets.md). Spec 013 T1 does not need
-production access and must not activate a scheduler or perform a live poll.
+First repair and test the `gold --env dev` CLI path so it resolves the same
+configured PostgreSQL warehouse as `run`, rather than unconditionally creating
+Spark. Then run the Spark/Delta integration job in an environment where the
+pinned dependencies are available, add an end-to-end dual-mode parity fixture,
+and capture real file/commit metrics with a measured buffer limit. Do not
+change the shared default from `per_series` until that proof is recorded.
+
+The authoritative acceptance criteria, failure-recovery contract, and
+configuration details are in [Spec 014](../specs/spec014/README.md). The
+older [Dagster handoff](handoffs/dagster_orchestration.md) remains historical
+context only; it is not the next task for this branch.

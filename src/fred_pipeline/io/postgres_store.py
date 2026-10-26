@@ -728,13 +728,36 @@ class PostgresWarehouse:
             )
         self._insert("audit_etl_series_run", [series_run.to_row()])
 
+    def persist_series_runs(self, series_runs: Sequence[EtlSeriesRun]) -> None:
+        """Replace one run's series audit rows with one bulk insert."""
+        if not series_runs:
+            return
+        run_ids = {series_run.run_id for series_run in series_runs}
+        if len(run_ids) != 1:
+            raise ValueError("persist_series_runs requires one run_id")
+        try:
+            with self._pg_conn.cursor() as cur:
+                cur.execute(
+                    "DELETE FROM audit.etl_series_run WHERE run_id = %s",
+                    (next(iter(run_ids)),),
+                )
+        except Exception:
+            self._rollback_unless_deferred()
+            raise
+        self._insert("audit_etl_series_run", [s.to_row() for s in series_runs])
+
     def persist_run(self, run: EtlRun) -> None:
         self.persist_run_state(run)
-        for series_run in run.series_runs:
-            self.persist_series_run(series_run)
+        self.persist_series_runs(run.series_runs)
 
     def persist_dq(self, run_id: str, report: QualityReport) -> None:
-        self._insert("audit_data_quality_result", dq_rows(run_id, report))
+        self.persist_dq_reports(run_id, [report])
+
+    def persist_dq_reports(self, run_id: str, reports: list[QualityReport]) -> None:
+        self._insert(
+            "audit_data_quality_result",
+            [row for report in reports for row in dq_rows(run_id, report)],
+        )
 
     def close(self) -> None:
         self.conn.close()

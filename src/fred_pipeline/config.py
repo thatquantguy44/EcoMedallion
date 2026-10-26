@@ -69,6 +69,10 @@ _SETTING_FIELDS = (
     "notify_on",
     "complete_vintage_history",
     "extract_workers",
+    "persistence_write_mode",
+    "persistence_delta_target_file_size_mb",
+    "persistence_delta_target_partitions",
+    "persistence_batch_max_buffer_bytes",
 )
 
 # Environment-variable name for each setting (12-factor style overrides).
@@ -98,6 +102,12 @@ _ENV_OVERRIDES = {
     "notify_on": "FRED_NOTIFY_ON",
     "complete_vintage_history": "FRED_COMPLETE_VINTAGE_HISTORY",
     "extract_workers": "FRED_EXTRACT_WORKERS",
+    "persistence_write_mode": "FRED_PERSISTENCE_WRITE_MODE",
+    "persistence_delta_target_file_size_mb": (
+        "FRED_PERSISTENCE_DELTA_TARGET_FILE_SIZE_MB"
+    ),
+    "persistence_delta_target_partitions": "FRED_PERSISTENCE_DELTA_TARGET_PARTITIONS",
+    "persistence_batch_max_buffer_bytes": "FRED_PERSISTENCE_BATCH_MAX_BUFFER_BYTES",
 }
 
 _INT_FIELDS = {
@@ -106,6 +116,8 @@ _INT_FIELDS = {
     "rate_limit_per_minute",
     "restate_last_n",
     "extract_workers",
+    "persistence_delta_target_file_size_mb",
+    "persistence_batch_max_buffer_bytes",
 }
 
 _BOOL_FIELDS = {"complete_vintage_history"}
@@ -259,6 +271,36 @@ class PipelineConfig:
     # When false, a single full-window request is made and, if it hits the cap,
     # the client falls back to a bounded recent window.
     complete_vintage_history: bool = False
+    # Spec014: retain legacy per-series persistence until the run-batched path
+    # has equivalent-data and Delta-layout proof. Operators can opt in/out via
+    # config or the matching FRED_PERSISTENCE_WRITE_MODE environment variable.
+    persistence_write_mode: str = "per_series"
+    persistence_delta_target_file_size_mb: int = 256
+    persistence_delta_target_partitions: str | int = "auto"
+    persistence_batch_max_buffer_bytes: int = 2 * 1024 * 1024 * 1024
+
+    def __post_init__(self) -> None:
+        if self.persistence_write_mode not in {"per_series", "run_batched"}:
+            raise ValueError(
+                "persistence_write_mode must be 'per_series' or 'run_batched'"
+            )
+        if self.persistence_delta_target_file_size_mb <= 0:
+            raise ValueError("persistence_delta_target_file_size_mb must be positive")
+        if self.persistence_batch_max_buffer_bytes <= 0:
+            raise ValueError("persistence_batch_max_buffer_bytes must be positive")
+        partitions = self.persistence_delta_target_partitions
+        if partitions == "auto":
+            return
+        try:
+            partition_count = int(partitions)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                "persistence_delta_target_partitions must be 'auto' or a positive integer"
+            ) from exc
+        if partition_count <= 0:
+            raise ValueError(
+                "persistence_delta_target_partitions must be 'auto' or a positive integer"
+            )
 
     @property
     def catalog(self) -> str:

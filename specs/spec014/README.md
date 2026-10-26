@@ -1,6 +1,9 @@
 # Spec 014: Run-Batched, Series-Clustered Persistence
 
-Status: **Draft for review; specification only. No write-path behavior has changed.**
+Status: **In progress.** The configurable buffer/orchestration path and
+SQLite/PostgreSQL batch-audit primitives are implemented behind the opt-in
+`run_batched` mode. Initial Spark/Delta layout preparation is implemented;
+end-to-end integration proof and measured rollout evidence remain.
 
 Date: 2026-10-26
 
@@ -46,7 +49,7 @@ Repository inspection on 2026-10-26 established:
 | Extraction | Source-aware thread pools return futures out of order; the main thread handles each completion. | Retain concurrency and per-series fault isolation; buffer completed outcomes rather than immediately persist. |
 | Bronze | One `write_bronze([bronze_row])` call per successfully extracted/normalized series. | One run-scoped Bronze append. |
 | Silver | One `merge_silver(silver_rows)` call only after that series passes DQ. | One run-scoped MERGE containing rows only from DQ-passing series. |
-| DQ | One `persist_dq(run_id, report)` call per report. | One quality/audit flush with all DQ reports and final run/series audit rows. |
+| DQ | One `persist_dq(run_id, report)` call per report. | One DQ-results flush with all reports. |
 | Incremental audit | PostgreSQL and SQLite persist live run/series state after each future; Spark does not advertise that capability. | Suppress incremental audit only in `run_batched`; persist one final audit snapshot. |
 | Delta layout | `append_rows()` and `merge_silver()` create a DataFrame directly from a single series' rows, with no layout shuffle or sort. | Repartition and order every run batch; do not use high-cardinality `partitionBy(series_id)`. |
 
@@ -84,20 +87,19 @@ this order:
 
 1. **Raw phase** — append all Bronze rows once.
 2. **Cleaned phase** — MERGE all Silver rows from DQ-passing series once.
-3. **Quality/audit phase** — append flattened DQ rows once and persist final
-   `etl_run` plus all `etl_series_run` rows as one run-scoped audit operation.
+3. **Quality-results phase** — append flattened DQ rows once.
 
-“Three runs” means three logical, run-scoped write phases, not one cross-table
-transaction. Delta commits are atomic per table, not across Bronze, Silver, and
-audit. The backend must expose batch operations so each destination table gets
-at most one write invocation per phase; the quality/audit phase may require
-separate table-level statements for `data_quality_result`, `etl_run`, and
-`etl_series_run`.
+“Three runs” means three logical, run-scoped **data** write phases, not one
+cross-table transaction. Delta commits are atomic per table, not across Bronze,
+Silver, and DQ results. The backend must expose batch operations so each data
+destination table gets at most one write invocation per phase.
 
-Gold remains after the Cleaned phase because it reads Silver. The final
-quality/audit phase happens after Gold/stage status is known, preserving a
-truthful final snapshot. No incremental per-series audit write occurs in
-`run_batched` mode.
+Gold remains after the Cleaned phase because it reads Silver. After Gold/stage
+status is known, the final `etl_run` and `etl_series_run` audit snapshot is
+persisted with a bulk series insert. That final control-plane operation is
+deliberately outside the three data phases, so the audit records remain
+truthful without reintroducing thousands of per-series saves. No incremental
+per-series audit write occurs in `run_batched` mode.
 
 If any phase fails, the pipeline must not silently switch to per-series writes
 mid-run. It records the phase failure and preserves table-level atomicity. A
@@ -144,15 +146,15 @@ Add these settings to the standard checked-in configuration surface, example
 configuration, environment/config loader, and operator documentation:
 
 ```yaml
-persistence:
-  write_mode: run_batched          # run_batched | per_series
-  delta_target_file_size_mb: 256  # used by auto partition selection
-  delta_target_partitions: auto   # positive integer | auto
-  batch_max_buffer_bytes: 2147483648
+persistence_write_mode: run_batched                 # run_batched | per_series
+persistence_delta_target_file_size_mb: 256          # auto partition sizing
+persistence_delta_target_partitions: auto           # positive integer | auto
+persistence_batch_max_buffer_bytes: 2147483648
 ```
 
 - `run_batched` is the intended default after the acceptance criteria are
-  proven. It implements this specification.
+  proven. It implements this specification. During implementation it remains
+  opt-in, so existing deployments retain their tested `per_series` behavior.
 - `per_series` is compatibility mode, preserving immediate write ordering and
   live per-series audit updates. It is selectable in deployed configuration or
   its environment override before a run, with no code change or redeploy.
@@ -204,6 +206,8 @@ Implement in this order:
    Spark adapters; Spark owns repartition/sort behavior.
 3. Add configuration, environment override, diagnostics, example config, and
    runbook, then implement the three flush phases and batched audit handling.
+   *(Implemented behind opt-in `run_batched`; failure recovery and empty-batch
+   behavior are tested.)*
 4. Add Spark integration proof for data parity and file layout. Stage rollout
    with a measured buffer limit before changing any shared environment default.
 
@@ -227,8 +231,8 @@ cannot provide.
 
 ## 9. Next task
 
-Start with the pure outcome-buffer contract and dual-mode orchestration tests.
-Do not change a warehouse writer until tests establish parity for passed DQ,
-failed DQ, extraction failure, not-due, and manifest-order behavior. Then add
-the Spark batch-layout adapter and integration proof before changing a shared
-default configuration.
+Continue on branch **`spec014-run-batched-persistence`**. The next task is to
+run the Spark/Delta integration suite and add an end-to-end dual-mode parity
+fixture for passed DQ, failed DQ, and extraction failure. Capture a measured
+file/commit benchmark with a production-safe buffer cap before changing any
+shared environment default from `per_series`.

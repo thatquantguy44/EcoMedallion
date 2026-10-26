@@ -10,7 +10,12 @@ from __future__ import annotations
 from typing import Any
 
 from fred_pipeline.config import PipelineConfig
-from fred_pipeline.spark_io import get_spark, merge_delta
+from fred_pipeline.spark_io import (
+    cluster_dataframe_by_series,
+    get_spark,
+    merge_delta,
+    target_partitions_for_rows,
+)
 from fred_pipeline.transform import (
     SILVER_COLUMNS,
     assign_revision_numbers,
@@ -192,6 +197,20 @@ def merge_silver(
         else:
             exprs.append(col)
     df = df.selectExpr(*exprs)
+    if getattr(config, "persistence_write_mode", "per_series") == "run_batched":
+        df = cluster_dataframe_by_series(
+            df,
+            target_partitions=target_partitions_for_rows(
+                rows,
+                target_file_size_mb=getattr(
+                    config, "persistence_delta_target_file_size_mb", 256
+                ),
+                target_partitions=getattr(
+                    config, "persistence_delta_target_partitions", "auto"
+                ),
+            ),
+            sort_columns=("source", "series_id", "observation_date", "realtime_start"),
+        )
     # Leave ingested_at untouched when a restated observation has identical
     # content. Due-date gating and incremental Gold both use it as a change
     # watermark, matching the SQLite and PostgreSQL merge paths.

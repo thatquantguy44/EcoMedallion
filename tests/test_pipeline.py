@@ -1,12 +1,15 @@
 import threading
 from datetime import datetime, timedelta, timezone
 
+import pytest
+
 from fred_pipeline.audit import RunStatus
 from fred_pipeline.config import Environment, PipelineConfig
 from fred_pipeline.fred_client import FredAPIError
 from fred_pipeline.local_store import LocalWarehouse
 from fred_pipeline.manifest import SeriesSpec, ValidationProfile
 from fred_pipeline.pipeline import (
+    BatchBufferLimitExceeded,
     _CADENCE_MIN_INTERVAL,
     FredPipeline,
     _extract_workers_for_source,
@@ -239,6 +242,226 @@ def test_strict_profile_fails_run_on_dq(fake_client_cls):
     assert sr.status == RunStatus.FAILED
     assert sr.dq_passed is False
     assert "Data quality failed" in sr.error_message
+
+
+def test_run_batched_writes_each_data_layer_once_and_excludes_failed_dq(
+    observations_payload, fake_client_cls
+):
+    all_missing = {
+        "observations": [
+            {
+                "date": "2024-01-01",
+                "value": ".",
+                "realtime_start": "2024-01-02",
+                "realtime_end": "9999-12-31",
+            }
+        ]
+    }
+
+    class BatchedWarehouse:
+        supports_incremental_audit = True
+
+        def __init__(self):
+            self.bronze_batches = []
+            self.silver_batches = []
+            self.dq_batches = []
+            self.incremental_audit_calls = 0
+
+        def restate_start(self, series_id, n):
+            return None
+
+        def write_bronze(self, rows):
+            self.bronze_batches.append(rows)
+            return len(rows)
+
+        def merge_silver(self, rows):
+            self.silver_batches.append(rows)
+            return len(rows)
+
+        def persist_dq_reports(self, run_id, reports):
+            self.dq_batches.append((run_id, reports))
+
+        def persist_run_state(self, run):
+            self.incremental_audit_calls += 1
+
+        def persist_series_run(self, series_run):
+            self.incremental_audit_calls += 1
+
+        def persist_run(self, run):
+            pass
+
+    warehouse = BatchedWarehouse()
+    config = PipelineConfig(
+        environment=Environment.DEV,
+        fred_api_key="k",
+        persistence_write_mode="run_batched",
+    )
+    pipe = FredPipeline(
+        config,
+        client=fake_client_cls({"GOOD": observations_payload, "BAD": all_missing}),
+        warehouse=warehouse,
+    )
+
+    run = pipe.run(
+        [
+            _spec("GOOD"),
+            _spec("BAD", validation_profile=ValidationProfile.STRICT),
+        ],
+        build_gold_layer=False,
+    )
+
+    assert run.status == RunStatus.PARTIAL
+    assert len(warehouse.bronze_batches) == 1
+    assert {row["series_id"] for row in warehouse.bronze_batches[0]} == {"GOOD", "BAD"}
+    assert len(warehouse.silver_batches) == 1
+    assert {row["series_id"] for row in warehouse.silver_batches[0]} == {"GOOD"}
+    assert len(warehouse.dq_batches) == 1
+    assert {report.series_id for report in warehouse.dq_batches[0][1]} == {
+        "GOOD",
+        "BAD",
+    }
+    assert warehouse.incremental_audit_calls == 0
+
+    good = next(sr for sr in run.series_runs if sr.series_id == "GOOD")
+    bad = next(sr for sr in run.series_runs if sr.series_id == "BAD")
+    assert good.status == RunStatus.SUCCEEDED
+    assert good.rows_written_bronze == 1
+    assert good.rows_merged_silver == len(warehouse.silver_batches[0])
+    assert bad.status == RunStatus.FAILED
+    assert bad.rows_written_bronze == 1
+    assert bad.rows_merged_silver == 0
+    assert bad.dq_passed is False
+
+
+def test_run_batched_buffer_limit_fails_before_any_data_write(
+    observations_payload, fake_client_cls
+):
+    class GuardedWarehouse:
+        def __init__(self):
+            self.write_attempted = False
+
+        def restate_start(self, series_id, n):
+            return None
+
+        def write_bronze(self, rows):
+            self.write_attempted = True
+            return len(rows)
+
+        def merge_silver(self, rows):
+            self.write_attempted = True
+            return len(rows)
+
+        def persist_dq_reports(self, run_id, reports):
+            self.write_attempted = True
+
+    warehouse = GuardedWarehouse()
+    config = PipelineConfig(
+        environment=Environment.DEV,
+        fred_api_key="k",
+        persistence_write_mode="run_batched",
+        persistence_batch_max_buffer_bytes=1,
+    )
+    pipe = FredPipeline(
+        config,
+        client=fake_client_cls({"TOO_LARGE": observations_payload}),
+        warehouse=warehouse,
+        persist_audit=False,
+    )
+
+    with pytest.raises(BatchBufferLimitExceeded, match="per_series"):
+        pipe.run([_spec("TOO_LARGE")], build_gold_layer=False)
+
+    assert warehouse.write_attempted is False
+
+
+def test_run_batched_all_extraction_failures_do_not_issue_empty_writes(
+    fake_client_cls,
+):
+    class NoEmptyWritesWarehouse:
+        def __init__(self):
+            self.write_attempted = False
+
+        def restate_start(self, series_id, n):
+            return None
+
+        def write_bronze(self, rows):
+            self.write_attempted = True
+            raise AssertionError("an empty raw batch must not be written")
+
+        def merge_silver(self, rows):
+            self.write_attempted = True
+            raise AssertionError("an empty cleaned batch must not be written")
+
+    warehouse = NoEmptyWritesWarehouse()
+    config = PipelineConfig(
+        environment=Environment.DEV,
+        fred_api_key="k",
+        persistence_write_mode="run_batched",
+    )
+    pipe = FredPipeline(
+        config,
+        client=fake_client_cls({}, errors={"BROKEN": FredAPIError("boom", 400)}),
+        warehouse=warehouse,
+        persist_audit=False,
+    )
+
+    run = pipe.run([_spec("BROKEN")], build_gold_layer=False)
+
+    assert run.status == RunStatus.FAILED
+    assert run.series_runs[0].status == RunStatus.FAILED
+    assert warehouse.write_attempted is False
+
+
+def test_run_batched_writer_failure_completes_series_and_persists_failure_audit(
+    observations_payload, fake_client_cls
+):
+    class FailingCleanedWarehouse:
+        def __init__(self):
+            self.bronze_batches = []
+            self.persisted_runs = []
+
+        def restate_start(self, series_id, n):
+            return None
+
+        def write_bronze(self, rows):
+            self.bronze_batches.append(rows)
+            return len(rows)
+
+        def merge_silver(self, rows):
+            raise RuntimeError("cleaned storage is unavailable")
+
+        def persist_dq_reports(self, run_id, reports):
+            raise AssertionError("quality phase must not run after cleaned failure")
+
+        def persist_run(self, run):
+            self.persisted_runs.append(run)
+
+    warehouse = FailingCleanedWarehouse()
+    config = PipelineConfig(
+        environment=Environment.DEV,
+        fred_api_key="k",
+        persistence_write_mode="run_batched",
+    )
+    pipe = FredPipeline(
+        config,
+        client=fake_client_cls({"A": observations_payload, "B": observations_payload}),
+        warehouse=warehouse,
+    )
+
+    with pytest.raises(RuntimeError, match="cleaned storage is unavailable"):
+        pipe.run([_spec("A"), _spec("B")], build_gold_layer=False)
+
+    assert len(warehouse.bronze_batches) == 1
+    assert len(warehouse.persisted_runs) == 1
+    failed_run = warehouse.persisted_runs[0]
+    assert failed_run.status == RunStatus.FAILED
+    assert all(sr.status == RunStatus.FAILED for sr in failed_run.series_runs)
+    assert all(sr.rows_written_bronze == 1 for sr in failed_run.series_runs)
+    assert all(sr.rows_merged_silver == 0 for sr in failed_run.series_runs)
+    assert all(
+        "Batch cleaned persistence failed" in sr.error_message
+        for sr in failed_run.series_runs
+    )
 
 
 def test_vintage_series_requests_full_realtime_window(observations_payload):

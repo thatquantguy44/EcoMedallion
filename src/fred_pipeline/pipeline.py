@@ -11,10 +11,12 @@ finishing as ``PARTIAL`` rather than losing all progress.
 
 from __future__ import annotations
 
+import json
 import logging
 from collections import defaultdict
 from collections.abc import Iterable
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -49,6 +51,21 @@ log = logging.getLogger("fred_pipeline")
 # Full-vintage real-time window for point-in-time enabled series.
 FULL_VINTAGE_START = "1776-07-04"
 FULL_VINTAGE_END = "9999-12-31"
+
+
+class BatchBufferLimitExceeded(RuntimeError):
+    """Raised before durable writes when a run-batched buffer exceeds its cap."""
+
+
+@dataclass
+class BufferedSeriesOutcome:
+    """Validated per-series material retained until a run-batched flush."""
+
+    series_run: EtlSeriesRun
+    bronze_row: dict[str, Any]
+    silver_rows: list[dict[str, Any]]
+    report: Any
+    observations_extracted: int
 
 
 def _make_fred(config: PipelineConfig) -> SourceClient:
@@ -566,11 +583,10 @@ class FredPipeline:
             stage.detail["series_planned"] = len(work_items)
             stage.detail["series_skipped_not_due"] = skipped_count
 
-        # Phase 2/3 (source-aware extraction, streaming finish): network-bound
-        # fetches run in per-source pools, while Bronze/Silver/DQ/audit writes
-        # happen immediately as each future completes on this main thread. This
-        # avoids losing completed FRED/Stooq work when a low-quota source is
-        # still sleeping in retry/backoff.
+        # Phase 2/3 (source-aware extraction): network-bound fetches run in
+        # per-source pools. Legacy mode writes each completion immediately;
+        # Spec014's opt-in batch mode retains outcomes and writes each data
+        # layer once after every future finishes.
         # A hard extraction failure still propagates (callers rely on it),
         # but the alert goes out first -- an operator must hear about the
         # run that died, not just the ones that finished.
@@ -591,6 +607,9 @@ class FredPipeline:
                 pools: list[ThreadPoolExecutor] = []
                 futures = {}
                 completed = 0
+                batched = self.config.persistence_write_mode == "run_batched"
+                buffered: list[tuple[int, BufferedSeriesOutcome]] = []
+                buffered_bytes = 0
                 try:
                     for source, items in grouped.items():
                         workers = _extract_workers_for_source(self.config, source)
@@ -613,12 +632,34 @@ class FredPipeline:
                         idx = futures[fut]
                         spec, (_observation_start, load_type), sr = work_items[idx]
                         outcome = fut.result()
-                        self._finish_series(
-                            run, spec, load_type, outcome, series_run=sr
-                        )
+                        if batched:
+                            materialized = self._materialize_series(
+                                run, spec, load_type, outcome, series_run=sr
+                            )
+                            if materialized is not None:
+                                buffered_bytes += self._buffered_outcome_bytes(
+                                    materialized
+                                )
+                                if (
+                                    buffered_bytes
+                                    > self.config.persistence_batch_max_buffer_bytes
+                                ):
+                                    raise BatchBufferLimitExceeded(
+                                        "run-batched persistence buffer exceeded "
+                                        f"persistence_batch_max_buffer_bytes="
+                                        f"{self.config.persistence_batch_max_buffer_bytes}; "
+                                        "rerun with persistence_write_mode=per_series "
+                                        "or increase the configured limit"
+                                    )
+                                buffered.append((idx, materialized))
+                        else:
+                            self._finish_series(
+                                run, spec, load_type, outcome, series_run=sr
+                            )
                         completed += 1
                         self._update_run_progress(run, total=len(specs))
-                        self._persist_incremental_audit(run, sr)
+                        if not batched:
+                            self._persist_incremental_audit(run, sr)
                         if (
                             completed == len(futures)
                             or completed % 25 == 0
@@ -641,6 +682,15 @@ class FredPipeline:
                 else:
                     for pool in pools:
                         pool.shutdown(wait=True)
+                if batched:
+                    self._flush_batched_outcomes(
+                        run,
+                        [
+                            outcome
+                            for _, outcome in sorted(buffered, key=lambda item: item[0])
+                        ],
+                    )
+                    self._update_run_progress(run, total=len(specs))
                 extract_stage.detail["series_succeeded"] = run.series_succeeded
                 extract_stage.detail["series_failed"] = run.series_failed
                 extract_stage.detail["sources"] = ", ".join(sorted(grouped))
@@ -863,6 +913,42 @@ class FredPipeline:
         *,
         series_run: Any = None,
     ) -> None:
+        materialized = self._materialize_series(
+            run, spec, load_type, outcome, series_run=series_run
+        )
+        if materialized is None:
+            return
+        sr = materialized.series_run
+        try:
+            bronze_written = 0
+            silver_merged = 0
+            if self.warehouse is not None:
+                bronze_written = self.warehouse.write_bronze([materialized.bronze_row])
+                if materialized.report.passed:
+                    silver_merged = self.warehouse.merge_silver(
+                        materialized.silver_rows
+                    )
+                if self.persist_audit:
+                    self.warehouse.persist_dq(run.run_id, materialized.report)
+            self._complete_materialized_series(
+                materialized,
+                bronze_written=bronze_written,
+                silver_merged=silver_merged,
+            )
+        except Exception as exc:  # isolate per-series failures in legacy mode
+            sr.complete(RunStatus.FAILED, error_message=str(exc))
+            log.exception("Series %s failed", spec.series_id)
+
+    def _materialize_series(
+        self,
+        run: EtlRun,
+        spec: SeriesSpec,
+        load_type: str,
+        outcome: Any,
+        *,
+        series_run: Any = None,
+    ) -> BufferedSeriesOutcome | None:
+        """Normalize and validate one series without writing a warehouse."""
         sr = series_run or run.start_series(
             spec.series_id, load_type=spec.load_type.value
         )
@@ -893,37 +979,144 @@ class FredPipeline:
                 min_value=spec.min_value,
                 max_value=spec.max_value,
             )
-
-            bronze_written = 0
-            silver_merged = 0
-            if self.warehouse is not None:
-                bronze_written = self.warehouse.write_bronze([bronze_row])
-                if report.passed:
-                    silver_merged = self.warehouse.merge_silver(silver_rows)
-                if self.persist_audit:
-                    self.warehouse.persist_dq(run.run_id, report)
-
-            if report.passed:
-                sr.complete(
-                    RunStatus.SUCCEEDED,
-                    observations_extracted=observations_extracted,
-                    rows_written_bronze=bronze_written,
-                    rows_merged_silver=silver_merged,
-                    dq_passed=True,
-                )
-            else:
-                msgs = "; ".join(f.message for f in report.failures)
-                sr.complete(
-                    RunStatus.FAILED,
-                    observations_extracted=observations_extracted,
-                    rows_written_bronze=bronze_written,
-                    dq_passed=False,
-                    error_message=f"Data quality failed: {msgs}",
-                )
-                log.warning("DQ failed for %s: %s", spec.series_id, msgs)
+            return BufferedSeriesOutcome(
+                series_run=sr,
+                bronze_row=bronze_row,
+                silver_rows=silver_rows,
+                report=report,
+                observations_extracted=observations_extracted,
+            )
         except Exception as exc:  # isolate per-series failures
             sr.complete(RunStatus.FAILED, error_message=str(exc))
             log.exception("Series %s failed", spec.series_id)
+            return None
+
+    def _complete_materialized_series(
+        self,
+        materialized: BufferedSeriesOutcome,
+        *,
+        bronze_written: int,
+        silver_merged: int,
+    ) -> None:
+        sr = materialized.series_run
+        if materialized.report.passed:
+            sr.complete(
+                RunStatus.SUCCEEDED,
+                observations_extracted=materialized.observations_extracted,
+                rows_written_bronze=bronze_written,
+                rows_merged_silver=silver_merged,
+                dq_passed=True,
+            )
+            return
+        msgs = "; ".join(f.message for f in materialized.report.failures)
+        sr.complete(
+            RunStatus.FAILED,
+            observations_extracted=materialized.observations_extracted,
+            rows_written_bronze=bronze_written,
+            dq_passed=False,
+            error_message=f"Data quality failed: {msgs}",
+        )
+        log.warning("DQ failed for %s: %s", sr.series_id, msgs)
+
+    @staticmethod
+    def _buffered_outcome_bytes(materialized: BufferedSeriesOutcome) -> int:
+        """Conservative serialized-size estimate for the in-memory run buffer."""
+        value = {
+            "bronze": materialized.bronze_row,
+            "silver": materialized.silver_rows,
+            "dq": [
+                {
+                    "check": result.check,
+                    "message": result.message,
+                    "metric_value": result.metric_value,
+                    "passed": result.passed,
+                    "severity": result.severity.value,
+                }
+                for result in materialized.report.results
+            ],
+        }
+        return len(json.dumps(value, default=str, sort_keys=True).encode("utf-8"))
+
+    def _flush_batched_outcomes(
+        self, run: EtlRun, outcomes: list[BufferedSeriesOutcome]
+    ) -> None:
+        """Persist one raw, cleaned, and DQ batch after all series finish."""
+        # Extraction/normalization failures are completed in
+        # ``_materialize_series`` and therefore never enter this collection.
+        # In particular, do not turn an all-failed extraction run into an
+        # accidental empty Delta/SQL write.
+        if not outcomes:
+            return
+        if self.warehouse is None:
+            for materialized in outcomes:
+                self._complete_materialized_series(
+                    materialized, bronze_written=0, silver_merged=0
+                )
+            return
+
+        bronze_written = 0
+        silver_persisted = False
+        phase = "raw"
+        try:
+            bronze_rows = [materialized.bronze_row for materialized in outcomes]
+            bronze_written = self.warehouse.write_bronze(bronze_rows)
+
+            phase = "cleaned"
+            silver_rows = [
+                row
+                for materialized in outcomes
+                if materialized.report.passed
+                for row in materialized.silver_rows
+            ]
+            if silver_rows:
+                self.warehouse.merge_silver(silver_rows)
+                silver_persisted = True
+
+            phase = "quality"
+            if self.persist_audit:
+                persist_reports = getattr(self.warehouse, "persist_dq_reports", None)
+                if not callable(persist_reports):
+                    raise RuntimeError(
+                        f"{type(self.warehouse).__name__} must implement "
+                        "persist_dq_reports for persistence_write_mode=run_batched"
+                    )
+                persist_reports(
+                    run.run_id, [materialized.report for materialized in outcomes]
+                )
+
+            for materialized in outcomes:
+                self._complete_materialized_series(
+                    materialized,
+                    bronze_written=1 if bronze_written else 0,
+                    silver_merged=(
+                        len(materialized.silver_rows)
+                        if silver_persisted and materialized.report.passed
+                        else 0
+                    ),
+                )
+        except Exception as exc:
+            # A batch phase is intentionally all-or-nothing from the
+            # orchestration point of view: do not leave any materialized
+            # series RUNNING simply because a shared writer failed.  Preserve
+            # the data-layer counts that were durably reached before the
+            # failure, then best-effort persist that failure audit below.
+            for materialized in outcomes:
+                materialized.series_run.complete(
+                    RunStatus.FAILED,
+                    observations_extracted=materialized.observations_extracted,
+                    rows_written_bronze=1 if bronze_written else 0,
+                    rows_merged_silver=(
+                        len(materialized.silver_rows)
+                        if silver_persisted and materialized.report.passed
+                        else 0
+                    ),
+                    dq_passed=materialized.report.passed,
+                    error_message=f"Batch {phase} persistence failed: {exc}",
+                )
+            run.finalize()
+            self._persist_run(run)
+            log.exception("Run-batched %s persistence failed", phase)
+            raise
 
     def _update_run_progress(self, run: EtlRun, *, total: int) -> None:
         run.series_total = total

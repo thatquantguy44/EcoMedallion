@@ -11,13 +11,13 @@ commit instead of copying or silently updating its files.
 
 | Field | Value |
 | --- | --- |
-| Local source used for verification | `/Users/joshualutkemuller/Documents/Quant Sandbox/agentic_workflows/agent-skills` |
-| Portable submodule remote | `https://github.com/thatquantguy44/agent-skills.git` |
+| Submodule remote | Repository-relative `../agent-skills.git` |
 | Commit | `f63ec56a3cc936408d792956ae583c3c96a825bd` |
 | License | MIT |
 
-The absolute source path is provenance only. It is not used by `.gitmodules`,
-so other machines and CI can initialize the same pin.
+The repository-relative remote keeps the project portable without embedding an
+account-specific GitHub URL. Git resolves it relative to the parent repository
+remote; the recorded commit remains the exact reproducible library pin.
 
 ## Initialize and verify
 

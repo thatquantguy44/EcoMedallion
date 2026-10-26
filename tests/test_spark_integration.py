@@ -351,6 +351,32 @@ def test_append_rows(spark):
     assert spark.table("append_it").count() == 2
 
 
+def test_series_clustered_dataframe_range_partitions_and_sorts(spark):
+    from fred_pipeline.spark_io import cluster_dataframe_by_series
+
+    rows = [
+        {"source": "fred", "series_id": "B", "observation_date": "2024-01-02"},
+        {"source": "fred", "series_id": "A", "observation_date": "2024-01-03"},
+        {"source": "fred", "series_id": "A", "observation_date": "2024-01-01"},
+        {"source": "fred", "series_id": "B", "observation_date": "2024-01-01"},
+    ]
+    clustered = cluster_dataframe_by_series(
+        spark.createDataFrame(rows),
+        target_partitions=2,
+        sort_columns=("source", "series_id", "observation_date"),
+    )
+
+    assert clustered.rdd.getNumPartitions() == 2
+    partitions = (
+        clustered.rdd.map(
+            lambda row: (row["source"], row["series_id"], row["observation_date"])
+        )
+        .glom()
+        .collect()
+    )
+    assert all(partition == sorted(partition) for partition in partitions)
+
+
 def test_gold_latest_revision_sql(spark):
     """The Gold 'latest revision per date' logic must pick the newest vintage."""
     rows = [

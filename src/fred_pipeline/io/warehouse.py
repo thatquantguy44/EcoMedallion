@@ -44,6 +44,7 @@ class Warehouse(Protocol):
     def write_release_calendar(self, rows: list[dict[str, Any]]) -> int: ...
     def persist_run(self, run: EtlRun) -> None: ...
     def persist_dq(self, run_id: str, report: QualityReport) -> None: ...
+    def persist_dq_reports(self, run_id: str, reports: list[QualityReport]) -> None: ...
     def close(self) -> None: ...
 
 
@@ -207,24 +208,34 @@ class SparkWarehouse:
         # Full-refresh (not append): it's a re-fetched forward schedule, not
         # an accumulating observation history, so overwrite each run.
         from pyspark.sql.types import (
-            BooleanType, IntegerType, StringType, StructField, StructType,
+            BooleanType,
+            IntegerType,
+            StringType,
+            StructField,
+            StructType,
         )
 
-        schema = StructType([
-            StructField("release_id", IntegerType()),
-            StructField("release_name", StringType()),
-            StructField("release_date", StringType()),
-            StructField("importance", StringType()),
-            StructField("econ_category", StringType()),
-            StructField("representative_series_id", StringType()),
-            StructField("is_future", BooleanType()),
-            StructField("fetched_at", StringType()),
-        ])
+        schema = StructType(
+            [
+                StructField("release_id", IntegerType()),
+                StructField("release_name", StringType()),
+                StructField("release_date", StringType()),
+                StructField("importance", StringType()),
+                StructField("econ_category", StringType()),
+                StructField("representative_series_id", StringType()),
+                StructField("is_future", BooleanType()),
+                StructField("fetched_at", StringType()),
+            ]
+        )
         self.spark.createDataFrame(rows, schema=schema).selectExpr(
-            "release_id", "release_name",
+            "release_id",
+            "release_name",
             "CAST(release_date AS DATE) AS release_date",
-            "importance", "econ_category", "representative_series_id",
-            "is_future", "fetched_at",
+            "importance",
+            "econ_category",
+            "representative_series_id",
+            "is_future",
+            "fetched_at",
         ).write.format("delta").mode("overwrite").option(
             "overwriteSchema", "true"
         ).saveAsTable(self.config.table("gold", "release_calendar"))
@@ -241,12 +252,25 @@ class SparkWarehouse:
         )
 
     def persist_dq(self, run_id: str, report: QualityReport) -> None:
-        from fred_pipeline.spark_io import append_rows
+        self.persist_dq_reports(run_id, [report])
 
+    def persist_dq_reports(self, run_id: str, reports: list[QualityReport]) -> None:
+        from fred_pipeline.spark_io import append_rows, target_partitions_for_rows
+
+        rows = [row for report in reports for row in dq_rows(run_id, report)]
+        target_partitions = None
+        if self.config.persistence_write_mode == "run_batched":
+            target_partitions = target_partitions_for_rows(
+                rows,
+                target_file_size_mb=self.config.persistence_delta_target_file_size_mb,
+                target_partitions=self.config.persistence_delta_target_partitions,
+            )
         append_rows(
             self.spark,
-            dq_rows(run_id, report),
+            rows,
             self.config.table("audit", "data_quality_result"),
+            target_partitions=target_partitions,
+            sort_columns=("series_id", "check_name"),
         )
 
     def close(self) -> None:  # Spark session is managed by the runtime.
