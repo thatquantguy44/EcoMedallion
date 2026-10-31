@@ -714,3 +714,6 @@ divergence flag); a pluggable storage backend
 (**Databricks/Delta or local SQLite**); layered configuration (**YAML file / env
 vars / args / secret scope**); Unity Catalog DDL; the audit framework; a
 **GitHub Actions CI**; and the Databricks Asset Bundle (main + per-source jobs).
+
+For explicitly authorized, bounded source repairs with private captures and reversible
+PostgreSQL backups, see [staged FRED source repair](docs/source_repair.md).
