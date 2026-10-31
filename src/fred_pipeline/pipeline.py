@@ -17,13 +17,19 @@ from collections import defaultdict
 from collections.abc import Iterable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
 from fred_pipeline.audit import EtlRun, EtlSeriesRun, RunStatus
 from fred_pipeline.bronze import build_bronze_row
 from fred_pipeline.config import Environment, PipelineConfig
-from fred_pipeline.manifest import LoadType, SeriesSpec, all_series, load_manifests
+from fred_pipeline.manifest import (
+    FREQUENCY_MAX_AGE_DAYS,
+    LoadType,
+    SeriesSpec,
+    all_series,
+    load_manifests,
+)
 from fred_pipeline.quality import run_quality_checks
 from fred_pipeline.sources.base import SourceClient
 from fred_pipeline.sources.bea import BEAClient
@@ -403,6 +409,9 @@ def _series_is_due(
     expected_update_frequency: str,
     last_ingested_at: str | None,
     now: datetime,
+    *,
+    latest_period: str | None = None,
+    observation_frequency: str = "",
 ) -> bool:
     """Decide whether a series is due for extraction this run (spec007).
 
@@ -413,8 +422,20 @@ def _series_is_due(
     today's "always attempt" behavior rather than a new way to silently
     under-serve data. ``last_ingested_at`` is an ISO 8601 timestamp (as written
     to ``silver_fred_observation.ingested_at``); an unchanged re-pull leaves
-    that timestamp intact. Naive timestamps are assumed UTC.
+    that timestamp intact. Naive timestamps are assumed UTC. For FRED, a
+    supplied observation period older than its existing frequency threshold
+    overrides cadence gating; fresh data retain the usual cadence.
     """
+    if latest_period is not None:
+        try:
+            threshold = FREQUENCY_MAX_AGE_DAYS.get(observation_frequency)
+            if (
+                threshold is not None
+                and (now.date() - date.fromisoformat(latest_period)).days > threshold
+            ):
+                return True
+        except (TypeError, ValueError):
+            return True  # Malformed period evidence must not suppress a poll.
     if last_ingested_at is None:
         return True
     interval = _CADENCE_MIN_INTERVAL.get(expected_update_frequency)
@@ -1178,6 +1199,13 @@ class FredPipeline:
         gate_active = skip_not_due and not force_full
         last_ingested = self._last_ingested_at_by_series() if gate_active else {}
         now = datetime.now(timezone.utc)
+        latest_getter = getattr(self.warehouse, "latest_observation_dates", None)
+        fred_ids = [spec.series_id for spec in specs if spec.source == "fred"]
+        latest_periods = (
+            latest_getter(fred_ids)
+            if gate_active and fred_ids and callable(latest_getter)
+            else {}
+        )
 
         due_specs: list[SeriesSpec] = []
         series_runs: list[EtlSeriesRun] = []
@@ -1185,7 +1213,13 @@ class FredPipeline:
         for spec in specs:
             sr = run.start_series(spec.series_id, load_type=spec.load_type.value)
             if gate_active and not _series_is_due(
-                spec.expected_update_frequency, last_ingested.get(spec.series_id), now
+                spec.expected_update_frequency,
+                last_ingested.get(spec.series_id),
+                now,
+                latest_period=latest_periods.get(spec.series_id)
+                if spec.source == "fred"
+                else None,
+                observation_frequency=spec.frequency,
             ):
                 sr.complete(RunStatus.SKIPPED_NOT_DUE)
                 skipped += 1

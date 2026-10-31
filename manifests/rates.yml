@@ -15,7 +15,7 @@ series:
     units: Percent
     load_type: incremental
     expected_update_frequency: business_daily
-    vintage_enabled: false   # market rate, not revised
+    vintage_enabled: true   # market rate, not revised
     validation_profile: standard
     business_owner: quant-macro
     technical_owner: data-eng
@@ -31,7 +31,7 @@ series:
     frequency: d
     expected_update_frequency: daily
     units: Percent
-    vintage_enabled: false
+    vintage_enabled: true
     downstream_use_case: yield_curve
     priority: 1
     tags: [rates, curve, treasury]
@@ -42,7 +42,7 @@ series:
     frequency: d
     expected_update_frequency: daily
     units: Percent
-    vintage_enabled: false
+    vintage_enabled: true
     downstream_use_case: yield_curve
     priority: 2
     tags: [rates, curve, treasury]
@@ -53,7 +53,7 @@ series:
     frequency: d
     expected_update_frequency: daily
     units: Percent
-    vintage_enabled: false
+    vintage_enabled: true
     downstream_use_case: yield_curve
     priority: 1
     tags: [rates, curve, treasury]
@@ -64,7 +64,7 @@ series:
     frequency: d
     expected_update_frequency: daily
     units: Percent
-    vintage_enabled: false
+    vintage_enabled: true
     downstream_use_case: yield_curve
     priority: 1
     tags: [rates, curve, treasury]
@@ -75,7 +75,7 @@ series:
     frequency: d
     expected_update_frequency: daily
     units: Percent
-    vintage_enabled: false
+    vintage_enabled: true
     downstream_use_case: yield_curve
     priority: 1
     tags: [rates, curve, treasury]
@@ -86,7 +86,7 @@ series:
     frequency: d
     expected_update_frequency: daily
     units: Percent
-    vintage_enabled: false
+    vintage_enabled: true
     downstream_use_case: yield_curve
     priority: 1
     tags: [rates, curve, treasury, benchmark]
@@ -97,7 +97,7 @@ series:
     frequency: d
     expected_update_frequency: daily
     units: Percent
-    vintage_enabled: false
+    vintage_enabled: true
     downstream_use_case: yield_curve
     priority: 2
     tags: [rates, curve, treasury]
@@ -112,7 +112,7 @@ series:
     expected_update_frequency: daily
     units: Percent
     active: true
-    vintage_enabled: false
+    vintage_enabled: true
     downstream_use_case: yield_curve
     priority: 2
     tags: [rates, curve, treasury]
@@ -124,7 +124,7 @@ series:
     expected_update_frequency: daily
     units: Percent
     active: true
-    vintage_enabled: false
+    vintage_enabled: true
     downstream_use_case: yield_curve
     priority: 2
     tags: [rates, curve, treasury]
@@ -136,7 +136,7 @@ series:
     expected_update_frequency: daily
     units: Percent
     active: true
-    vintage_enabled: false
+    vintage_enabled: true
     downstream_use_case: yield_curve
     priority: 3
     tags: [rates, curve, treasury]
@@ -150,7 +150,7 @@ series:
     expected_update_frequency: daily
     units: Percent
     active: true
-    vintage_enabled: false
+    vintage_enabled: true
     downstream_use_case: benchmark_board
     priority: 3
     min_value: 0
@@ -164,7 +164,7 @@ series:
     expected_update_frequency: weekly
     units: Percent
     active: true
-    vintage_enabled: false
+    vintage_enabled: true
     downstream_use_case: benchmark_board
     priority: 3
     min_value: 0
@@ -178,7 +178,7 @@ series:
     expected_update_frequency: weekly
     units: Percent
     active: true
-    vintage_enabled: false
+    vintage_enabled: true
     downstream_use_case: benchmark_board
     priority: 3
     min_value: 0
@@ -192,7 +192,7 @@ series:
     expected_update_frequency: daily
     units: Percent
     active: true
-    vintage_enabled: false
+    vintage_enabled: true
     downstream_use_case: yield_curve
     priority: 2
     tags: [rates, curve, treasury, tips, real]
@@ -204,7 +204,7 @@ series:
     expected_update_frequency: daily
     units: Percent
     active: true
-    vintage_enabled: false
+    vintage_enabled: true
     downstream_use_case: inflation_expectations
     priority: 2
     tags: [rates, inflation, breakeven, forward]
@@ -216,7 +216,7 @@ series:
     expected_update_frequency: daily
     units: Percent
     active: true
-    vintage_enabled: false
+    vintage_enabled: true
     downstream_use_case: yield_curve
     priority: 2
     tags: [rates, curve, spread]
@@ -228,7 +228,7 @@ series:
     expected_update_frequency: daily
     units: Percent
     active: true
-    vintage_enabled: false
+    vintage_enabled: true
     downstream_use_case: yield_curve
     priority: 2
     tags: [rates, curve, spread]
@@ -240,7 +240,7 @@ series:
     expected_update_frequency: daily
     units: Percent
     active: true
-    vintage_enabled: false
+    vintage_enabled: true
     downstream_use_case: yield_curve
     priority: 3
     tags: [rates, bill, treasury]
@@ -252,7 +252,7 @@ series:
     expected_update_frequency: daily
     units: Percent
     active: true
-    vintage_enabled: false
+    vintage_enabled: true
     downstream_use_case: yield_curve
     priority: 3
     tags: [rates, bill, treasury]
@@ -264,7 +264,7 @@ series:
     expected_update_frequency: daily
     units: Percent
     active: true
-    vintage_enabled: false
+    vintage_enabled: true
     downstream_use_case: yield_curve
     priority: 3
     tags: [rates, bill, treasury]
@@ -276,7 +276,7 @@ series:
     units: Percent
     load_type: incremental
     expected_update_frequency: monthly
-    vintage_enabled: false   # effective rate, not revised
+    vintage_enabled: true   # effective rate, not revised
     downstream_use_case: policy_rate
     priority: 1
     tags: [rates, policy]
@@ -286,7 +286,7 @@ series:
     category: rates
     frequency: d
     units: Percent
-    vintage_enabled: false
+    vintage_enabled: true
     expected_update_frequency: business_daily
     downstream_use_case: discounting
     priority: 1

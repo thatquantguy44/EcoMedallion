@@ -36,7 +36,7 @@ series:
     expected_update_frequency: monthly
     units: Diffusion Index (SA)
     active: true
-    vintage_enabled: false
+    vintage_enabled: true
     validation_profile: standard
     downstream_use_case: regional_survey
     priority: 4
@@ -49,7 +49,7 @@ series:
     expected_update_frequency: monthly
     units: Diffusion Index (SA)
     active: true
-    vintage_enabled: false
+    vintage_enabled: true
     validation_profile: standard
     downstream_use_case: regional_survey
     priority: 4
@@ -62,7 +62,7 @@ series:
     expected_update_frequency: monthly
     units: Diffusion Index (SA)
     active: true
-    vintage_enabled: false
+    vintage_enabled: true
     validation_profile: standard
     downstream_use_case: regional_survey
     priority: 5
@@ -75,7 +75,7 @@ series:
     expected_update_frequency: monthly
     units: Index Dec 1982=100
     active: true
-    vintage_enabled: false
+    vintage_enabled: true
     validation_profile: standard
     downstream_use_case: alt_inflation
     priority: 4
@@ -89,7 +89,7 @@ series:
     expected_update_frequency: monthly
     units: Index
     active: true
-    vintage_enabled: false
+    vintage_enabled: true
     validation_profile: standard
     downstream_use_case: financial_conditions
     priority: 3

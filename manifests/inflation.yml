@@ -70,7 +70,7 @@ series:
     frequency: d
     expected_update_frequency: daily
     units: Percent
-    vintage_enabled: false   # daily market-implied series, not revised
+    vintage_enabled: true   # daily market-implied series, not revised
     downstream_use_case: market_implied_inflation
     priority: 2
     tags: [inflation, breakeven, market]
@@ -81,7 +81,7 @@ series:
     frequency: d
     expected_update_frequency: daily
     units: Percent
-    vintage_enabled: false   # daily market-implied series, not revised
+    vintage_enabled: true   # daily market-implied series, not revised
     downstream_use_case: market_implied_inflation
     priority: 2
     tags: [inflation, breakeven, market]
