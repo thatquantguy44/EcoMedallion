@@ -16,7 +16,7 @@ series:
     expected_update_frequency: quarterly
     units: "Index 1980:Q1=100"
     active: true
-    vintage_enabled: false
+    vintage_enabled: true
     validation_profile: standard
     downstream_use_case: state_panel
     priority: 5
@@ -29,7 +29,7 @@ series:
     expected_update_frequency: quarterly
     units: "Index 1980:Q1=100"
     active: true
-    vintage_enabled: false
+    vintage_enabled: true
     validation_profile: standard
     downstream_use_case: state_panel
     priority: 5
@@ -42,7 +42,7 @@ series:
     expected_update_frequency: quarterly
     units: "Index 1980:Q1=100"
     active: true
-    vintage_enabled: false
+    vintage_enabled: true
     validation_profile: standard
     downstream_use_case: state_panel
     priority: 5
@@ -55,7 +55,7 @@ series:
     expected_update_frequency: quarterly
     units: "Index 1980:Q1=100"
     active: true
-    vintage_enabled: false
+    vintage_enabled: true
     validation_profile: standard
     downstream_use_case: state_panel
     priority: 5
@@ -68,7 +68,7 @@ series:
     expected_update_frequency: quarterly
     units: "Index 1980:Q1=100"
     active: true
-    vintage_enabled: false
+    vintage_enabled: true
     validation_profile: standard
     downstream_use_case: state_panel
     priority: 5
@@ -81,7 +81,7 @@ series:
     expected_update_frequency: quarterly
     units: "Index 1980:Q1=100"
     active: true
-    vintage_enabled: false
+    vintage_enabled: true
     validation_profile: standard
     downstream_use_case: state_panel
     priority: 5
@@ -94,7 +94,7 @@ series:
     expected_update_frequency: quarterly
     units: "Index 1980:Q1=100"
     active: true
-    vintage_enabled: false
+    vintage_enabled: true
     validation_profile: standard
     downstream_use_case: state_panel
     priority: 5
@@ -107,7 +107,7 @@ series:
     expected_update_frequency: quarterly
     units: "Index 1980:Q1=100"
     active: true
-    vintage_enabled: false
+    vintage_enabled: true
     validation_profile: standard
     downstream_use_case: state_panel
     priority: 5
@@ -120,7 +120,7 @@ series:
     expected_update_frequency: quarterly
     units: "Index 1980:Q1=100"
     active: true
-    vintage_enabled: false
+    vintage_enabled: true
     validation_profile: standard
     downstream_use_case: state_panel
     priority: 5
@@ -133,7 +133,7 @@ series:
     expected_update_frequency: quarterly
     units: "Index 1980:Q1=100"
     active: true
-    vintage_enabled: false
+    vintage_enabled: true
     validation_profile: standard
     downstream_use_case: state_panel
     priority: 5
@@ -146,7 +146,7 @@ series:
     expected_update_frequency: quarterly
     units: "Index 1980:Q1=100"
     active: true
-    vintage_enabled: false
+    vintage_enabled: true
     validation_profile: standard
     downstream_use_case: state_panel
     priority: 5
@@ -159,7 +159,7 @@ series:
     expected_update_frequency: quarterly
     units: "Index 1980:Q1=100"
     active: true
-    vintage_enabled: false
+    vintage_enabled: true
     validation_profile: standard
     downstream_use_case: state_panel
     priority: 5
@@ -172,7 +172,7 @@ series:
     expected_update_frequency: quarterly
     units: "Index 1980:Q1=100"
     active: true
-    vintage_enabled: false
+    vintage_enabled: true
     validation_profile: standard
     downstream_use_case: state_panel
     priority: 5
@@ -185,9 +185,8 @@ series:
     expected_update_frequency: quarterly
     units: "Index 1980:Q1=100"
     active: true
-    vintage_enabled: false
+    vintage_enabled: true
     validation_profile: standard
     downstream_use_case: state_panel
     priority: 5
     tags: [regional, state, house_price]
-

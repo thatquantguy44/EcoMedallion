@@ -23,7 +23,7 @@ series:
     expected_update_frequency: daily
     units: Percent
     active: true
-    vintage_enabled: false   # published market rate, not revised
+    vintage_enabled: true   # published market rate, not revised
     validation_profile: standard
     downstream_use_case: funding_tape
     priority: 1
@@ -38,7 +38,7 @@ series:
     expected_update_frequency: daily
     units: Percent
     active: true
-    vintage_enabled: false
+    vintage_enabled: true
     validation_profile: standard
     downstream_use_case: funding_tape
     priority: 1
@@ -53,7 +53,7 @@ series:
     expected_update_frequency: daily
     units: Percent
     active: true
-    vintage_enabled: false
+    vintage_enabled: true
     validation_profile: standard
     downstream_use_case: funding_tape
     priority: 2
@@ -86,7 +86,7 @@ series:
     expected_update_frequency: daily
     units: Percent
     active: true
-    vintage_enabled: false
+    vintage_enabled: true
     validation_profile: standard
     downstream_use_case: funding_tape
     priority: 2
@@ -101,7 +101,7 @@ series:
     expected_update_frequency: daily
     units: Billions of US Dollars
     active: true
-    vintage_enabled: false
+    vintage_enabled: true
     validation_profile: standard
     downstream_use_case: funding_tape
     priority: 2
@@ -115,7 +115,7 @@ series:
     expected_update_frequency: daily
     units: Percent
     active: true
-    vintage_enabled: false
+    vintage_enabled: true
     validation_profile: standard
     downstream_use_case: funding_tape
     priority: 3
@@ -130,7 +130,7 @@ series:
     expected_update_frequency: daily
     units: Percent
     active: true
-    vintage_enabled: false
+    vintage_enabled: true
     validation_profile: standard
     downstream_use_case: funding_tape
     priority: 2
@@ -145,7 +145,7 @@ series:
     expected_update_frequency: daily
     units: Percent
     active: true
-    vintage_enabled: false
+    vintage_enabled: true
     validation_profile: standard
     downstream_use_case: funding_tape
     priority: 1
@@ -160,7 +160,7 @@ series:
     expected_update_frequency: daily
     units: Percent
     active: true
-    vintage_enabled: false
+    vintage_enabled: true
     validation_profile: standard
     downstream_use_case: funding_tape
     priority: 1
@@ -175,7 +175,7 @@ series:
     expected_update_frequency: daily
     units: Percent
     active: true
-    vintage_enabled: false
+    vintage_enabled: true
     validation_profile: standard
     downstream_use_case: funding_tape
     priority: 2
@@ -190,7 +190,7 @@ series:
     expected_update_frequency: daily
     units: Percent
     active: true
-    vintage_enabled: false
+    vintage_enabled: true
     validation_profile: standard
     downstream_use_case: funding_tape
     priority: 3

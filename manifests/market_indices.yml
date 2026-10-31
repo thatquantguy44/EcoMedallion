@@ -18,7 +18,7 @@ series:
     expected_update_frequency: daily
     units: Index
     active: true
-    vintage_enabled: false
+    vintage_enabled: true
     validation_profile: standard
     downstream_use_case: market_regime
     priority: 1
@@ -74,7 +74,7 @@ series:
     expected_update_frequency: daily
     units: Dollars per Barrel
     active: true
-    vintage_enabled: false
+    vintage_enabled: true
     validation_profile: standard
     downstream_use_case: market_regime
     priority: 2

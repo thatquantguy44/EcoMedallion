@@ -19,7 +19,7 @@ series:
     expected_update_frequency: monthly
     units: "Percent"
     active: true
-    vintage_enabled: false
+    vintage_enabled: true
     validation_profile: standard
     downstream_use_case: regional_panel
     priority: 5
@@ -32,7 +32,7 @@ series:
     expected_update_frequency: monthly
     units: "Percent"
     active: true
-    vintage_enabled: false
+    vintage_enabled: true
     validation_profile: standard
     downstream_use_case: regional_panel
     priority: 5
@@ -45,7 +45,7 @@ series:
     expected_update_frequency: monthly
     units: "Percent"
     active: true
-    vintage_enabled: false
+    vintage_enabled: true
     validation_profile: standard
     downstream_use_case: regional_panel
     priority: 5
@@ -58,7 +58,7 @@ series:
     expected_update_frequency: monthly
     units: "Percent"
     active: true
-    vintage_enabled: false
+    vintage_enabled: true
     validation_profile: standard
     downstream_use_case: regional_panel
     priority: 5
@@ -375,4 +375,3 @@ series:
     downstream_use_case: regional_panel
     priority: 4
     tags: [regional, bls_cpi]
-
