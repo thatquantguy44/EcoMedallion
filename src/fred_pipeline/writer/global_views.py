@@ -528,6 +528,15 @@ POWERBI_CATALOG: tuple[dict[str, Any], ...] = (
         "MoM/diff/YoY/expanding-z transforms per series.",
     ),
     _entry(
+        "ecb_fx_reference_rate",
+        "fact",
+        "FX",
+        "1 / observation date x base currency x quote currency x orientation",
+        "FX rate matrix / pair drill",
+        "Exact ECB reference-rate native, inverse and same-date cross rates; no forward fill. "
+        "Use rate_decimal with its versioned rounding policy and input event lineage for research.",
+    ),
+    _entry(
         "powerbi_catalog",
         "reference",
         "ALL",

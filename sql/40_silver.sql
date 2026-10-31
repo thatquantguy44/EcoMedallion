@@ -13,9 +13,19 @@ CREATE TABLE IF NOT EXISTS silver.fred_observation (
     realtime_end     DATE,
     value            DOUBLE,
     raw_value        STRING,   -- original upstream string ('.' preserved as-is)
+    exact_value      STRING,   -- canonical Decimal string for precision-sensitive sources
     is_missing       BOOLEAN,
     row_hash         STRING,   -- sha256 change-detection hash
     revision_number  INT,      -- 1..N per (series_id, observation_date)
+    provider_valid_from STRING,
+    provider_valid_to   STRING,
+    base_currency     STRING,
+    quote_currency    STRING,
+    unit_multiplier   INT,
+    observation_status STRING,
+    observation_action STRING,
+    is_deleted        BOOLEAN,
+    observation_event_id STRING,
     ingested_at      TIMESTAMP,
     run_id           STRING
 )
@@ -27,6 +37,24 @@ TBLPROPERTIES (
     delta.autoOptimize.autoCompact = true,
     delta.enableChangeDataFeed = true
 );
+
+-- Append-only observed state ledger.  This is deliberately separate from the
+-- compact current-state table above: captured-as-of consumers must retain an
+-- A -> B -> A correction sequence and source withdrawals.
+CREATE TABLE IF NOT EXISTS silver.fred_observation_history (
+    observation_event_id STRING NOT NULL,
+    source STRING NOT NULL, series_id STRING NOT NULL, observation_date DATE NOT NULL,
+    realtime_start DATE, realtime_end DATE, value DOUBLE, raw_value STRING,
+    exact_value STRING, is_missing BOOLEAN, row_hash STRING, revision_number INT,
+    provider_valid_from STRING, provider_valid_to STRING,
+    base_currency STRING, quote_currency STRING, unit_multiplier INT,
+    observation_status STRING, observation_action STRING, is_deleted BOOLEAN,
+    ingested_at TIMESTAMP NOT NULL, run_id STRING
+)
+USING DELTA
+PARTITIONED BY (series_id)
+COMMENT 'Immutable observed normalized states for captured-as-of reconstruction'
+TBLPROPERTIES (delta.enableChangeDataFeed = true);
 
 -- spec011 accepted releases and compact point-in-time security history.
 CREATE TABLE IF NOT EXISTS silver.ecb_eligible_asset_release (

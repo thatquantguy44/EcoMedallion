@@ -25,6 +25,7 @@ def build_bronze_row(
     source: str = "fred",
     request_params: Optional[dict[str, Any]] = None,
     observation_count: Optional[int] = None,
+    ingested_at: Any = None,
 ) -> dict[str, Any]:
     """Assemble a single ``bronze.fred_api_response`` row from a raw payload.
 
@@ -46,7 +47,7 @@ def build_bronze_row(
         "response_payload": json.dumps(payload),
         "observation_count": observation_count,
         "payload_bytes": summary["payload_bytes"],
-        "ingested_at": datetime.now(timezone.utc),
+        "ingested_at": ingested_at or datetime.now(timezone.utc).isoformat(),
     }
 
 

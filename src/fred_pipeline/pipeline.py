@@ -958,8 +958,14 @@ class FredPipeline:
                 raise outcome
             payload = outcome
             source = getattr(spec, "source", "fred") or "fred"
+            # Bronze and every derived Silver row describe one observed pull;
+            # share its capture timestamp so replay can reconstruct the same
+            # captured-as-of history instead of inventing a new clock time.
+            captured_at = datetime.now(timezone.utc).isoformat()
 
-            silver_rows = self._normalize(spec, payload, run_id=run.run_id)
+            silver_rows = self._normalize(
+                spec, payload, run_id=run.run_id, ingested_at=captured_at
+            )
             # Count from normalized rows so the metric is source-agnostic (BLS
             # nests observations under Results.series[].data, not a top-level key).
             observations_extracted = len(silver_rows)
@@ -970,6 +976,7 @@ class FredPipeline:
                 run_id=run.run_id,
                 source=source,
                 observation_count=observations_extracted,
+                ingested_at=captured_at,
             )
             report = run_quality_checks(
                 spec.series_id,
@@ -1258,7 +1265,12 @@ class FredPipeline:
         return fn(spec.series_id) if fn else "series/observations"
 
     def _normalize(
-        self, spec: SeriesSpec, payload: dict[str, Any], *, run_id: str
+        self,
+        spec: SeriesSpec,
+        payload: dict[str, Any],
+        *,
+        run_id: str,
+        ingested_at: str | None = None,
     ) -> list[dict[str, Any]]:
         """Map a raw payload into revision-numbered silver rows.
 
@@ -1287,6 +1299,8 @@ class FredPipeline:
                 track_vintage=spec.vintage_enabled,
                 source=source,
             )
+        for row in rows:
+            row["ingested_at"] = ingested_at or row.get("ingested_at")
         return assign_revision_numbers(rows)
 
     # ---- audit persistence ----------------------------------------------

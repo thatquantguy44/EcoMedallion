@@ -55,8 +55,12 @@ def replay_from_bronze(
         # fetched); fall back to the manifest, then FRED for legacy rows.
         source = row.get("source") or source_by_id.get(series_id) or "fred"
         silver_rows = build_silver_rows(
-            series_id, payload, run_id=row.get("run_id") or "replay",
-            track_vintage=vintage.get(series_id, True), source=source,
+            series_id,
+            payload,
+            run_id=row.get("run_id") or "replay",
+            ingested_at=row.get("ingested_at"),
+            track_vintage=vintage.get(series_id, True),
+            source=source,
         )
         silver_merged += warehouse.merge_silver(silver_rows)
         payloads += 1

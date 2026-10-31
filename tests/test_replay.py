@@ -14,12 +14,22 @@ def _manifest(spec):
 
 
 def _payload():
-    return {"observations": [
-        {"date": "2024-01-01", "value": "1.0", "realtime_start": "2024-02-01",
-         "realtime_end": "9999-12-31"},
-        {"date": "2024-01-02", "value": "2.0", "realtime_start": "2024-02-01",
-         "realtime_end": "9999-12-31"},
-    ]}
+    return {
+        "observations": [
+            {
+                "date": "2024-01-01",
+                "value": "1.0",
+                "realtime_start": "2024-02-01",
+                "realtime_end": "9999-12-31",
+            },
+            {
+                "date": "2024-01-02",
+                "value": "2.0",
+                "realtime_start": "2024-02-01",
+                "realtime_end": "9999-12-31",
+            },
+        ]
+    }
 
 
 class Client:
@@ -52,6 +62,13 @@ def test_replay_rebuilds_silver_from_bronze(tmp_path):
     assert result["bronze_payloads_replayed"] == 1
     assert result["gold_rebuilt"] is True
     assert wh.query("SELECT count(*) c FROM silver_fred_observation")[0]["c"] == 2
+    replayed_capture = wh.query(
+        "SELECT DISTINCT ingested_at FROM silver_fred_observation_history ORDER BY ingested_at"
+    )
+    original_capture = wh.query(
+        "SELECT DISTINCT ingested_at FROM bronze_fred_api_response ORDER BY ingested_at"
+    )
+    assert replayed_capture == original_capture
     # gold rebuilt too
     assert wh.query("SELECT count(*) c FROM gold_fred_latest_observation")[0]["c"] == 2
     wh.close()
@@ -64,14 +81,27 @@ def test_replay_routes_by_source(tmp_path, fake_session_cls, fake_response_cls):
 
     cfg = _config()
     db = str(tmp_path / "f.db")
-    spec = SeriesSpec(series_id="CUUR0000SA0", title="CPI", frequency="m",
-                      source="bls", vintage_enabled=False)
+    spec = SeriesSpec(
+        series_id="CUUR0000SA0",
+        title="CPI",
+        frequency="m",
+        source="bls",
+        vintage_enabled=False,
+    )
     bls_payload = {
-        "status": "REQUEST_SUCCEEDED", "message": [],
-        "Results": {"series": [{"seriesID": "CUUR0000SA0", "data": [
-            {"year": "2024", "period": "M12", "value": "315.6"},
-            {"year": "2024", "period": "M11", "value": "314.4"},
-        ]}]},
+        "status": "REQUEST_SUCCEEDED",
+        "message": [],
+        "Results": {
+            "series": [
+                {
+                    "seriesID": "CUUR0000SA0",
+                    "data": [
+                        {"year": "2024", "period": "M12", "value": "315.6"},
+                        {"year": "2024", "period": "M11", "value": "314.4"},
+                    ],
+                }
+            ]
+        },
     }
     session = fake_session_cls([fake_response_cls(bls_payload)])
     bls = BLSClient(session=session, sleep=lambda _s: None)
@@ -88,8 +118,9 @@ def test_replay_routes_by_source(tmp_path, fake_session_cls, fake_response_cls):
     result = replay_from_bronze(cfg, [_manifest(spec)], wh, rebuild_gold=False)
 
     assert result["bronze_payloads_replayed"] == 1
-    rows = wh.query("SELECT source, count(*) c FROM silver_fred_observation "
-                    "GROUP BY source")
+    rows = wh.query(
+        "SELECT source, count(*) c FROM silver_fred_observation GROUP BY source"
+    )
     # re-derived correctly as BLS rows (FRED normalizer would have raised on the
     # missing 'observations' key and produced nothing)
     assert rows == [{"source": "bls", "c": 2}]
@@ -99,8 +130,10 @@ def test_replay_routes_by_source(tmp_path, fake_session_cls, fake_response_cls):
 def test_replay_is_idempotent_and_filters_series(tmp_path):
     cfg = _config()
     db = str(tmp_path / "f.db")
-    specs = [SeriesSpec(series_id="A", title="A", frequency="d"),
-             SeriesSpec(series_id="B", title="B", frequency="d")]
+    specs = [
+        SeriesSpec(series_id="A", title="A", frequency="d"),
+        SeriesSpec(series_id="B", title="B", frequency="d"),
+    ]
     man = Manifest.from_dict({"name": "t", "series": [s.to_dict() for s in specs]})
 
     wh = LocalWarehouse(cfg, db_path=db)

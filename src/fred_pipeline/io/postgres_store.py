@@ -63,6 +63,7 @@ _UPSERT_KEYS: dict[str, tuple[str, ...]] = {
         "observation_date",
         "realtime_start",
     ),
+    "silver_fred_observation_history": ("observation_event_id",),
     "audit_etl_run": ("run_id",),
     "bronze_ecb_eligible_asset_release": ("release_id",),
     "bronze_ecb_eligible_asset_artifact": ("release_id", "artifact_kind"),
@@ -177,6 +178,7 @@ def _borrowed_from_local_warehouse(cls: type) -> type:
         "_build_funding_stress_daily",
         "_build_series_correlation",
         "_build_equity_total_return_index",
+        "_rebuild_ecb_fx_reference_rates",
         "_read_gold_silver_subset",
         "_gold_latest_inventory",
     ):
@@ -252,6 +254,25 @@ class PostgresWarehouse:
             cur.execute(_POSTGRES_VIEW_SQL)
             cur.execute(_POSTGRES_SERIES_GEOGRAPHY_VIEW_SQL)
         self._pg_conn.commit()
+        self._backfill_observation_history()
+
+    def _backfill_observation_history(self) -> None:
+        """Seed pre-Spec015 compact rows as their one known observed state."""
+        from fred_pipeline.data.observation_history import observation_event
+
+        # This migration is intentionally one-time. Avoid a full compact-Silver
+        # scan and no-op upserts each time an established warehouse opens.
+        if self.query("SELECT 1 FROM silver.fred_observation_history LIMIT 1"):
+            return
+        rows = self._read("silver_fred_observation")
+        events = [observation_event(row) for row in rows]
+        if events:
+            self._insert(
+                "silver_fred_observation_history",
+                events,
+                upsert_keys=_UPSERT_KEYS["silver_fred_observation_history"],
+                conflict_where="FALSE",
+            )
 
     def _ensure_upsert_keys(self, cur: Any) -> None:
         """Make sure every upsert target has the unique index ON CONFLICT needs.
@@ -326,6 +347,16 @@ class PostgresWarehouse:
         ("gold_dim_date", "is_monthly_option_expiry", "INTEGER"),
         ("gold_dim_date", "is_triple_witching", "INTEGER"),
         ("audit_etl_run", "series_skipped_not_due", "INTEGER"),
+        ("silver_fred_observation", "exact_value", "TEXT"),
+        ("silver_fred_observation", "provider_valid_from", "TEXT"),
+        ("silver_fred_observation", "provider_valid_to", "TEXT"),
+        ("silver_fred_observation", "base_currency", "TEXT"),
+        ("silver_fred_observation", "quote_currency", "TEXT"),
+        ("silver_fred_observation", "unit_multiplier", "INTEGER"),
+        ("silver_fred_observation", "observation_status", "TEXT"),
+        ("silver_fred_observation", "observation_action", "TEXT"),
+        ("silver_fred_observation", "is_deleted", "INTEGER"),
+        ("silver_fred_observation", "observation_event_id", "TEXT"),
     )
 
     # ---- low-level helpers --------------------------------------------
@@ -518,9 +549,59 @@ class PostgresWarehouse:
         return self.query(sql, params)
 
     def merge_silver(self, rows: list[dict[str, Any]]) -> int:
+        from fred_pipeline.data.observation_history import (
+            observation_event,
+            with_observation_event,
+        )
+
+        prepared = [with_observation_event(row) for row in rows]
+        current_hashes: dict[tuple[str, str, str, str], Any] = {}
+        changed: list[dict[str, Any]] = []
+        try:
+            with self._pg_conn.cursor() as cur:
+                for source, series_id in {
+                    (str(row.get("source") or "fred"), str(row.get("series_id") or ""))
+                    for row in prepared
+                }:
+                    cur.execute(
+                        """
+                        SELECT observation_date, realtime_start, row_hash
+                        FROM silver.fred_observation
+                        WHERE source = %s AND series_id = %s
+                        """,
+                        (source, series_id),
+                    )
+                    for current in cur.fetchall():
+                        current_hashes[
+                            (
+                                source,
+                                series_id,
+                                str(current["observation_date"]),
+                                str(current["realtime_start"] or ""),
+                            )
+                        ] = current["row_hash"]
+            for row in prepared:
+                natural_key = (
+                    str(row.get("source") or "fred"),
+                    str(row.get("series_id") or ""),
+                    str(row.get("observation_date") or ""),
+                    str(row.get("realtime_start") or ""),
+                )
+                if current_hashes.get(natural_key) != row.get("row_hash"):
+                    changed.append(observation_event(row))
+        except Exception:
+            self._rollback_unless_deferred()
+            raise
+        if changed:
+            self._insert(
+                "silver_fred_observation_history",
+                changed,
+                upsert_keys=_UPSERT_KEYS["silver_fred_observation_history"],
+                conflict_where="FALSE",
+            )
         return self._insert(
             "silver_fred_observation",
-            rows,
+            prepared,
             upsert_keys=_UPSERT_KEYS["silver_fred_observation"],
             conflict_where=(
                 'EXCLUDED."row_hash" IS DISTINCT FROM "fred_observation"."row_hash"'
@@ -670,9 +751,10 @@ class PostgresWarehouse:
     def point_in_time_features(self, as_of: str) -> list[dict[str, Any]]:
         from fred_pipeline.features import point_in_time_snapshot
 
-        silver = self._read("silver_fred_observation")
+        silver = self._read("silver_fred_observation_history")
         for row in silver:
             row["is_missing"] = bool(row.get("is_missing"))
+            row["is_deleted"] = bool(row.get("is_deleted"))
         return point_in_time_snapshot(silver, as_of)
 
     def write_lifecycle(self, rows: list[dict[str, Any]]) -> int:

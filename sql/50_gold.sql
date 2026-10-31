@@ -205,6 +205,24 @@ CREATE TABLE IF NOT EXISTS gold.fred_cross_series_feature_pit (
 )
 USING DELTA;
 
+-- Canonical ECB reference FX rates.  Native EUR-base inputs, inverses and
+-- same-date crosses are calculated with Decimal arithmetic by the Python
+-- builder; there is intentionally no forward fill in this source-owned table.
+CREATE TABLE IF NOT EXISTS gold.ecb_fx_reference_rate (
+    observation_date DATE NOT NULL,
+    base_currency STRING NOT NULL,
+    quote_currency STRING NOT NULL,
+    orientation STRING NOT NULL,
+    rate_decimal STRING,
+    rounded_rate_decimal STRING,
+    rounding_policy_version STRING NOT NULL,
+    native_series_ids STRING NOT NULL,
+    input_event_ids STRING NOT NULL,
+    availability_state STRING NOT NULL,
+    quality_reason STRING
+)
+USING DELTA;
+
 -- Cross-source reconciliation (config/reconciliations.yml): same-concept series
 -- from different sources, aligned and compared with a divergence flag. Computed
 -- by the shared Python engine (fred_pipeline.features.compute_source_reconciliation)

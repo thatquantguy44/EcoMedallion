@@ -158,12 +158,12 @@ def test_postgres_warehouse_builds_core_gold_like_local(tmp_path, postgres_dsn):
             # FRED response plus the spec011 release/artifact tables.
             "bronze": 3,
             # Includes gold_incremental_checkpoint (spec003 Phase 3 checkpoint
-            # infra) and mmkt_rate_snapshot (spec009).
-            "gold": 58,
+            # infra), mmkt_rate_snapshot (spec009), and Spec015 ECB FX output.
+            "gold": 59,
             "meta": 7,
-            # FRED observations, four spec011 PIT tables, and four archive
-            # backfill staging tables.
-            "silver": 9,
+            # Compact observations plus Spec015 immutable observation history,
+            # four spec011 PIT tables, and four archive backfill staging tables.
+            "silver": 10,
         }
         view_counts = pg.query(
             """
@@ -1106,5 +1106,41 @@ def test_a_failed_statement_does_not_poison_the_connection(postgres_dsn):
         assert wh.query("SELECT series_id FROM meta.fred_series") == [
             {"series_id": "B"}
         ]
+    finally:
+        wh.close()
+
+
+def test_postgres_retains_changed_observed_states(postgres_dsn):
+    wh = PostgresWarehouse(_config(), dsn=postgres_dsn)
+    try:
+        base = _silver_row(
+            "ECB:EXR:D.USD.EUR.SP00.A",
+            "2024-01-02",
+            "",
+            1.25,
+            1,
+            source="ecb",
+            ingested_at="2024-01-02T16:00:00+00:00",
+        )
+        first = {**base, "row_hash": "a", "run_id": "a"}
+        second = {
+            **base,
+            "value": 1.30,
+            "raw_value": "1.30",
+            "row_hash": "b",
+            "ingested_at": "2024-01-03T16:00:00+00:00",
+            "run_id": "b",
+        }
+        third = {
+            **first,
+            "ingested_at": "2024-01-04T16:00:00+00:00",
+            "run_id": "c",
+        }
+        for row in (first, second, third):
+            wh.merge_silver([row])
+        history = wh.query(
+            "SELECT value FROM silver.fred_observation_history ORDER BY ingested_at"
+        )
+        assert history == [{"value": 1.25}, {"value": 1.30}, {"value": 1.25}]
     finally:
         wh.close()

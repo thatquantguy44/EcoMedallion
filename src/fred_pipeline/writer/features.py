@@ -19,7 +19,9 @@ from __future__ import annotations
 
 from bisect import bisect_left, bisect_right, insort
 from collections.abc import Iterable
-from datetime import date, timedelta
+from datetime import date, datetime, time, timezone, timedelta
+from decimal import Decimal, InvalidOperation, ROUND_HALF_EVEN
+import json
 from typing import Any
 
 from fred_pipeline.cross_series_config import CrossSeriesDef, load_cross_series_defs
@@ -32,6 +34,10 @@ from fred_pipeline.spread_config import SpreadDef, load_spread_defs
 # How far back a "year ago" match may be before YoY is left null (daily series
 # won't have an exact −365d point).
 YOY_TOLERANCE_DAYS = 40
+
+ECB_FX_QUOTES = ("USD", "GBP", "JPY", "CHF", "CAD", "AUD", "NZD", "NOK", "SEK")
+ECB_FX_ROUNDING_POLICY_VERSION = "ecb-fx-v1-half-even-12dp"
+_FX_QUANTUM = Decimal("0.000000000001")
 
 
 def _parse(d: Any) -> date | None:
@@ -497,35 +503,83 @@ def compute_revision_stats(
     return sorted(out, key=lambda r: (r["series_id"], r["observation_date"]))
 
 
+def _capture_instant(value: Any, *, cutoff: bool) -> datetime | None:
+    """Parse a capture instant; a date-only cutoff includes that whole day."""
+    if value is None or not str(value).strip():
+        return None
+    text = str(value).strip().replace("Z", "+00:00")
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        try:
+            parsed_date = date.fromisoformat(text[:10])
+        except ValueError:
+            return None
+        parsed = datetime.combine(
+            parsed_date, time.max if cutoff else time.min, tzinfo=timezone.utc
+        )
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
 def point_in_time_snapshot(
     silver_rows: Iterable[dict[str, Any]], as_of: str
 ) -> list[dict[str, Any]]:
-    """Each series' latest value *known as of* ``as_of`` (leakage-free vector).
+    """Each series' latest value captured and valid as of ``as_of``.
 
-    Uses the vintage windows: a row is "known" when
-    ``realtime_start <= as_of`` and (``realtime_end`` empty/open or ``> as_of``).
-    Among known rows per series, the latest ``observation_date`` wins, and among
-    that date's vintages, the latest ``realtime_start``. Non-vintage rows
-    (blank realtime) are always considered known.
+    The function accepts legacy compact Silver rows and append-only observed
+    history rows. When history is supplied, it first resolves each provider
+    key to the last state captured by the cutoff; this prevents a later pull
+    from leaking a correction into an earlier backtest and makes tombstones
+    effective. Provider real-time windows are then an independent eligibility
+    condition. Date-only cutoffs retain the historic inclusive-day behaviour.
     """
-    as_of = str(as_of)[:10]
-    best: dict[str, dict[str, Any]] = {}
+    cutoff = _capture_instant(as_of, cutoff=True)
+    if cutoff is None:
+        raise ValueError(f"Invalid as_of timestamp: {as_of!r}")
+    as_of_date = cutoff.date().isoformat()
+    observed: dict[
+        tuple[str, str, str, str], tuple[tuple[datetime, str], dict[str, Any]]
+    ] = {}
     for r in silver_rows:
-        if r.get("is_missing"):
+        capture = _capture_instant(r.get("ingested_at"), cutoff=False)
+        if capture is not None and capture > cutoff:
+            continue
+        provider_start = r.get("provider_valid_from") or r.get("realtime_start") or ""
+        identity = (
+            str(r.get("source") or "fred"),
+            str(r.get("series_id") or ""),
+            str(r.get("observation_date") or "")[:10],
+            str(provider_start),
+        )
+        current = observed.get(identity)
+        ordering = (
+            capture or datetime.min.replace(tzinfo=timezone.utc),
+            str(r.get("observation_event_id") or ""),
+        )
+        if current is None or ordering > current[0]:
+            observed[identity] = (ordering, r)
+
+    best: dict[str, dict[str, Any]] = {}
+    for _ordering, r in observed.values():
+        if r.get("is_missing") or r.get("is_deleted"):
             continue
         rt_start = (r.get("realtime_start") or "")[:10]
         rt_end = (r.get("realtime_end") or "")[:10]
-        if rt_start and rt_start > as_of:
+        if rt_start and rt_start > as_of_date:
             continue  # not yet known
-        if rt_end and rt_end not in ("", "9999-12-31") and rt_end <= as_of:
+        if rt_end and rt_end not in ("", "9999-12-31") and rt_end <= as_of_date:
             continue  # superseded before as_of
         sid = r["series_id"]
         obs = str(r["observation_date"])[:10]
+        if obs > as_of_date:
+            continue
         cur = best.get(sid)
         key = (obs, rt_start)
         if cur is None or key > (cur["observation_date"], cur.get("_rt", "")):
             best[sid] = {
-                "as_of_date": as_of,
+                "as_of_date": as_of_date,
                 "series_id": sid,
                 "observation_date": obs,
                 "value": r.get("value"),
@@ -533,3 +587,135 @@ def point_in_time_snapshot(
             }
     result = [{k: v for k, v in row.items() if k != "_rt"} for row in best.values()]
     return sorted(result, key=lambda r: r["series_id"])
+
+
+def _decimal_text(value: Decimal) -> str:
+    return format(value, "f")
+
+
+def _fx_decimal(row: dict[str, Any]) -> Decimal | None:
+    raw = row.get("exact_value") or row.get("raw_value")
+    if raw is None:
+        return None
+    try:
+        return Decimal(str(raw))
+    except (InvalidOperation, ValueError):
+        return None
+
+
+def compute_ecb_fx_reference_rates(
+    silver_rows: Iterable[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Build exact, non-forward-filled ECB native, inverse and cross rates.
+
+    Input is compact current Silver: if an observation has several active
+    provider vintages, the one with the latest provider timestamp wins. The
+    function never joins different observation dates and emits no synthetic
+    calendar rows, so unavailable legs remain absent rather than silently
+    forward-filled.
+    """
+    native: dict[tuple[str, str], dict[str, Any]] = {}
+    for row in silver_rows:
+        if row.get("source") != "ecb" or row.get("is_missing") or row.get("is_deleted"):
+            continue
+        if (
+            row.get("base_currency") != "EUR"
+            or row.get("quote_currency") not in ECB_FX_QUOTES
+        ):
+            continue
+        value = _fx_decimal(row)
+        observation_date = str(row.get("observation_date") or "")[:10]
+        if value is None or value <= 0 or not observation_date:
+            continue
+        quote = str(row["quote_currency"])
+        key = (observation_date, quote)
+        previous = native.get(key)
+        version = (
+            str(row.get("provider_valid_from") or row.get("realtime_start") or ""),
+            str(row.get("observation_event_id") or ""),
+        )
+        if previous is None or version > previous["_version"]:
+            native[key] = {
+                "value": value,
+                "series_id": row["series_id"],
+                "event_id": row.get("observation_event_id") or "",
+                "_version": version,
+            }
+
+    def make_row(
+        observation_date: str,
+        base: str,
+        quote: str,
+        orientation: str,
+        value: Decimal,
+        inputs: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        return {
+            "observation_date": observation_date,
+            "base_currency": base,
+            "quote_currency": quote,
+            "orientation": orientation,
+            "rate_decimal": _decimal_text(value),
+            "rounded_rate_decimal": _decimal_text(
+                value.quantize(_FX_QUANTUM, rounding=ROUND_HALF_EVEN)
+            ),
+            "rounding_policy_version": ECB_FX_ROUNDING_POLICY_VERSION,
+            "native_series_ids": json.dumps(
+                [item["series_id"] for item in inputs], separators=(",", ":")
+            ),
+            "input_event_ids": json.dumps(
+                [item["event_id"] for item in inputs], separators=(",", ":")
+            ),
+            "availability_state": "available",
+            "quality_reason": None,
+        }
+
+    output: list[dict[str, Any]] = []
+    by_date: dict[str, dict[str, dict[str, Any]]] = {}
+    for (observation_date, quote), item in native.items():
+        by_date.setdefault(observation_date, {})[quote] = item
+        output.append(
+            make_row(
+                observation_date,
+                "EUR",
+                quote,
+                "native_quote_per_eur",
+                item["value"],
+                [item],
+            )
+        )
+        output.append(
+            make_row(
+                observation_date,
+                quote,
+                "EUR",
+                "inverse_eur_per_quote",
+                Decimal(1) / item["value"],
+                [item],
+            )
+        )
+
+    for observation_date, quotes in by_date.items():
+        for base, denominator in sorted(quotes.items()):
+            for quote, numerator in sorted(quotes.items()):
+                if base == quote:
+                    continue
+                output.append(
+                    make_row(
+                        observation_date,
+                        base,
+                        quote,
+                        "cross_quote_per_base",
+                        numerator["value"] / denominator["value"],
+                        [numerator, denominator],
+                    )
+                )
+    return sorted(
+        output,
+        key=lambda row: (
+            row["observation_date"],
+            row["base_currency"],
+            row["quote_currency"],
+            row["orientation"],
+        ),
+    )

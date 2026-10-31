@@ -143,18 +143,43 @@ class TimedWarehouse:
 
     def merge_silver(self, rows: list[dict[str, Any]]) -> int:
         started = time.perf_counter()
-        before = getattr(self.warehouse.conn, "total_changes", None)
+        before = self._compact_silver_hashes()
         try:
             return self.warehouse.merge_silver(rows)
         finally:
-            after = getattr(self.warehouse.conn, "total_changes", None)
+            after = self._compact_silver_hashes()
             if (
                 before is not None
                 and after is not None
                 and self.silver_rows_changed is not None
             ):
-                self.silver_rows_changed += after - before
+                self.silver_rows_changed += sum(
+                    1 for key, row_hash in after.items() if before.get(key) != row_hash
+                )
             self.write_seconds["silver_merge"] += time.perf_counter() - started
+
+    def _compact_silver_hashes(self) -> dict[tuple[str, str, str, str], str] | None:
+        """Return compact-Silver content for the benchmark's changed-row metric.
+
+        Spec015 writes immutable history events alongside compact Silver. SQLite
+        ``total_changes`` now counts both relations, while this benchmark has
+        always reported changes to the compact current-state surface only.
+        """
+        if not hasattr(self.warehouse.conn, "total_changes"):
+            return None
+        rows = self.warehouse.query(
+            "SELECT source, series_id, observation_date, realtime_start, row_hash "
+            "FROM silver_fred_observation"
+        )
+        return {
+            (
+                row["source"],
+                row["series_id"],
+                row["observation_date"],
+                row["realtime_start"],
+            ): row["row_hash"]
+            for row in rows
+        }
 
 
 def _enable_gold_stage_timing() -> None:

@@ -14,6 +14,7 @@ from fred_pipeline.spark_io import (
     cluster_dataframe_by_series,
     get_spark,
     merge_delta,
+    table_exists,
     target_partitions_for_rows,
 )
 from fred_pipeline.transform import (
@@ -21,11 +22,16 @@ from fred_pipeline.transform import (
     assign_revision_numbers,
     normalize_observations,
 )
+from fred_pipeline.data.observation_history import (
+    observation_event,
+    with_observation_event,
+)
 
 # Natural key that makes a silver row unique. ``source`` is the leading key so
 # the same series_id could, in principle, be sourced from more than one upstream
 # API without colliding (manifests still enforce globally-unique series_ids).
 SILVER_MERGE_KEYS = ("source", "series_id", "observation_date", "realtime_start")
+HISTORY_MERGE_KEYS = ("observation_event_id",)
 
 
 def _normalize_for_source(
@@ -187,7 +193,40 @@ def merge_silver(
         return {"source_rows": 0}
     spark = get_spark(spark)
     table = config.table("silver", "fred_observation")
-    df = spark.createDataFrame(rows)
+    prepared = [with_observation_event(row) for row in rows]
+    history_rows = [observation_event(row) for row in prepared]
+    # Persist the immutable evidence before changing compact current state. A
+    # retry is idempotent on observation_event_id if the later compact MERGE
+    # fails after this independent Delta commit.
+    history_table = config.table("silver", "fred_observation_history")
+    history_df = spark.createDataFrame(history_rows)
+    history_df = history_df.selectExpr(
+        *[
+            f"CAST(NULLIF({column}, '') AS {cast}) AS {column}"
+            if (cast := _SILVER_CASTS.get(column)) in ("date", "timestamp")
+            else column
+            for column in history_df.columns
+        ]
+    )
+    if table_exists(spark, table):
+        existing = spark.table(table).select(*SILVER_MERGE_KEYS, "row_hash")
+        join_condition = " AND ".join(
+            f"t.{column} <=> s.{column}" for column in SILVER_MERGE_KEYS
+        )
+        history_df = (
+            history_df.alias("s")
+            .join(existing.alias("t"), join_condition, "left")
+            .where("t.row_hash IS NULL OR NOT (t.row_hash <=> s.row_hash)")
+            .select("s.*")
+        )
+    merge_delta(
+        spark,
+        history_df,
+        history_table,
+        HISTORY_MERGE_KEYS,
+        update=False,
+    )
+    df = spark.createDataFrame(prepared)
     # Empty strings (e.g. open-ended realtime windows) must become NULL dates.
     exprs = []
     for col in df.columns:
@@ -201,7 +240,7 @@ def merge_silver(
         df = cluster_dataframe_by_series(
             df,
             target_partitions=target_partitions_for_rows(
-                rows,
+                prepared,
                 target_file_size_mb=getattr(
                     config, "persistence_delta_target_file_size_mb", 256
                 ),
@@ -214,13 +253,20 @@ def merge_silver(
     # Leave ingested_at untouched when a restated observation has identical
     # content. Due-date gating and incremental Gold both use it as a change
     # watermark, matching the SQLite and PostgreSQL merge paths.
-    return merge_delta(
+    result = merge_delta(
         spark,
         df,
         table,
         SILVER_MERGE_KEYS,
         match_update_condition="NOT (t.row_hash <=> s.row_hash)",
     )
+    return result
 
 
-__all__ = ["SILVER_COLUMNS", "SILVER_MERGE_KEYS", "build_silver_rows", "merge_silver"]
+__all__ = [
+    "HISTORY_MERGE_KEYS",
+    "SILVER_COLUMNS",
+    "SILVER_MERGE_KEYS",
+    "build_silver_rows",
+    "merge_silver",
+]
