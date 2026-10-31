@@ -1,8 +1,9 @@
 # Spec 005: Full Validation Suite and Test Engineering System
 
-Status: **proposed — ready for review**
+Status: **in progress — Phase 0 T-001 clean bootstrap and baseline artifact
+capture complete; remaining phases are proposed.**
 
-Last verified: 2026-09-12
+Last verified: 2026-10-31
 
 Primary owner: TBD
 

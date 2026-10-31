@@ -1,11 +1,6 @@
--r requirements.txt
-pytest>=7.4
-pytest-cov>=4.1
-jsonschema>=4.0
-responses>=0.24
-polars>=1.0
-pre-commit>=3.7
-ruff>=0.6
+# Compatibility entry point for the canonical editable development/test extra.
+# New setup instructions use: python -m pip install -e ".[dev]"
+-e .[dev]
 
 # Optional extra for scripts/scrape_fomc_calendar.py only (see
 # docs/handoffs/fomc_calendar_scraper.md). NOT a pipeline dependency and not

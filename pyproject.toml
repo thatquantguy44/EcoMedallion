@@ -31,6 +31,9 @@ dev = [
     "pytest-cov>=4.1",
     "jsonschema>=4.0",
     "responses>=0.24",
+    "polars>=1.0",
+    "pre-commit>=3.7",
+    "ruff>=0.6",
 ]
 
 [project.scripts]

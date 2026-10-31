@@ -112,14 +112,14 @@ The pipeline has three storage backends, chosen at run time:
 | Databricks | *(default)* | Delta / Unity Catalog | yes |
 
 ```bash
-# 1. Install dev dependencies
-pip install -r requirements-dev.txt
+# 1. Install the canonical test/development environment
+python -m pip install -e ".[dev]"
 
 # 2. Validate the manifests (no network, no Spark)
 PYTHONPATH=src python -m fred_pipeline validate --manifests manifests
 
-# 3. Run the fast unit-test suite (no Spark needed; Spark tests auto-skip)
-python -m pytest
+# 3. Run the deterministic non-Spark baseline suite
+python -m pytest --ignore=tests/test_spark_integration.py
 
 # 4. Dry-run against the real FRED API (extract + DQ, no writes)
 export FRED_API_KEY=your_key_here

@@ -15,6 +15,7 @@ env/
 .coverage
 htmlcov/
 coverage.xml
+artifacts/test-baseline/
 
 # Databricks
 .databricks/
