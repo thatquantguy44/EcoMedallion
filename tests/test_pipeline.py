@@ -761,12 +761,38 @@ def test_series_is_due_weekend_adjacent_daily_case():
     assert _series_is_due("daily", friday_pull.isoformat(), same_day_rerun) is False
 
 
+def _fresh_gate_payload(payload):
+    import copy
+    from datetime import date
+
+    payload = copy.deepcopy(payload)
+    delta = date.today() - max(
+        date.fromisoformat(o["date"]) for o in payload["observations"]
+    )
+    for obs in payload["observations"]:
+        obs["date"] = (date.fromisoformat(obs["date"]) + delta).isoformat()
+        obs["realtime_start"] = date.today().isoformat()
+    return payload
+
+
+def test_stale_period_overrides_recent_changed_row_cadence():
+    now = datetime(2026, 10, 31, tzinfo=timezone.utc)
+    recent = (now - timedelta(hours=1)).isoformat()
+    assert _series_is_due(
+        "monthly", recent, now, latest_period="2026-08-01", observation_frequency="m"
+    )
+    assert not _series_is_due(
+        "monthly", recent, now, latest_period="2026-09-01", observation_frequency="m"
+    )
+
+
 # -- Pipeline.run(skip_not_due=...) wiring (spec007) -------------------------
 
 
 def test_skip_not_due_skips_a_recently_pulled_series(
     tmp_path, observations_payload, fake_client_cls
 ):
+    observations_payload = _fresh_gate_payload(observations_payload)
     db = str(tmp_path / "fred.db")
     wh = LocalWarehouse(_config(), db_path=db)
     client = fake_client_cls({"CPIAUCSL": observations_payload})
@@ -843,6 +869,7 @@ def test_force_full_bypasses_skip_not_due(
 def test_skip_not_due_summary_counts_add_up(
     tmp_path, observations_payload, fake_client_cls
 ):
+    observations_payload = _fresh_gate_payload(observations_payload)
     db = str(tmp_path / "fred.db")
     wh = LocalWarehouse(_config(), db_path=db)
     client = fake_client_cls(
@@ -885,6 +912,7 @@ def test_skip_not_due_defaults_on_without_passing_the_flag(
     benchmark justified flipping it) -- this guards against a silent
     regression back to opt-in-only, since every other test in this file
     passes skip_not_due explicitly and wouldn't catch that."""
+    observations_payload = _fresh_gate_payload(observations_payload)
     db = str(tmp_path / "fred.db")
     wh = LocalWarehouse(_config(), db_path=db)
     client = fake_client_cls({"CPIAUCSL": observations_payload})
@@ -896,4 +924,18 @@ def test_skip_not_due_defaults_on_without_passing_the_flag(
     assert second.series_skipped_not_due == 1
     assert second.series_runs[0].status == RunStatus.SKIPPED_NOT_DUE
     assert client.requested == ["CPIAUCSL"]
+    wh.close()
+
+
+def test_stale_series_is_polled_even_when_recently_ingested(
+    tmp_path, observations_payload, fake_client_cls
+):
+    wh = LocalWarehouse(_config(), db_path=str(tmp_path / "stale.db"))
+    client = fake_client_cls({"CPIAUCSL": observations_payload})
+    pipe = FredPipeline(_config(), client=client, warehouse=wh, persist_audit=False)
+    spec = _spec("CPIAUCSL", expected_update_frequency="monthly", frequency="m")
+    pipe.run([spec])
+    second = pipe.run([spec], skip_not_due=True)
+    assert second.series_skipped_not_due == 0
+    assert client.requested == ["CPIAUCSL", "CPIAUCSL"]
     wh.close()
