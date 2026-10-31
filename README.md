@@ -118,8 +118,8 @@ python -m pip install -e ".[dev]"
 # 2. Validate the manifests (no network, no Spark)
 PYTHONPATH=src python -m fred_pipeline validate --manifests manifests
 
-# 3. Run the deterministic non-Spark baseline suite
-python -m pytest --ignore=tests/test_spark_integration.py
+# 3. Run the deterministic offline unit suite
+python -m pytest --strict-markers -m unit --ignore=tests/test_spark_integration.py
 
 # 4. Dry-run against the real FRED API (extract + DQ, no writes)
 export FRED_API_KEY=your_key_here

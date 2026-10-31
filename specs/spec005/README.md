@@ -1,7 +1,8 @@
 # Spec 005: Full Validation Suite and Test Engineering System
 
 Status: **in progress — Phase 0 T-001 clean bootstrap and baseline artifact
-capture complete; remaining phases are proposed.**
+capture complete; T-002 marker tiering and offline-network guard implemented;
+expected-skip registry enforcement remains.**
 
 Last verified: 2026-10-31
 

@@ -3,10 +3,59 @@
 from __future__ import annotations
 
 import sys
+import socket
 from pathlib import Path
 from typing import Any
 
 import pytest
+
+
+class NetworkAccessDenied(RuntimeError):
+    """Raised when a required offline test tries to open a network socket."""
+
+
+_SYSTEM_SOCKET = socket.socket
+
+
+class _OfflineSocket(_SYSTEM_SOCKET):
+    def connect(self, address: Any) -> None:
+        raise NetworkAccessDenied(
+            f"network access is disabled for required offline tests: {address!r}"
+        )
+
+    def connect_ex(self, address: Any) -> int:
+        raise NetworkAccessDenied(
+            f"network access is disabled for required offline tests: {address!r}"
+        )
+
+
+def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
+    """Classify legacy tests until they are migrated to explicit markers."""
+    for item in items:
+        filename = Path(str(item.path)).name
+        if filename == "test_spark_integration.py":
+            item.add_marker(pytest.mark.spark)
+        elif filename == "test_postgres_warehouse.py":
+            item.add_marker(pytest.mark.postgres)
+        if not any(
+            item.get_closest_marker(marker)
+            for marker in ("unit", "postgres", "spark", "external")
+        ):
+            item.add_marker(pytest.mark.unit)
+
+
+@pytest.fixture(autouse=True)
+def block_network_for_offline_tests(
+    request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch
+):
+    """Keep required tests deterministic and free of provider/network access."""
+    if any(
+        request.node.get_closest_marker(marker)
+        for marker in ("external", "postgres", "spark")
+    ):
+        return
+    monkeypatch.setattr(socket, "socket", _OfflineSocket)
+
 
 # Make the src/ package importable without an editable install.
 SRC = Path(__file__).resolve().parents[1] / "src"
@@ -24,14 +73,30 @@ def observations_payload() -> dict[str, Any]:
         "observation_end": "2024-01-05",
         "count": 4,
         "observations": [
-            {"realtime_start": "2024-01-02", "realtime_end": "9999-12-31",
-             "date": "2024-01-01", "value": "4.25"},
-            {"realtime_start": "2024-01-03", "realtime_end": "9999-12-31",
-             "date": "2024-01-02", "value": "4.30"},
-            {"realtime_start": "2024-01-04", "realtime_end": "9999-12-31",
-             "date": "2024-01-03", "value": "."},  # missing
-            {"realtime_start": "2024-01-05", "realtime_end": "9999-12-31",
-             "date": "2024-01-04", "value": "4.40"},
+            {
+                "realtime_start": "2024-01-02",
+                "realtime_end": "9999-12-31",
+                "date": "2024-01-01",
+                "value": "4.25",
+            },
+            {
+                "realtime_start": "2024-01-03",
+                "realtime_end": "9999-12-31",
+                "date": "2024-01-02",
+                "value": "4.30",
+            },
+            {
+                "realtime_start": "2024-01-04",
+                "realtime_end": "9999-12-31",
+                "date": "2024-01-03",
+                "value": ".",
+            },  # missing
+            {
+                "realtime_start": "2024-01-05",
+                "realtime_end": "9999-12-31",
+                "date": "2024-01-04",
+                "value": "4.40",
+            },
         ],
     }
 
@@ -42,12 +107,24 @@ def vintage_payload() -> dict[str, Any]:
     return {
         "count": 3,
         "observations": [
-            {"realtime_start": "2024-02-01", "realtime_end": "2024-02-28",
-             "date": "2024-01-01", "value": "100.0"},
-            {"realtime_start": "2024-03-01", "realtime_end": "9999-12-31",
-             "date": "2024-01-01", "value": "101.5"},  # revised up
-            {"realtime_start": "2024-02-01", "realtime_end": "9999-12-31",
-             "date": "2024-02-01", "value": "102.0"},
+            {
+                "realtime_start": "2024-02-01",
+                "realtime_end": "2024-02-28",
+                "date": "2024-01-01",
+                "value": "100.0",
+            },
+            {
+                "realtime_start": "2024-03-01",
+                "realtime_end": "9999-12-31",
+                "date": "2024-01-01",
+                "value": "101.5",
+            },  # revised up
+            {
+                "realtime_start": "2024-02-01",
+                "realtime_end": "9999-12-31",
+                "date": "2024-02-01",
+                "value": "102.0",
+            },
         ],
     }
 
@@ -69,10 +146,16 @@ class FakeSession:
         self._responses = list(responses)
         self.calls: list[dict[str, Any]] = []
 
-    def get(self, url: str, params: dict[str, Any] | None = None,
-            timeout: int | None = None, headers: dict[str, Any] | None = None):
-        self.calls.append({"url": url, "params": params, "timeout": timeout,
-                           "headers": headers})
+    def get(
+        self,
+        url: str,
+        params: dict[str, Any] | None = None,
+        timeout: int | None = None,
+        headers: dict[str, Any] | None = None,
+    ):
+        self.calls.append(
+            {"url": url, "params": params, "timeout": timeout, "headers": headers}
+        )
         if not self._responses:
             raise AssertionError("FakeSession ran out of queued responses")
         return self._responses.pop(0)
@@ -81,7 +164,9 @@ class FakeSession:
 class FakeClient:
     """A FredClient stand-in returning a fixed payload (or raising) per series."""
 
-    def __init__(self, payloads: dict[str, Any], errors: dict[str, Exception] | None = None):
+    def __init__(
+        self, payloads: dict[str, Any], errors: dict[str, Exception] | None = None
+    ):
         self._payloads = payloads
         self._errors = errors or {}
         self.requested: list[str] = []
