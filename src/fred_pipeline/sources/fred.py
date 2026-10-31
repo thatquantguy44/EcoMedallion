@@ -16,7 +16,11 @@ import time
 from datetime import date, timedelta
 from typing import Any, Callable, Optional
 
-from fred_pipeline.sources.base import HTTPSource, RateLimiter, SourceError
+from fred_pipeline.sources.base import (
+    HTTPSource,
+    RateLimiter as RateLimiter,
+    SourceError,
+)
 
 log = logging.getLogger("fred_pipeline.sources.fred")
 
@@ -52,7 +56,15 @@ def _coalesce_observations(observations: list[dict[str, Any]]) -> list[dict[str,
         rows.sort(key=lambda o: o.get("realtime_start", ""))
         run: Optional[dict[str, Any]] = None
         for obs in rows:
-            if run is not None and obs.get("value") == run.get("value"):
+            if (
+                run is not None
+                and obs.get("value") == run.get("value")
+                and (
+                    run["realtime_end"] == "9999-12-31"
+                    or date.fromisoformat(obs["realtime_start"])
+                    <= date.fromisoformat(run["realtime_end"]) + timedelta(days=1)
+                )
+            ):
                 # same value continuing -> extend the vintage window
                 run["realtime_end"] = obs.get("realtime_end", run.get("realtime_end"))
             else:
@@ -115,7 +127,10 @@ class FredClient(HTTPSource):
         from fred_pipeline.transform import normalize_observations
 
         return normalize_observations(
-            series_id, payload, run_id=run_id, track_vintage=track_vintage,
+            series_id,
+            payload,
+            run_id=run_id,
+            track_vintage=track_vintage,
             source=source,
         )
 
@@ -128,6 +143,45 @@ class FredClient(HTTPSource):
         if not seriess:
             raise FredAPIError(f"No metadata returned for series {series_id!r}")
         return seriess[0]
+
+    def _observation_pages(self, params: dict[str, Any]) -> dict[str, Any]:
+        """Read every observation page; refuse truncated or drifting responses.
+
+        Vintage-date batching does not paginate observation rows. Apply both.
+        Keep each API response page for Bronze lineage, without request/auth params.
+        """
+        parameters = {**params, "limit": 100000, "offset": 0}
+        first = self._request("series/observations", parameters)
+        if "count" not in first:
+            raise FredAPIError("Observation response is missing its count")
+        count = int(first["count"])
+        if count < 0 or count > 1000000:
+            raise FredAPIError(
+                "Observation response exceeds the one-million-row recovery limit"
+            )
+        rows = list(first.get("observations") or [])
+        pages = [first]
+        while len(rows) < count:
+            offset = len(rows)
+            page = self._request(
+                "series/observations", {**parameters, "offset": offset}
+            )
+            batch = page.get("observations") or []
+            if (
+                int(page.get("count", -1)) != count
+                or int(page.get("offset", -1)) != offset
+                or not batch
+            ):
+                raise FredAPIError(
+                    "Observation pagination is incomplete or changed during extraction"
+                )
+            rows.extend(batch)
+            pages.append(page)
+        if len(rows) != count:
+            raise FredAPIError("Observation count does not match extracted rows")
+        if len(pages) == 1:
+            return first
+        return {**first, "observations": rows, "offset": 0, "response_pages": pages}
 
     def get_observations(
         self,
@@ -157,7 +211,7 @@ class FredClient(HTTPSource):
         if units:
             params["units"] = units
         try:
-            return self._request("series/observations", params)
+            return self._observation_pages(params)
         except FredAPIError as exc:
             if realtime_start and _is_vintage_cap_error(exc):
                 return self._observations_bounded_vintage(series_id, params)
@@ -180,22 +234,28 @@ class FredClient(HTTPSource):
             log.warning(
                 "Series %s exceeded FRED vintage-date cap; retrying with "
                 "realtime_start=%s (last %d years of vintages)",
-                series_id, start, years,
+                series_id,
+                start,
+                years,
             )
             try:
-                return self._request("series/observations", attempt)
+                return self._observation_pages(attempt)
             except FredAPIError as exc:
                 if _is_vintage_cap_error(exc):
                     continue
                 raise
         # Last resort: latest revision only (no vintage history).
-        latest = {k: v for k, v in params.items()
-                  if k not in ("realtime_start", "realtime_end")}
+        latest = {
+            k: v
+            for k, v in params.items()
+            if k not in ("realtime_start", "realtime_end")
+        }
         log.warning(
             "Series %s still over the cap; falling back to latest-only "
-            "(no vintage history for this run)", series_id,
+            "(no vintage history for this run)",
+            series_id,
         )
-        return self._request("series/observations", latest)
+        return self._observation_pages(latest)
 
     # ---- complete vintage history (batched) -----------------------------
 
@@ -234,6 +294,11 @@ class FredClient(HTTPSource):
         "revisions" that window-clipping introduces at batch seams — so the
         merged result is equivalent to one uncapped request.
         """
+        if not 1 <= batch_size <= 2000:
+            raise ValueError("vintage batch size must be between 1 and 2000")
+        # FRED may include one boundary-state vintage in addition to the dated
+        # releases. Reserve its slot rather than requesting 2001 states.
+        batch_size = min(batch_size, 1999)
         base: dict[str, Any] = {"series_id": series_id}
         if observation_start:
             base["observation_start"] = observation_start
@@ -244,27 +309,37 @@ class FredClient(HTTPSource):
 
         vintages = self.get_vintage_dates(series_id)
         if not vintages:  # brand-new series with no releases yet
-            return self._request(
-                "series/observations",
+            return self._observation_pages(
                 {**base, "realtime_start": "1776-07-04", "realtime_end": "9999-12-31"},
             )
         if len(vintages) <= batch_size:
-            return self._request(
-                "series/observations",
-                {**base, "realtime_start": vintages[0], "realtime_end": vintages[-1]},
+            return self._observation_pages(
+                {**base, "realtime_start": vintages[0], "realtime_end": "9999-12-31"},
             )
 
         merged: list[dict[str, Any]] = []
         for i in range(0, len(vintages), batch_size):
-            chunk = vintages[i:i + batch_size]
-            payload = self._request(
-                "series/observations",
-                {**base, "realtime_start": chunk[0], "realtime_end": chunk[-1]},
+            chunk = vintages[i : i + batch_size]
+            payload = self._observation_pages(
+                {
+                    **base,
+                    "realtime_start": chunk[0],
+                    "realtime_end": (
+                        (
+                            date.fromisoformat(vintages[i + batch_size])
+                            - timedelta(days=1)
+                        ).isoformat()
+                        if i + batch_size < len(vintages)
+                        else "9999-12-31"
+                    ),
+                },
             )
             merged.extend(payload.get("observations") or [])
         log.info(
             "Series %s: assembled %d vintages in %d batch(es)",
-            series_id, len(vintages), (len(vintages) + batch_size - 1) // batch_size,
+            series_id,
+            len(vintages),
+            (len(vintages) + batch_size - 1) // batch_size,
         )
         return {"observations": _coalesce_observations(merged)}
 
@@ -308,11 +383,17 @@ class FredClient(HTTPSource):
                 break
         return collected[:max_results] if max_results else collected
 
-    def get_category_series(self, category_id: int, **kwargs: Any) -> list[dict[str, Any]]:
+    def get_category_series(
+        self, category_id: int, **kwargs: Any
+    ) -> list[dict[str, Any]]:
         """All series belonging to a FRED category id."""
-        return self.list_series("category/series", {"category_id": category_id}, **kwargs)
+        return self.list_series(
+            "category/series", {"category_id": category_id}, **kwargs
+        )
 
-    def get_release_series(self, release_id: int, **kwargs: Any) -> list[dict[str, Any]]:
+    def get_release_series(
+        self, release_id: int, **kwargs: Any
+    ) -> list[dict[str, Any]]:
         """All series belonging to a FRED release id."""
         return self.list_series("release/series", {"release_id": release_id}, **kwargs)
 
