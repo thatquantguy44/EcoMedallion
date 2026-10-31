@@ -219,8 +219,24 @@ CREATE TABLE IF NOT EXISTS silver_fred_observation (
     source TEXT NOT NULL DEFAULT 'fred',
     series_id TEXT, observation_date TEXT, realtime_start TEXT,
     realtime_end TEXT, value REAL, raw_value TEXT, is_missing INTEGER,
-    row_hash TEXT, revision_number INTEGER, ingested_at TEXT, run_id TEXT,
+    exact_value TEXT, row_hash TEXT, revision_number INTEGER,
+    provider_valid_from TEXT, provider_valid_to TEXT,
+    base_currency TEXT, quote_currency TEXT, unit_multiplier INTEGER,
+    observation_status TEXT, observation_action TEXT, is_deleted INTEGER,
+    observation_event_id TEXT, ingested_at TEXT, run_id TEXT,
     PRIMARY KEY (source, series_id, observation_date, realtime_start)
+);
+-- Immutable observed states. Compact Silver above remains the current state
+-- for existing consumers; this ledger is the capture-time source of truth.
+CREATE TABLE IF NOT EXISTS silver_fred_observation_history (
+    observation_event_id TEXT PRIMARY KEY,
+    source TEXT NOT NULL, series_id TEXT NOT NULL, observation_date TEXT NOT NULL,
+    realtime_start TEXT, realtime_end TEXT, value REAL, raw_value TEXT,
+    exact_value TEXT, is_missing INTEGER, row_hash TEXT, revision_number INTEGER,
+    provider_valid_from TEXT, provider_valid_to TEXT,
+    base_currency TEXT, quote_currency TEXT, unit_multiplier INTEGER,
+    observation_status TEXT, observation_action TEXT, is_deleted INTEGER,
+    ingested_at TEXT NOT NULL, run_id TEXT
 );
 -- spec011: accepted release coverage, compact SCD2 security versions, and
 -- the independently inspectable per-release change set.
@@ -362,6 +378,15 @@ CREATE TABLE IF NOT EXISTS gold_fred_cross_series_feature (
 );
 CREATE TABLE IF NOT EXISTS gold_fred_cross_series_feature_pit (
     feature_name TEXT, op TEXT, observation_date TEXT, value REAL, basis TEXT
+);
+CREATE TABLE IF NOT EXISTS gold_ecb_fx_reference_rate (
+    observation_date TEXT NOT NULL,
+    base_currency TEXT NOT NULL, quote_currency TEXT NOT NULL,
+    orientation TEXT NOT NULL, rate_decimal TEXT,
+    rounded_rate_decimal TEXT, rounding_policy_version TEXT NOT NULL,
+    native_series_ids TEXT NOT NULL, input_event_ids TEXT NOT NULL,
+    availability_state TEXT NOT NULL, quality_reason TEXT,
+    PRIMARY KEY (observation_date, base_currency, quote_currency, orientation)
 );
 CREATE TABLE IF NOT EXISTS gold_fred_source_reconciliation (
     name TEXT, observation_date TEXT, series_a TEXT, value_a REAL,
@@ -907,10 +932,10 @@ class LocalWarehouse:
         self.conn.execute("PRAGMA synchronous=NORMAL")
         self.conn.execute("PRAGMA cache_size=-65536")  # 64 MB
         self.conn.execute("PRAGMA mmap_size=268435456")  # 256 MB
+        self._defer_commits = False
         self._migrate_point_in_time_table_to_view()
         self.conn.executescript(_SCHEMA)
         self._apply_additive_migrations()
-        self._defer_commits = False
         self.conn.commit()
 
     # ---- schema migrations ----------------------------------------------
@@ -937,6 +962,17 @@ class LocalWarehouse:
         # spec007: due-date gating's skip count, added to EtlRun after
         # audit_etl_run first shipped.
         ("audit_etl_run", "series_skipped_not_due", "INTEGER"),
+        # Spec015: additive ECB FX semantics and immutable capture identity.
+        ("silver_fred_observation", "exact_value", "TEXT"),
+        ("silver_fred_observation", "provider_valid_from", "TEXT"),
+        ("silver_fred_observation", "provider_valid_to", "TEXT"),
+        ("silver_fred_observation", "base_currency", "TEXT"),
+        ("silver_fred_observation", "quote_currency", "TEXT"),
+        ("silver_fred_observation", "unit_multiplier", "INTEGER"),
+        ("silver_fred_observation", "observation_status", "TEXT"),
+        ("silver_fred_observation", "observation_action", "TEXT"),
+        ("silver_fred_observation", "is_deleted", "INTEGER"),
+        ("silver_fred_observation", "observation_event_id", "TEXT"),
     )
 
     def _migrate_point_in_time_table_to_view(self) -> None:
@@ -962,6 +998,34 @@ class LocalWarehouse:
                 continue  # table absent entirely; _SCHEMA just created it
             if column not in existing:
                 self.conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {coltype}")
+        self._backfill_observation_history()
+
+    def _backfill_observation_history(self) -> None:
+        """Seed legacy compact Silver as its one known captured state.
+
+        Earlier databases cannot recreate overwritten states that were never
+        retained. This additive migration preserves the latest available state
+        with its original capture timestamp and lets future updates append
+        losslessly.
+        """
+        from fred_pipeline.data.observation_history import observation_event
+
+        # This migration is intentionally one-time. Re-reading and attempting
+        # to reinsert every compact row on each warehouse open is needlessly
+        # expensive for an established database.
+        if self.conn.execute(
+            "SELECT 1 FROM silver_fred_observation_history LIMIT 1"
+        ).fetchone():
+            return
+        rows = self._read("silver_fred_observation")
+        events = [observation_event(row) for row in rows]
+        if events:
+            self._insert(
+                "silver_fred_observation_history",
+                events,
+                upsert_keys=["observation_event_id"],
+                conflict_where="0",
+            )
 
     # ---- low-level helpers ---------------------------------------------
 
@@ -1153,6 +1217,28 @@ class LocalWarehouse:
             self._gold_silver_rows_read += len(rows)
         self.conn.execute("DELETE FROM gold_fred_revision_stats")
         return insert("gold_fred_revision_stats", builder(rows))
+
+    def _rebuild_ecb_fx_reference_rates(self) -> int:
+        """Rebuild the canonical, non-forward-filled ECB FX Gold relation."""
+        from fred_pipeline.writer.features import compute_ecb_fx_reference_rates
+
+        rows = self.query(
+            """
+            SELECT source, series_id, observation_date, realtime_start,
+                   value, raw_value, exact_value, is_missing, is_deleted,
+                   provider_valid_from, base_currency, quote_currency,
+                   observation_event_id
+            FROM silver_fred_observation
+            WHERE source = 'ecb'
+            """
+        )
+        for row in rows:
+            row["is_missing"] = bool(row.get("is_missing"))
+            row["is_deleted"] = bool(row.get("is_deleted"))
+        self.conn.execute("DELETE FROM gold_ecb_fx_reference_rate")
+        return self._insert(
+            "gold_ecb_fx_reference_rate", compute_ecb_fx_reference_rates(rows)
+        )
 
     def _rebuild_gold_latest_observation_sql(self) -> int:
         """Rebuild latest-revision observations with a set-based window query."""
@@ -2038,9 +2124,55 @@ class LocalWarehouse:
         return self.query(sql, params)
 
     def merge_silver(self, rows: list[dict[str, Any]]) -> int:
+        """Merge compact current state and append changed observed states.
+
+        A byte-identical retry does neither update compact Silver nor create a
+        second history event. A correction that later reverts (A -> B -> A)
+        changes relative to the immediately current state twice, so all three
+        observed states remain queryable in the immutable ledger.
+        """
+        from fred_pipeline.data.observation_history import (
+            observation_event,
+            with_observation_event,
+        )
+
+        prepared = [with_observation_event(row) for row in rows]
+        current_hashes: dict[tuple[str, str, str, str], Any] = {}
+        for source, series_id in {
+            (str(row.get("source") or "fred"), str(row.get("series_id") or ""))
+            for row in prepared
+        }:
+            for current in self.conn.execute(
+                """
+                SELECT observation_date, realtime_start, row_hash
+                FROM silver_fred_observation
+                WHERE source = ? AND series_id = ?
+                """,
+                (source, series_id),
+            ):
+                current_hashes[(source, series_id, current[0], current[1] or "")] = (
+                    current[2]
+                )
+        changed: list[dict[str, Any]] = []
+        for row in prepared:
+            natural_key = (
+                str(row.get("source") or "fred"),
+                str(row.get("series_id") or ""),
+                str(row.get("observation_date") or ""),
+                str(row.get("realtime_start") or ""),
+            )
+            if current_hashes.get(natural_key) != row.get("row_hash"):
+                changed.append(observation_event(row))
+        if changed:
+            self._insert(
+                "silver_fred_observation_history",
+                changed,
+                upsert_keys=["observation_event_id"],
+                conflict_where="0",
+            )
         return self._insert(
             "silver_fred_observation",
-            rows,
+            prepared,
             upsert_keys=["source", "series_id", "observation_date", "realtime_start"],
             conflict_where=(
                 "excluded.row_hash IS NOT silver_fred_observation.row_hash"
@@ -2374,6 +2506,7 @@ class LocalWarehouse:
         _stage_timed("revision_stats")(self._rebuild_gold_revision_stats)(
             insert, build_revision_stats
         )
+        _stage_timed("ecb_fx_reference_rates")(self._rebuild_ecb_fx_reference_rates)()
 
         # Market-terminal analytical views (docs/market_terminal_gold_views.md):
         # dimensions, the ECON macro dashboard, and the Treasury Curve Lab.
@@ -2995,12 +3128,13 @@ class LocalWarehouse:
         }
 
     def point_in_time_features(self, as_of: str) -> list[dict[str, Any]]:
-        """Each series' value as known on ``as_of`` (leakage-free snapshot)."""
+        """Each series' value captured and valid on ``as_of``."""
         from fred_pipeline.features import point_in_time_snapshot
 
-        silver = self._read("silver_fred_observation")
+        silver = self._read("silver_fred_observation_history")
         for r in silver:
             r["is_missing"] = bool(r.get("is_missing"))
+            r["is_deleted"] = bool(r.get("is_deleted"))
         return point_in_time_snapshot(silver, as_of)
 
     def write_lifecycle(self, rows: list[dict[str, Any]]) -> int:

@@ -103,7 +103,7 @@ def test_get_observations_requests_csv_and_period_bounds(
     assert call["url"].endswith("/data/EXR/D.USD.EUR.SP00.A")
     assert call["params"] == {
         "format": "csvdata",
-        "detail": "dataonly",
+        "detail": "full",
         "startPeriod": "2024-01-02",
         "endPeriod": "2024-01-03",
     }
@@ -122,7 +122,7 @@ def test_get_observations_sets_include_history_when_vintage_kwargs_present(
 
     params = session.calls[0]["params"]
     assert params["includeHistory"] == "true"
-    assert params["detail"] == "dataonly"
+    assert params["detail"] == "full"
     assert payload["meta"]["include_history"] is True
 
 
@@ -161,7 +161,7 @@ def test_normalize_current_csv_matches_canonical_silver_schema():
     rows = normalize_ecb_observations(SID, _payload(), run_id="r", track_vintage=False)
     assert len(rows) == 2
     for row in rows:
-        assert set(row.keys()) == set(SILVER_COLUMNS)
+        assert set(SILVER_COLUMNS).issubset(row)
         assert row["source"] == "ecb"
         assert row["realtime_start"] == ""
         assert row["realtime_end"] == ""
@@ -186,7 +186,7 @@ def test_blank_value_is_missing():
     assert rows[0]["value"] is None
 
 
-def test_delete_action_is_not_emitted_as_silver_observation():
+def test_delete_action_is_retained_as_a_tombstone():
     payload = _payload(
         "KEY,TIME_PERIOD,OBS_VALUE,ACTION,VALID_FROM,VALID_TO\n"
         "EXR.D.USD.EUR.SP00.A,2015-07-27,,Delete,,"
@@ -198,10 +198,56 @@ def test_delete_action_is_not_emitted_as_silver_observation():
 
     rows = normalize_ecb_observations(SID, payload)
 
-    assert len(rows) == 1
-    assert rows[0]["observation_date"] == "2015-07-27"
-    assert rows[0]["value"] == pytest.approx(1.1058)
-    assert rows[0]["realtime_start"] == "2015-07-28"
+    assert len(rows) == 2
+    deleted, replacement = rows
+    assert deleted["observation_date"] == "2015-07-27"
+    assert deleted["is_deleted"] is True
+    assert deleted["value"] is None
+    assert replacement["value"] == pytest.approx(1.1058)
+    assert replacement["realtime_start"] == "2015-07-28"
+
+
+def test_exr_metadata_and_exact_value_are_retained_and_hashed():
+    rows = normalize_ecb_observations(
+        SID,
+        _payload(
+            "KEY,CURRENCY,CURRENCY_DENOM,UNIT_MULT,TIME_PERIOD,OBS_VALUE,OBS_STATUS\n"
+            "EXR.D.USD.EUR.SP00.A,USD,EUR,0,2024-01-02,"
+            "1.123456789012345678900,A\n"
+        ),
+    )
+    row = rows[0]
+    assert row["base_currency"] == "EUR"
+    assert row["quote_currency"] == "USD"
+    assert row["exact_value"] == "1.123456789012345678900"
+    assert row["unit_multiplier"] == 0
+    assert row["observation_status"] == "A"
+
+    changed_status = normalize_ecb_observations(
+        SID,
+        _payload(
+            "KEY,CURRENCY,CURRENCY_DENOM,UNIT_MULT,TIME_PERIOD,OBS_VALUE,OBS_STATUS\n"
+            "EXR.D.USD.EUR.SP00.A,USD,EUR,0,2024-01-02,"
+            "1.123456789012345678900,E\n"
+        ),
+    )[0]
+    assert changed_status["row_hash"] != row["row_hash"]
+
+
+def test_exr_rejects_conflicting_currency_or_nonzero_scale():
+    currency_payload = _payload(
+        "KEY,CURRENCY,CURRENCY_DENOM,TIME_PERIOD,OBS_VALUE\n"
+        "EXR.D.USD.EUR.SP00.A,JPY,EUR,2024-01-02,1.1\n"
+    )
+    with pytest.raises(ECBAPIError, match="currency mismatch"):
+        normalize_ecb_observations(SID, currency_payload)
+
+    scale_payload = _payload(
+        "KEY,CURRENCY,CURRENCY_DENOM,UNIT_MULT,TIME_PERIOD,OBS_VALUE\n"
+        "EXR.D.USD.EUR.SP00.A,USD,EUR,3,2024-01-02,1.1\n"
+    )
+    with pytest.raises(ECBAPIError, match="UNIT_MULT"):
+        normalize_ecb_observations(SID, scale_payload)
 
 
 # ---- downstream + orchestrator routing ----------------------------------
@@ -218,6 +264,34 @@ def test_ecb_rows_pass_dq_and_merge(tmp_path):
     assert wh.merge_silver(rows) == 2
     wh.merge_silver(rows)
     assert wh.query("SELECT count(*) c FROM silver_fred_observation")[0]["c"] == 2
+    wh.close()
+
+
+def test_local_gold_persists_ecb_fx_reference_rates(tmp_path):
+    usd_csv = (
+        "KEY,CURRENCY,CURRENCY_DENOM,UNIT_MULT,TIME_PERIOD,OBS_VALUE\n"
+        "EXR.D.USD.EUR.SP00.A,USD,EUR,0,2024-01-02,1.25\n"
+    )
+    jpy_csv = (
+        "KEY,CURRENCY,CURRENCY_DENOM,UNIT_MULT,TIME_PERIOD,OBS_VALUE\n"
+        "EXR.D.JPY.EUR.SP00.A,JPY,EUR,0,2024-01-02,150\n"
+    )
+    wh = LocalWarehouse(_config(), db_path=str(tmp_path / "fx.db"))
+    wh.merge_silver(normalize_ecb_observations(SID, _payload(usd_csv), run_id="r"))
+    jpy_sid = "ECB:EXR:D.JPY.EUR.SP00.A"
+    wh.merge_silver(normalize_ecb_observations(jpy_sid, _payload(jpy_csv), run_id="r"))
+    wh.build_gold()
+    rows = wh.query(
+        "SELECT rate_decimal, native_series_ids FROM gold_ecb_fx_reference_rate "
+        "WHERE observation_date='2024-01-02' AND base_currency='USD' "
+        "AND quote_currency='JPY'"
+    )
+    assert rows == [
+        {
+            "rate_decimal": "120",
+            "native_series_ids": '["ECB:EXR:D.JPY.EUR.SP00.A","ECB:EXR:D.USD.EUR.SP00.A"]',
+        }
+    ]
     wh.close()
 
 

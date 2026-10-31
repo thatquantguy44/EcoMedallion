@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from decimal import Decimal, InvalidOperation
 from datetime import date, datetime, timezone
 from typing import Any, Iterable, Optional
 
@@ -47,9 +48,40 @@ def parse_value(raw: Any) -> Optional[float]:
         return None
 
 
-def _row_hash(series_id: str, observation_date: str, realtime_start: str, value: Any) -> str:
+def parse_decimal_value(raw: Any) -> Optional[Decimal]:
+    """Parse a provider number without losing its Decimal precision.
+
+    ``raw_value`` remains the provider's lexical value. This helper supplies
+    the separately stored exact numeric representation for sources, such as
+    ECB FX, whose downstream arithmetic must not start from a binary float.
+    """
+    if raw is None:
+        return None
+    if isinstance(raw, Decimal):
+        return raw
+    if isinstance(raw, bool):
+        return None
+    text = str(raw).strip()
+    if text in ("", MISSING_VALUE):
+        return None
+    try:
+        return Decimal(text.replace(",", ""))
+    except (InvalidOperation, ValueError):
+        return None
+
+
+def _row_hash(
+    series_id: str,
+    observation_date: str,
+    realtime_start: str,
+    value: Any,
+    *,
+    semantics: dict[str, Any] | None = None,
+) -> str:
     """Deterministic hash used to detect genuine changes across loads."""
     payload = f"{series_id}|{observation_date}|{realtime_start}|{value}"
+    if semantics:
+        payload += "|" + json.dumps(semantics, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
@@ -157,7 +189,7 @@ def assign_revision_numbers(rows: Iterable[dict[str, Any]]) -> list[dict[str, An
         by_date.setdefault((r["series_id"], r["observation_date"]), []).append(r)
 
     for group in by_date.values():
-        group.sort(key=lambda r: (r.get("realtime_start") or ""))
+        group.sort(key=lambda r: r.get("realtime_start") or "")
         for i, r in enumerate(group, start=1):
             r["revision_number"] = i
     return rows
@@ -174,9 +206,13 @@ def latest_by_observation(rows: Iterable[dict[str, Any]]) -> list[dict[str, Any]
     for r in rows:
         key = (r["series_id"], r["observation_date"])
         cur = latest.get(key)
-        if cur is None or (r.get("realtime_start") or "") >= (cur.get("realtime_start") or ""):
+        if cur is None or (r.get("realtime_start") or "") >= (
+            cur.get("realtime_start") or ""
+        ):
             latest[key] = r
-    return sorted(latest.values(), key=lambda r: (r["series_id"], r["observation_date"]))
+    return sorted(
+        latest.values(), key=lambda r: (r["series_id"], r["observation_date"])
+    )
 
 
 def daily_feature_matrix(latest_rows: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:

@@ -251,6 +251,56 @@ def point_in_time_features_sql(config: PipelineConfig, as_of: str) -> str:
     """
 
 
+def _build_ecb_fx_reference_rates(config: PipelineConfig, spark: Any) -> None:
+    """Write exact, non-forward-filled ECB native/inverse/cross FX rates."""
+    from pyspark.sql.types import StringType, StructField, StructType
+
+    from fred_pipeline.writer.features import compute_ecb_fx_reference_rates
+
+    silver = config.table("silver", "fred_observation")
+    gold = config.table("gold", "ecb_fx_reference_rate")
+    input_rows = [
+        row.asDict()
+        for row in spark.sql(
+            f"""
+            SELECT source, series_id, CAST(observation_date AS STRING) AS observation_date,
+                   CAST(realtime_start AS STRING) AS realtime_start, value, raw_value,
+                   exact_value, is_missing, is_deleted, provider_valid_from,
+                   base_currency, quote_currency, observation_event_id
+            FROM {silver}
+            WHERE source = 'ecb'
+            """
+        ).collect()
+    ]
+    rows = compute_ecb_fx_reference_rates(input_rows)
+    schema = StructType(
+        [
+            StructField("observation_date", StringType()),
+            StructField("base_currency", StringType()),
+            StructField("quote_currency", StringType()),
+            StructField("orientation", StringType()),
+            StructField("rate_decimal", StringType()),
+            StructField("rounded_rate_decimal", StringType()),
+            StructField("rounding_policy_version", StringType()),
+            StructField("native_series_ids", StringType()),
+            StructField("input_event_ids", StringType()),
+            StructField("availability_state", StringType()),
+            StructField("quality_reason", StringType()),
+        ]
+    )
+    (
+        spark.createDataFrame(rows, schema=schema)
+        .selectExpr(
+            "CAST(observation_date AS DATE) AS observation_date",
+            *schema.fieldNames()[1:],
+        )
+        .write.format("delta")
+        .mode("overwrite")
+        .option("overwriteSchema", "true")
+        .saveAsTable(gold)
+    )
+
+
 def _build_cross_series(config: PipelineConfig, spark: Any) -> None:
     """Build ``gold.fred_cross_series_feature`` on Spark by reusing the pure-Python
     reference (:func:`fred_pipeline.features.compute_cross_series_features`).
@@ -2417,6 +2467,8 @@ def build_gold(config: PipelineConfig, *, spark: Any = None) -> dict[str, str]:
     results["fred_cross_series_feature_pit"] = "ok"
     _build_source_reconciliation(config, spark)
     results["fred_source_reconciliation"] = "ok"
+    _build_ecb_fx_reference_rates(config, spark)
+    results["ecb_fx_reference_rate"] = "ok"
     _build_company_financials(config, spark)
     results["fred_company_fundamentals"] = "ok"
     results["fred_company_ratios"] = "ok"

@@ -173,11 +173,24 @@ Normalized observations (multi-source). **Natural key / MERGE key:**
 | realtime_end | DATE | Vintage window end (`9999-12-31` = still current → NULL); also blank for non-vintage series |
 | value | DOUBLE | Parsed numeric value (NULL if missing) |
 | raw_value | STRING | Original upstream string (FRED `.` preserved as-is) |
+| exact_value | STRING | Canonical Decimal text for precision-sensitive sources; ECB FX arithmetic uses this rather than `value` |
 | is_missing | BOOLEAN | True when the value could not be parsed (e.g. FRED `.`) |
 | row_hash | STRING | sha256 change-detection hash |
 | revision_number | INT | 1…N per (series_id, observation_date) |
+| provider_valid_from / provider_valid_to | STRING | Full provider validity timestamps when available; legacy date fields remain for compatibility |
+| base_currency / quote_currency / unit_multiplier | STRING / STRING / INT | Verified ECB EXR orientation and scale; nullable for other sources |
+| observation_status / observation_action / is_deleted | STRING / STRING / BOOLEAN | Retained provider state, including an ECB deletion tombstone |
+| observation_event_id | STRING | Identifier of the current compact state's immutable observed event |
 | ingested_at | TIMESTAMP | Ingestion time |
 | run_id | STRING | Owning run |
+
+### `silver.fred_observation_history`
+Append-only observed normalized states. It has the Silver observation fields plus
+`observation_event_id` as its key. Compact `silver.fred_observation` remains
+the current-state compatibility surface; this relation is the source for
+captured-as-of reconstruction. A legacy database seeds its latest compact row
+once during additive migration; events overwritten before this release cannot
+be recovered without a separately authorised Bronze replay/backfill.
 
 ## gold
 
@@ -274,6 +287,14 @@ Non-vintage series (`vintage_enabled: false`) always have `revision_count = 1`
 a legitimate "not revised" signal, not a data gap. Useful for judging how much
 to trust a series' initial print (e.g. GDP/payrolls are heavily revised;
 market/price series usually are not).
+
+### `gold.ecb_fx_reference_rate`
+Canonical daily ECB FX output for USD, GBP, JPY, CHF, CAD, AUD, NZD, NOK and
+SEK. It contains native `QUOTE per EUR`, inverse `EUR per QUOTE`, and exact
+same-observation-date cross rates. `rate_decimal` is Decimal text;
+`rounded_rate_decimal` is governed by `rounding_policy_version`. `native_series_ids`
+and `input_event_ids` give source lineage. This table never forward fills: an
+unavailable native leg yields no derived rate for that date.
 
 ### Market-terminal analytical views
 Gold objects recreating the `market_terminal` project's economic-analysis

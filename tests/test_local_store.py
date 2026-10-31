@@ -486,6 +486,55 @@ def test_merge_silver_leaves_ingested_at_unchanged_on_byte_identical_reupsert(
     wh.close()
 
 
+def test_merge_silver_retains_changed_observed_states_for_captured_as_of(tmp_path):
+    wh = LocalWarehouse(_config(), db_path=str(tmp_path / "history.db"))
+    base = _silver_row(
+        "ECB:EXR:D.USD.EUR.SP00.A",
+        "2024-01-02",
+        "",
+        1.25,
+        1,
+        source="ecb",
+        ingested_at="2024-01-02T16:00:00+00:00",
+    )
+    first = {**base, "raw_value": "1.25", "row_hash": "a", "run_id": "a"}
+    second = {
+        **base,
+        "value": 1.30,
+        "raw_value": "1.30",
+        "row_hash": "b",
+        "ingested_at": "2024-01-03T16:00:00+00:00",
+        "run_id": "b",
+    }
+    third = {
+        **first,
+        "ingested_at": "2024-01-04T16:00:00+00:00",
+        "run_id": "c",
+    }
+    wh.merge_silver([first])
+    wh.merge_silver([second])
+    wh.merge_silver([third])
+
+    history = wh.query(
+        "SELECT value, ingested_at FROM silver_fred_observation_history "
+        "ORDER BY ingested_at"
+    )
+    assert [(row["value"], row["ingested_at"]) for row in history] == [
+        (1.25, "2024-01-02T16:00:00+00:00"),
+        (1.30, "2024-01-03T16:00:00+00:00"),
+        (1.25, "2024-01-04T16:00:00+00:00"),
+    ]
+    assert wh.point_in_time_features("2024-01-03T17:00:00+00:00") == [
+        {
+            "as_of_date": "2024-01-03",
+            "series_id": "ECB:EXR:D.USD.EUR.SP00.A",
+            "observation_date": "2024-01-02",
+            "value": 1.30,
+        }
+    ]
+    wh.close()
+
+
 def test_query_logs_to_audit_query_log(tmp_path):
     import hashlib
 

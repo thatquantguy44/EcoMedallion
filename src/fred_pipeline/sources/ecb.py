@@ -25,7 +25,12 @@ from datetime import date
 from typing import Any
 
 from fred_pipeline.sources.base import HTTPSource, SourceError
-from fred_pipeline.transform import _row_hash, _utc_now_iso, parse_value
+from fred_pipeline.transform import (
+    _row_hash,
+    _utc_now_iso,
+    parse_decimal_value,
+    parse_value,
+)
 
 log = logging.getLogger("fred_pipeline.sources.ecb")
 
@@ -130,6 +135,54 @@ def _valid_time_to_date(value: Any) -> str:
     return text
 
 
+def _text_or_none(value: Any) -> str | None:
+    text = "" if value is None else str(value).strip()
+    return text or None
+
+
+def _exr_currencies(
+    series_id: str, rec: dict[str, Any]
+) -> tuple[str | None, str | None]:
+    """Return the verified ``(base, quote)`` orientation for an EXR record."""
+    flow_ref, key = parse_ecb_series_id(series_id)
+    if flow_ref.upper() != "EXR":
+        return None, None
+    dimensions = key.split(".")
+    if len(dimensions) < 3:
+        raise ECBAPIError(f"ECB EXR key is missing currency dimensions: {key!r}")
+    quote, base = dimensions[1].upper(), dimensions[2].upper()
+    record_quote = _text_or_none(_field(rec, "CURRENCY"))
+    record_base = _text_or_none(_field(rec, "CURRENCY_DENOM"))
+    if record_quote and record_quote.upper() != quote:
+        raise ECBAPIError(
+            f"ECB EXR currency mismatch for {series_id}: "
+            f"key quote={quote}, record quote={record_quote}"
+        )
+    if record_base and record_base.upper() != base:
+        raise ECBAPIError(
+            f"ECB EXR denominator mismatch for {series_id}: "
+            f"key base={base}, record base={record_base}"
+        )
+    if base != "EUR":
+        raise ECBAPIError(f"ECB EXR base must be EUR for {series_id}, got {base}")
+    return base, quote
+
+
+def _unit_multiplier(series_id: str, rec: dict[str, Any]) -> int | None:
+    value = _text_or_none(_field(rec, "UNIT_MULT"))
+    if value is None:
+        return None
+    try:
+        multiplier = int(value)
+    except ValueError as exc:
+        raise ECBAPIError(f"Invalid ECB UNIT_MULT {value!r} for {series_id}") from exc
+    if parse_ecb_series_id(series_id)[0].upper() == "EXR" and multiplier != 0:
+        raise ECBAPIError(
+            f"ECB EXR UNIT_MULT must be 0 for {series_id}, got {multiplier}"
+        )
+    return multiplier
+
+
 def _csv_records(csv_text: str) -> list[dict[str, str]]:
     """Parse ECB CSV rows, tolerating blank/comment preamble lines."""
     lines = [
@@ -167,17 +220,32 @@ def normalize_ecb_observations(
 
     rows: list[dict[str, Any]] = []
     for rec in _csv_records(csv_text):
-        if str(_field(rec, "ACTION") or "").strip().lower() == "delete":
-            continue
         obs_date = _ecb_period_to_date(_field(rec, "TIME_PERIOD", "PERIOD"))
         if not obs_date:
             continue
+        action = (_text_or_none(_field(rec, "ACTION")) or "replace").lower()
+        is_deleted = action == "delete"
         raw_value = _field(rec, "OBS_VALUE", "VALUE")
-        value = parse_value(raw_value)
-        rt_start = (
-            _valid_time_to_date(_field(rec, "VALID_FROM")) if track_vintage else ""
-        )
-        rt_end = _valid_time_to_date(_field(rec, "VALID_TO")) if track_vintage else ""
+        value = None if is_deleted else parse_value(raw_value)
+        exact_value = None if is_deleted else parse_decimal_value(raw_value)
+        provider_valid_from = _text_or_none(_field(rec, "VALID_FROM"))
+        provider_valid_to = _text_or_none(_field(rec, "VALID_TO"))
+        rt_start = _valid_time_to_date(provider_valid_from) if track_vintage else ""
+        rt_end = _valid_time_to_date(provider_valid_to) if track_vintage else ""
+        base_currency, quote_currency = _exr_currencies(series_id, rec)
+        unit_multiplier = _unit_multiplier(series_id, rec)
+        status = _text_or_none(_field(rec, "OBS_STATUS"))
+        semantics = {
+            "action": action,
+            "base_currency": base_currency,
+            "exact_value": str(exact_value) if exact_value is not None else None,
+            "is_deleted": is_deleted,
+            "observation_status": status,
+            "provider_valid_from": provider_valid_from,
+            "provider_valid_to": provider_valid_to,
+            "quote_currency": quote_currency,
+            "unit_multiplier": unit_multiplier,
+        }
         rows.append(
             {
                 "source": source,
@@ -187,8 +255,20 @@ def normalize_ecb_observations(
                 "realtime_end": rt_end,
                 "value": value,
                 "raw_value": None if raw_value is None else str(raw_value),
+                "exact_value": str(exact_value) if exact_value is not None else None,
                 "is_missing": value is None,
-                "row_hash": _row_hash(series_id, obs_date, rt_start, raw_value),
+                "row_hash": _row_hash(
+                    series_id, obs_date, rt_start, raw_value, semantics=semantics
+                ),
+                "provider_valid_from": provider_valid_from,
+                "provider_valid_to": provider_valid_to,
+                "base_currency": base_currency,
+                "quote_currency": quote_currency,
+                "unit_multiplier": unit_multiplier,
+                "observation_status": status,
+                "observation_action": action,
+                "is_deleted": is_deleted,
+                "observation_event_id": None,
                 "ingested_at": ingested_at,
                 "run_id": run_id,
             }
@@ -257,7 +337,7 @@ class ECBClient(HTTPSource):
         """Fetch one ECB series as raw SDMX CSV."""
         flow_ref, key = parse_ecb_series_id(series_id)
         history = bool(include_history) or bool(realtime_start or realtime_end)
-        params: dict[str, Any] = {"format": "csvdata", "detail": "dataonly"}
+        params: dict[str, Any] = {"format": "csvdata", "detail": "full"}
         start_period = _ecb_period_from_date(observation_start)
         end_period = _ecb_period_from_date(observation_end)
         if start_period:
