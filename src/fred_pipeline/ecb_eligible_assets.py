@@ -1163,7 +1163,12 @@ class ECBEligibleAssetsPipeline:
         self.client = client or ECBMIDClient()
         self.signature_verifier = signature_verifier
 
-    def poll(self, *, allow_gap: bool = False) -> list[IngestResult]:
+    def poll(
+        self,
+        *,
+        allow_gap: bool = False,
+        on_result: Callable[[IngestResult], None] | None = None,
+    ) -> list[IngestResult]:
         items = parse_rss(self.client.fetch_rss())
         latest = self.repository.latest_release()
         if latest:
@@ -1173,12 +1178,15 @@ class ECBEligibleAssetsPipeline:
                 for item in items
                 if datetime.fromisoformat(item.published_at) > cutoff
             ]
-        return [
-            self.ingest_release(
+        results = []
+        for item in items:
+            result = self.ingest_release(
                 item.url, rss_pub_at=item.published_at, allow_gap=allow_gap
             )
-            for item in items
-        ]
+            results.append(result)
+            if on_result is not None:
+                on_result(result)
+        return results
 
     def ingest_release(
         self,

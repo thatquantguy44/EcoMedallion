@@ -33,6 +33,14 @@ class ECBPollReport:
     finished_at: str
 
 
+class ECBPollFailure(ECBExecutionError):
+    """A poll failed; the report retains results committed before the failure."""
+
+    def __init__(self, message: str, report: ECBPollReport):
+        super().__init__(message)
+        self.report = report
+
+
 def execute_ecb_poll(
     config: PipelineConfig,
     *,
@@ -74,16 +82,30 @@ def execute_ecb_poll(
             session=session,
         )
     factory = pipeline_factory or (lambda w, c: ECBEligibleAssetsPipeline(w, client=c))
-    releases = tuple(
-        row.to_dict() for row in factory(warehouse, client).poll(allow_gap=allow_gap)
-    )
+    releases: list[dict[str, Any]] = []
+    try:
+        factory(warehouse, client).poll(
+            allow_gap=allow_gap, on_result=lambda row: releases.append(row.to_dict())
+        )
+    except Exception as exc:
+        report = ECBPollReport(
+            operation_id=operation_id,
+            selected_backend=selected_backend,
+            outcome="failed",
+            releases=tuple(releases),
+            started_at=started_at,
+            finished_at=now().isoformat(),
+        )
+        # Preserve existing CLI error messages; consumers must use the report
+        # for safe orchestration metadata, not the exception text or cause.
+        raise ECBPollFailure(str(exc), report) from exc
     return ECBPollReport(
         operation_id=operation_id,
         selected_backend=selected_backend,
         outcome="accepted"
         if any(row.get("status") == "accepted" for row in releases)
         else "no_new_release",
-        releases=releases,
+        releases=tuple(releases),
         started_at=started_at,
         finished_at=now().isoformat(),
     )

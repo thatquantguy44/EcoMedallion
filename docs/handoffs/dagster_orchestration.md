@@ -18,9 +18,12 @@ branch and workload scope; retain the safety contracts in
 
 The dedicated poll command and main-run ECB hook now call the same library
 function, which checks backend authority and borrows the caller's warehouse
-and network client. Existing CLI orchestration still owns alerts and cleanup.
-Complete the service's health, notification and partial-failure reporting,
-then implement T3 writer exclusion before introducing any Dagster writer.
+and network client. Its typed poll failure report retains results for releases
+committed before a later failure; the report excludes source exception text.
+The exception text and cause retain the existing CLI diagnostic and must not be
+emitted as Dagster metadata. Existing CLI orchestration still owns alerts and
+cleanup. Complete the service's health and notification reporting, then
+implement T3 writer exclusion before introducing any Dagster writer.
 
 ## T1 runtime verification
 

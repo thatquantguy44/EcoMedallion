@@ -10,7 +10,7 @@ from fred_pipeline.ecb_eligible_assets import (
     SignatureResult,
 )
 from fred_pipeline.io.local_store import LocalWarehouse
-from tests.test_ecb_eligible_assets import _fixture_client, _verified
+from tests.test_ecb_eligible_assets import _fixture_client, _update, _verified
 
 
 def test_shared_poll_ingests_signed_releases_and_borrows_warehouse(tmp_path):
@@ -105,7 +105,7 @@ def test_managed_mode_requires_run_selected_session():
 
 
 def test_shared_poll_preserves_quarantine_and_borrowed_warehouse_on_failure(tmp_path):
-    from fred_pipeline.ecb_execution import execute_ecb_poll
+    from fred_pipeline.ecb_execution import ECBPollFailure, execute_ecb_poll
 
     config = PipelineConfig.resolve(config_file="/nonexistent", rate_limit_per_minute=0)
     warehouse = LocalWarehouse(config, db_path=str(tmp_path / "ecb.db"))
@@ -125,7 +125,7 @@ def test_shared_poll_preserves_quarantine_and_borrowed_warehouse_on_failure(tmp_
         )
 
     try:
-        with pytest.raises(ECBReleaseValidationError, match="signature failed"):
+        with pytest.raises(ECBPollFailure, match="signature failed") as failure:
             execute_ecb_poll(
                 config,
                 warehouse=warehouse,
@@ -134,8 +134,74 @@ def test_shared_poll_preserves_quarantine_and_borrowed_warehouse_on_failure(tmp_
                 client=client,
                 pipeline_factory=factory,
             )
+        assert isinstance(failure.value.__cause__, ECBReleaseValidationError)
+        assert failure.value.report.outcome == "failed"
+        assert failure.value.report.releases == ()
         status = ECBEligibleAssetRepository(warehouse).status()
         assert status["quarantined"]
         assert status["current_eligible_count"] == 0
     finally:
         warehouse.close()
+
+
+def test_failure_report_keeps_previously_committed_releases(tmp_path):
+    from fred_pipeline.ecb_execution import ECBPollFailure, execute_ecb_poll
+
+    config = PipelineConfig.resolve(config_file="/nonexistent", rate_limit_per_minute=0)
+    warehouse = LocalWarehouse(config, db_path=str(tmp_path / "ecb.db"))
+    client, first, second = _fixture_client(second_update=_update())
+    client.rss = f"""<rss><channel>
+    <item><title>List of eligible marketable assets</title><link>{second}</link>
+    <pubDate>Tue, 02 Jan 2024 17:56:07 +0100</pubDate></item>
+    <item><title>List of eligible marketable assets</title><link>{first}</link>
+    <pubDate>Mon, 01 Jan 2024 17:56:07 +0100</pubDate></item>
+    </channel></rss>""".encode()
+
+    def factory(w, fixture):
+        return ECBEligibleAssetsPipeline(
+            w, client=fixture, signature_verifier=_verified
+        )
+
+    try:
+        with pytest.raises(ECBPollFailure) as failure:
+            execute_ecb_poll(
+                config,
+                warehouse=warehouse,
+                selected_backend="local",
+                authoritative_backend="local",
+                client=client,
+                pipeline_factory=factory,
+            )
+        report = failure.value.report
+        assert report.outcome == "failed"
+        assert len(report.releases) == 1
+        assert report.releases[0]["status"] == "accepted"
+        status = ECBEligibleAssetRepository(warehouse).status()
+        assert status["current_eligible_count"] == 2
+        assert status["quarantined"]
+    finally:
+        warehouse.close()
+
+
+def test_failure_report_does_not_include_source_exception_text():
+    from fred_pipeline.ecb_execution import ECBPollFailure, execute_ecb_poll
+
+    class Warehouse:
+        conn = object()
+
+        def _insert(self):
+            pass
+
+    class BrokenClient:
+        def fetch_rss(self):
+            raise RuntimeError("private-token-in-source-error")
+
+    with pytest.raises(ECBPollFailure) as failure:
+        execute_ecb_poll(
+            PipelineConfig.resolve(config_file="/nonexistent"),
+            warehouse=Warehouse(),
+            selected_backend="local",
+            authoritative_backend="local",
+            client=BrokenClient(),
+        )
+    assert "private-token-in-source-error" not in repr(failure.value.report)
