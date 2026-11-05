@@ -4,9 +4,11 @@ Status: **Draft for user review. Specification only; implementation has not star
 
 Date: 2026-11-04
 
-Review update, 2026-11-04: the user confirmed **main pipeline and ECB jobs** as
-the initial Dagster scope, with detailed per-table assets deferred. This confirms
-that scope decision only; the remaining specification is still under review.
+Review updates, 2026-11-04: the user confirmed **main pipeline and ECB jobs**,
+then accepted the recommended additions: **warehouse health checks, Gold-only
+rebuild, and metadata reconciliation**. The full pipeline must also enable
+**FOMC refresh by default**. Detailed per-table assets remain deferred. These
+confirm the workload scope; the remaining specification is still under review.
 
 Branch: `feature/dagster-alerts-network-spec`, created from the locally available
 `origin/main` at `8f88ff7`. No remote fetch or push was performed.
@@ -28,7 +30,7 @@ starts after the user reviews the scope and proposed defaults below.
 | --- | --- | --- |
 | outbound-network | Validated settings, startup probes, immutable run route plan, configured HTTP sessions and SMTP connections | Existing configuration and injectable transports |
 | alert-email | Provider profiles, SMTP TLS/auth options, personal Outlook.com OAuth, existing Microsoft 365 Graph, diagnostics | outbound-network |
-| dagster-integration | Optional runtime, main-pipeline and ECB jobs, truthful outcomes, shared alerts, stopped schedules and cutover | outbound-network, alert-email, existing Spec 013 ECB execution/lock contracts |
+| dagster-integration | Optional runtime; main, ECB, warehouse health, Gold-only and metadata reconciliation jobs; default-on full-run FOMC refresh; truthful outcomes, shared alerts, stopped schedules and cutover | outbound-network, alert-email, existing Spec 013 ECB execution/lock contracts |
 
 Proposed build order: outbound-network → alert-email → dagster-integration.
 Review these boundaries together with the module specifications:
@@ -37,8 +39,8 @@ Review these boundaries together with the module specifications:
 - [Email delivery](SPEC-alert-email.md)
 - [Dagster integration](SPEC-dagster-integration.md)
 
-This map and all three module specs are proposals, not approved decisions or
-an implementation task checklist.
+The workload decisions recorded above are confirmed. Remaining module
+contracts/defaults are proposals for review, not an implementation checklist.
 
 ## Existing behavior inspected
 
@@ -52,6 +54,8 @@ an implementation task checklist.
 | `catalogs/fomc_calendar.py`, `governance/notify.py`, `governance/email_transport.py`: direct Requests calls | Include calendar refresh, webhook, Graph token and Graph send paths |
 | Alerting already supports `smtp`, `outlook_smtp`, `microsoft_graph`, `console`, `file` | Extend the existing renderer, routes and transports instead of creating a second alert system |
 | Current SMTP uses STARTTLS/password login; Graph uses tenant client credentials | Add implicit TLS and OAuth; personal Outlook.com is not covered by the current Graph flow |
+| Main-run FOMC refresh currently requires `--refresh-fomc-calendar`; its pre-Gold stage adds dates and retains the local file on fetch/parse/write failure | Change the full-run default as requested, retain an explicit opt-out and existing additive/fallback behavior |
+| Standalone Gold/reconciliation commands select SQLite/Spark directly; the main run uses `WarehouseFactory` | Adapt shared maintenance services to the configured authoritative backend, including PostgreSQL; do not shell-wrap the current CLI and assume parity |
 | [Spec 013](../spec013/README.md) and [its handoff](../../docs/handoffs/dagster_orchestration.md) are draft-only | Reuse the detailed ECB safety and operational contracts; no Dagster runtime is assumed installed |
 
 For this initiative, this branch and Spec 016 are the review/pickup point.
@@ -62,8 +66,9 @@ or mark its gates complete. Reconcile those documents when this spec is approved
 
 ## Proposed defaults for review
 
-1. Keep Dagster optional and the CLI usable without it. Initially expose the
-   main Bronze-to-Gold run and ECB polling as coarse jobs; defer granular
+1. Keep Dagster optional and the CLI usable without it. The confirmed initial
+   scope includes the main Bronze-to-Gold run, ECB polling/health, warehouse
+   health, Gold-only rebuild and metadata reconciliation. Defer granular
    per-table orchestration. This expands Spec 013's ECB-only first release.
 2. Preserve today's network behavior when new settings are absent (`mode: env`).
    Offer `auto` for startup selection, `direct` and `proxy` for strict operation.
@@ -77,6 +82,10 @@ or mark its gates complete. Reconcile those documents when this spec is approved
 5. Include HTTP CONNECT support for SMTP where the proxy permits the mail port.
    Otherwise the operator can use Graph over HTTPS or an accessible SMTP relay.
    An HTTP proxy setting alone does not configure Python's SMTP connection.
+6. Enable FOMC refresh before Gold in the full Dagster job and CLI `run`, for
+   both routine incremental runs and forced full extraction. Add an explicit
+   opt-out and retain local-calendar fallback. This requested default change
+   is an exception to otherwise preserving CLI behavior.
 
 ## Commands and verification
 
@@ -104,6 +113,12 @@ pre-existing missing Power BI handoff targets; this change does not alter them.
 `git diff --check` passed. These results characterize the existing code and
 validate documentation only; the new capabilities have not been implemented
 or runtime-tested.
+
+After the scope/FOMC update, the focused FOMC, reconciliation, pipeline and CLI
+characterization command in the Dagster module passed **98 tests**. Spec links,
+Markdown structure, the documentation staleness check and `git diff --check`
+also passed. The refresh-on default and additional jobs remain specified
+behavior awaiting implementation, not outcomes proven by these existing tests.
 
 ## Conventions and boundaries
 
@@ -135,7 +150,8 @@ class RouteDecision:
 
 | Decision | Proposal | Impact if changed |
 | --- | --- | --- |
-| First Dagster scope | **Confirmed by user: main pipeline plus ECB jobs; per-table assets deferred** | Expands Spec 013's ECB-only first release |
+| First Dagster scope | **Confirmed: main, ECB polling/health, warehouse health, Gold-only and metadata reconciliation jobs; per-table assets deferred** | Expands Spec 013's ECB-only first release |
+| Full-run FOMC refresh | **Confirmed: enabled by default** in Dagster and CLI `run`, with an explicit opt-out | Adds a Fed-page request and possible local calendar additions before Gold; retain existing failure fallback |
 | Network rollout | Opt-in `auto`, existing `env` default | Defaulting all installs to `auto` adds startup traffic and changes routing immediately |
 | Network preference | Proxy first, then direct; strict modes available | Direct-first is selectable for networks where direct access is usual |
 | Mid-run network changes | Fail/retry on selected route; reselect next run | Transparent route switching needs a separate recovery and replay contract |

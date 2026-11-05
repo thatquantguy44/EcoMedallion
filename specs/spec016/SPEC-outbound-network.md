@@ -105,6 +105,12 @@ mode overrides precede global mode, but cannot override a bypass match.
    and eligible alert/webhook profiles. Probe each distinct origin/protocol
    once, not each series. Source origins are required; notification and
    optional enrichment origins are advisory, preserving existing failure policy.
+   The full run's default-enabled FOMC refresh registers the Fed-page origin
+   as advisory. A failed route records a refresh warning and uses the existing
+   calendar without attempting a second route later. Explicit refresh opt-out
+   excludes this target unless another selected task needs it. Warehouse health
+   and Gold-only jobs have no source targets; enabled terminal alerts may still
+   register advisory notification targets. Reconciliation registers FRED.
 3. Resolve bypasses first. In strict `direct`/`proxy`, probe only that candidate.
    In `auto`, try the preferred available candidate and try the other at most
    once on an eligible connectivity failure. Skip an absent proxy candidate.
