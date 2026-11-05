@@ -1,8 +1,9 @@
 # Dagster Orchestration Handoff
 
 Status: The optional Dagster runtime and clean-install verification are complete.
-Shared execution, PostgreSQL writer exclusion, definitions, jobs and schedules
-remain unimplemented.
+Both ECB poll entry points now use an initial shared execution boundary.
+Complete execution reporting, PostgreSQL writer exclusion, definitions, jobs
+and schedules remain unimplemented.
 
 Last verified: 2026-11-05 (runtime installation and dependency isolation; no
 production deployment, source polling or email).
@@ -15,10 +16,11 @@ branch and workload scope; retain the safety contracts in
 
 ## Next task: T2 shared ECB execution
 
-Extract a shared ECB execution service from the dedicated poll command and
-the main-run ECB hook. Preserve authority guards, JSON, defaults, exit codes,
-network route lifetime, alerts and warehouse ownership. Then implement T3
-writer exclusion before introducing any Dagster writer.
+The dedicated poll command and main-run ECB hook now call the same library
+function, which checks backend authority and borrows the caller's warehouse
+and network client. Existing CLI orchestration still owns alerts and cleanup.
+Complete the service's health, notification and partial-failure reporting,
+then implement T3 writer exclusion before introducing any Dagster writer.
 
 ## T1 runtime verification
 

@@ -878,14 +878,23 @@ def _cmd_run(args: argparse.Namespace) -> int:
         else:
             try:
                 if config.network.mode == "env":
-                    releases = _poll_ecb_assets_for_run(config, warehouse)
+                    releases = _poll_ecb_assets_for_run(
+                        config,
+                        warehouse,
+                        selected_backend=selected_backend,
+                        authoritative_backend=warehouse_config.ecb_assets_authoritative_backend,
+                    )
                 else:
                     if pipeline._ecb_sessions is None:
                         raise NetworkPreflightError(
                             "ECB MID route was unavailable at startup"
                         )
                     releases = _poll_ecb_assets_for_run(
-                        config, warehouse, session=pipeline._ecb_sessions
+                        config,
+                        warehouse,
+                        session=pipeline._ecb_sessions,
+                        selected_backend=selected_backend,
+                        authoritative_backend=warehouse_config.ecb_assets_authoritative_backend,
                     )
                 ecb_assets_result = {
                     "status": "succeeded",
@@ -951,25 +960,24 @@ def _cmd_run(args: argparse.Namespace) -> int:
 
 
 def _poll_ecb_assets_for_run(
-    config: PipelineConfig, warehouse, *, session: Any = None
+    config: PipelineConfig,
+    warehouse,
+    *,
+    selected_backend: str,
+    authoritative_backend: str,
+    session: Any = None,
 ) -> list[dict]:
     """Poll signed MID releases after the observation pipeline has persisted."""
-    from fred_pipeline.ecb_eligible_assets import (
-        ECBEligibleAssetsPipeline,
-        ECBMIDClient,
-    )
+    from fred_pipeline.ecb_execution import execute_ecb_poll
 
-    if warehouse is None:
-        raise RuntimeError("ECB eligible-assets polling requires a durable warehouse")
-    client = ECBMIDClient(
-        base_url=config.ecb_mid_base_url,
-        timeout=config.request_timeout_seconds,
-        max_retries=config.max_retries,
-        rate_limit_per_minute=min(config.rate_limit_per_minute, 60),
+    report = execute_ecb_poll(
+        config,
+        warehouse=warehouse,
+        selected_backend=selected_backend,
+        authoritative_backend=authoritative_backend,
         session=session,
     )
-    pipeline = ECBEligibleAssetsPipeline(warehouse, client=client)
-    return [result.to_dict() for result in pipeline.poll()]
+    return list(report.releases)
 
 
 def _send_ecb_assets_health_alert(
@@ -1470,12 +1478,24 @@ def _cmd_ecb_assets(args: argparse.Namespace) -> int:
             rate_limit_per_minute=min(config.rate_limit_per_minute, 60),
             session=session,
         )
-        pipeline = ECBEligibleAssetsPipeline(warehouse, client=client)
+        pipeline = (
+            ECBEligibleAssetsPipeline(warehouse, client=client)
+            if args.action != "poll"
+            else None
+        )
         repository = ECBEligibleAssetRepository(warehouse)
         if args.action == "poll":
-            result: object = [
-                row.to_dict() for row in pipeline.poll(allow_gap=args.allow_gap)
-            ]
+            from fred_pipeline.ecb_execution import execute_ecb_poll
+
+            report = execute_ecb_poll(
+                config,
+                warehouse=warehouse,
+                selected_backend=factory.selected_backend_name,
+                authoritative_backend=authoritative_backend,
+                allow_gap=args.allow_gap,
+                client=client,
+            )
+            result: object = list(report.releases)
         elif args.action == "ingest-release":
             if not args.release_url:
                 print("ERROR: ingest-release requires --release-url", file=sys.stderr)

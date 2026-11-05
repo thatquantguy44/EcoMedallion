@@ -98,7 +98,7 @@ def test_run_polls_ecb_assets_by_default(monkeypatch, capsys):
     calls = []
     alerts = []
 
-    def poll(config, selected_warehouse):
+    def poll(config, selected_warehouse, **_kwargs):
         calls.append((config, selected_warehouse))
         return [{"release_id": "release-one", "status": "accepted"}]
 
@@ -126,7 +126,7 @@ def test_run_reports_ecb_poll_failure_and_closes_warehouse(monkeypatch, capsys):
     warehouse = _install_run_fakes(monkeypatch)
     alerts = []
 
-    def fail(_config, _warehouse):
+    def fail(_config, _warehouse, **_kwargs):
         raise RuntimeError("MID unavailable")
 
     monkeypatch.setattr(cli, "_poll_ecb_assets_for_run", fail)
