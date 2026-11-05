@@ -22,6 +22,7 @@ import os
 import smtplib
 import re
 from dataclasses import dataclass
+from email import policy
 from email.message import EmailMessage
 from email.utils import formataddr, make_msgid
 from pathlib import Path
@@ -293,38 +294,65 @@ class MicrosoftGraphTransport:
             )
         else:
             token = self._access_token(http)
-        payload = {
-            "message": {
-                "subject": message.subject,
-                "body": {"contentType": "HTML", "content": message.html_body},
-                "toRecipients": [{"emailAddress": {"address": a}} for a in message.to],
-                "ccRecipients": [{"emailAddress": {"address": a}} for a in message.cc],
-                "bccRecipients": [
-                    {"emailAddress": {"address": a}} for a in message.bcc
-                ],
-                "attachments": [
-                    {
-                        "@odata.type": "#microsoft.graph.fileAttachment",
-                        "name": name,
-                        "contentType": mime,
-                        "contentBytes": base64.b64encode(data).decode("ascii"),
-                    }
-                    for name, data, mime in message.attachments
-                ],
-            },
-            "saveToSentItems": True,
-        }
-        if re.fullmatch(r"[0-9a-f]{32}", message.correlation_id):
-            payload["message"]["internetMessageHeaders"] = [
-                {"name": "x-fred-correlation-id", "value": message.correlation_id}
-            ]
+        headers = {"Authorization": f"Bearer {token}"}
+        try:
+            if message.bcc:
+                # Graph's structured BCC recipients remain separate from the
+                # visible headers; raw MIME BCC behavior is not established.
+                payload = {
+                    "message": {
+                        "subject": message.subject,
+                        "body": {"contentType": "HTML", "content": message.html_body},
+                        "toRecipients": [
+                            {"emailAddress": {"address": a}} for a in message.to
+                        ],
+                        "ccRecipients": [
+                            {"emailAddress": {"address": a}} for a in message.cc
+                        ],
+                        "bccRecipients": [
+                            {"emailAddress": {"address": a}} for a in message.bcc
+                        ],
+                        "attachments": [
+                            {
+                                "@odata.type": "#microsoft.graph.fileAttachment",
+                                "name": name,
+                                "contentType": mime,
+                                "contentBytes": base64.b64encode(data).decode("ascii"),
+                            }
+                            for name, data, mime in message.attachments
+                        ],
+                    },
+                    "saveToSentItems": True,
+                }
+                if re.fullmatch(r"[0-9a-f]{32}", message.correlation_id):
+                    payload["message"]["internetMessageHeaders"] = [
+                        {
+                            "name": "x-fred-correlation-id",
+                            "value": message.correlation_id,
+                        }
+                    ]
+                body = {"json": payload}
+            else:
+                mime = _build_mime(message)
+                if re.fullmatch(r"[0-9a-f]{32}", message.correlation_id):
+                    mime["X-Fred-Correlation-Id"] = message.correlation_id
+                headers["Content-Type"] = "text/plain"
+                body = {
+                    "data": base64.b64encode(mime.as_bytes(policy=policy.SMTP)).decode(
+                        "ascii"
+                    )
+                }
+        except (TypeError, ValueError, UnicodeError):
+            raise EmailSendError(
+                "Microsoft Graph message could not be prepared", category="message"
+            ) from None
         try:
             response = http.post(
                 "https://graph.microsoft.com/v1.0/me/sendMail"
                 if self._config.auth == "delegated"
                 else self.SEND_URL.format(sender=quote(message.from_address, safe="")),
-                json=payload,
-                headers={"Authorization": f"Bearer {token}"},
+                **body,
+                headers=headers,
                 timeout=self._config.timeout_seconds,
                 allow_redirects=False,
             )

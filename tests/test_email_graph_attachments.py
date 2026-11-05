@@ -51,6 +51,7 @@ def test_graph_sends_attachments_and_sanitizes_response(monkeypatch):
         text_body="text",
         html_body="<p>text</p>",
         to=["ops@example.com"],
+        bcc=["audit@example.com"],
         from_address="sender@example.com",
         attachments=[("run.json", b"{}", "application/json")],
     )

@@ -26,7 +26,7 @@ pipeline's source clients, FOMC refresh, and ECB eligible-assets polling in the
 main hook and standalone poll, plus default-on CLI FOMC refresh. Named email
 profiles, SMTP TLS/auth and proxy options, Outlook OAuth, Graph attachments,
 delivery outcomes and email diagnostics are also implemented. Graph text/HTML
-parity, other outbound consumers and Dagster jobs remain work; live mailbox
+parity for messages with BCC, other outbound consumers and Dagster jobs remain work; live mailbox
 acceptance and receipt have not been verified.
 
 ## Capability map
@@ -160,7 +160,13 @@ STARTTLS and implicit TLS with certificate verification, fake Graph calls and
 an injected identity endpoint with MSAL 1.39.0. Tests also cover private cache
 locking, account binding, route reuse, and preview/unknown delivery outcomes.
 No live mailbox was authorized or sent mail; provider acceptance and actual
-recipient receipt remain deployment checks. Graph HTML/text parity is open.
+recipient receipt remain deployment checks. Graph HTML/text parity with BCC is open.
+
+The Graph MIME slice verifies both rendered alternatives and binary attachments
+by decoding submitted MIME for app-only and delegated authentication. Messages
+with BCC retain structured Graph recipients and an HTML-only body. Failure tests
+cover accepted, rejected, and ambiguous outcomes without replay. These offline
+tests do not verify provider-side delivery or recipient privacy.
 
 ## Conventions and boundaries
 

@@ -105,8 +105,19 @@ relays. TLS verifies server certificates. Legacy `use_starttls` remains
 supported but cannot be combined with `tls`; legacy password configurations
 using cleartext must migrate to TLS. SMTP partial-recipient refusals are
 reported as failures. Microsoft Graph delivery includes configured JSON attachments.
-Graph messages currently use an HTML body; the separate plain-text alternative
-is available with SMTP and is not yet included in Graph messages.
+Graph messages without BCC use MIME with both plain-text and HTML alternatives.
+When BCC is present, Graph uses its structured `bccRecipients` field and the
+HTML body; the separate plain-text alternative remains unavailable for that
+case. This preserves existing BCC routing without assuming the raw MIME API
+will deliver and hide a `Bcc` header. Attachments are included in either path.
+For both, a Graph `202` confirms acceptance for processing, not receipt. Verify
+delivery and recipient privacy in the target environment before activation.
+Use controlled sender, visible-recipient and BCC-recipient mailboxes. For a
+message without BCC, inspect the received raw message for both MIME alternatives
+and each attachment. For a separate message using a test-only BCC route, confirm
+both mailboxes receive it and inspect the visible recipient's raw headers for
+the absence of BCC addresses. Record the result without publishing message
+content, recipient addresses or tokens.
 
 SMTP can optionally select a route using its own `transport.network` block:
 `mode: direct`, `proxy`, or `auto`; `preference: proxy_first` or `direct_first`;

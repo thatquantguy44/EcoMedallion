@@ -1,15 +1,23 @@
 # Module: alert-email
 
-Status: Core email additions implemented; Graph text/HTML parity and deployment verification remain open. Parent: [Spec 016](README.md).
+Status: Core email additions implemented; Graph text/HTML parity with BCC and deployment verification remain open. Parent: [Spec 016](README.md).
 Depends on: [outbound-network](SPEC-outbound-network.md).
 
 Implemented so far: legacy or named profile configuration, per-verdict sender
 and transport selection for run and ECB alerts, validated SMTP STARTTLS,
 implicit TLS or unauthenticated relay, SMTP partial-refusal reporting and
 Graph attachments, delegated personal Outlook OAuth, managed Graph/SMTP
-networking, structured delivery outcomes and diagnostics. Graph still sends
-HTML rather than both text and HTML. Real mailbox acceptance/receipt evidence
-and Dagster integration remain deployment work.
+networking, structured delivery outcomes and diagnostics. Graph submits
+multipart plain-text/HTML messages when there are no BCC recipients; messages
+with BCC retain structured recipients and an HTML-only body. Graph BCC
+text/HTML parity, real mailbox acceptance/receipt evidence, and Dagster
+integration remain open.
+
+Microsoft's [sendMail API](https://learn.microsoft.com/en-us/graph/api/user-sendmail?view=graph-rest-1.0)
+accepts either JSON or a base64-encoded MIME body. The implementation retains
+JSON's explicit `bccRecipients` rather than assuming raw MIME BCC delivery and
+privacy; this leaves multipart BCC support unverified. A provider acceptance
+response or an offline MIME parse alone cannot prove actual recipient privacy.
 
 ## Objective and existing contract
 
@@ -119,8 +127,9 @@ time; resolve secret values only when needed and report an unset value as a
 delivery/readiness failure. Diagnostics must not print them.
 When disabled, do not bootstrap OAuth, acquire tokens or probe a mail service.
 
-Preserve text/HTML, run JSON attachments and envelope-only BCC. Add Graph
-attachment parity, which the current SMTP transport has but Graph omits.
+Preserve text/HTML, run JSON attachments and private BCC recipients. Graph
+supports attachments in both implemented formats; the text alternative remains
+open when BCC requires the structured JSON format.
 Send only from the authenticated personal mailbox; delegated send-as for
 other mailboxes and SMTP provider failover are deferred.
 
