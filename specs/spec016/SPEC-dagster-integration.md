@@ -9,7 +9,8 @@ Depends on: [outbound-network](SPEC-outbound-network.md),
 Provide optional Dagster OSS jobs for the main Bronze-to-Gold pipeline and ECB
 eligible-assets polling. Preserve the CLI as a supported entry point and make
 Dagster outcomes reflect required-stage failures as well as series outcomes.
-The proposed main-pipeline job is an explicit addition to
+The user confirmed this initial scope on 2026-11-04, with detailed per-table
+assets deferred. The main-pipeline job is an explicit addition to
 [Spec 013](../spec013/README.md), which scoped its first release to ECB only.
 
 Retain Spec 013's ECB shared execution service, authoritative PostgreSQL guard,

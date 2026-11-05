@@ -4,6 +4,10 @@ Status: **Draft for user review. Specification only; implementation has not star
 
 Date: 2026-11-04
 
+Review update, 2026-11-04: the user confirmed **main pipeline and ECB jobs** as
+the initial Dagster scope, with detailed per-table assets deferred. This confirms
+that scope decision only; the remaining specification is still under review.
+
 Branch: `feature/dagster-alerts-network-spec`, created from the locally available
 `origin/main` at `8f88ff7`. No remote fetch or push was performed.
 
@@ -131,7 +135,7 @@ class RouteDecision:
 
 | Decision | Proposal | Impact if changed |
 | --- | --- | --- |
-| First Dagster scope | Main pipeline plus ECB jobs | ECB-only matches Spec 013; main-only leaves ECB scheduler unchanged |
+| First Dagster scope | **Confirmed by user: main pipeline plus ECB jobs; per-table assets deferred** | Expands Spec 013's ECB-only first release |
 | Network rollout | Opt-in `auto`, existing `env` default | Defaulting all installs to `auto` adds startup traffic and changes routing immediately |
 | Network preference | Proxy first, then direct; strict modes available | Direct-first is selectable for networks where direct access is usual |
 | Mid-run network changes | Fail/retry on selected route; reselect next run | Transparent route switching needs a separate recovery and replay contract |
