@@ -16,8 +16,10 @@ import logging
 from collections import defaultdict
 from collections.abc import Iterable
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
+from functools import wraps
 from typing import Any
 
 from fred_pipeline.audit import EtlRun, EtlSeriesRun, RunStatus
@@ -30,6 +32,7 @@ from fred_pipeline.manifest import (
     all_series,
     load_manifests,
 )
+from fred_pipeline.network import NetworkPreflightError, RunSessions, select_route
 from fred_pipeline.quality import run_quality_checks
 from fred_pipeline.sources.base import SourceClient
 from fred_pipeline.sources.bea import BEAClient
@@ -74,13 +77,14 @@ class BufferedSeriesOutcome:
     observations_extracted: int
 
 
-def _make_fred(config: PipelineConfig) -> SourceClient:
+def _make_fred(config: PipelineConfig, *, session: Any = None) -> SourceClient:
     return FredClient(
         api_key=config.fred_api_key,
         base_url=config.fred_base_url,
         timeout=config.request_timeout_seconds,
         max_retries=config.max_retries,
         rate_limit_per_minute=_rate_limit_for_source(config, "fred"),
+        session=session,
     )
 
 
@@ -447,6 +451,18 @@ def _series_is_due(
     return now - last >= interval
 
 
+def _with_fred_network(func):
+    @wraps(func)
+    def wrapped(self, specs, *args, **kwargs):
+        specs = list(specs)
+        with self._fred_network(
+            specs, include_calendar=kwargs.get("build_gold_layer", True)
+        ):
+            return func(self, specs, *args, **kwargs)
+
+    return wrapped
+
+
 class FredPipeline:
     def __init__(
         self,
@@ -468,6 +484,9 @@ class FredPipeline:
         self._clients: dict[str, SourceClient] = dict(clients or {})
         if client is not None:
             self._clients.setdefault("fred", client)
+        self._provided_sources = set(self._clients)
+        self._fred_sessions: RunSessions | None = None
+        self._network_active = False
         self._notify_transport = notify_transport
         # Injectable so tests never touch a mailbox; None means the
         # transport named in config/alerting.yml (console by default).
@@ -497,9 +516,69 @@ class FredPipeline:
                     f"Unknown source {source!r}; known sources: "
                     f"{sorted(SOURCE_FACTORIES)}"
                 )
-            client = factory(self.config)
+            if source == "fred" and factory is _make_fred and self._fred_sessions:
+                client = _make_fred(self.config, session=self._fred_sessions)
+            elif (
+                source == "fred"
+                and factory is _make_fred
+                and self.config.network.mode != "env"
+            ):
+                raise NetworkPreflightError("FRED has no selected route for this run")
+            else:
+                client = factory(self.config)
             self._clients[source] = client
         return client
+
+    @contextmanager
+    def _fred_network(self, specs: list[SeriesSpec], *, include_calendar: bool = False):
+        fred_required = any(
+            (getattr(s, "source", "fred") or "fred").lower() == "fred" for s in specs
+        )
+        calendar_may_fetch = (
+            include_calendar
+            and bool(specs)
+            and self.warehouse is not None
+            and bool(self.config.fred_api_key)
+        )
+        if (
+            self._network_active
+            or self.config.network.mode == "env"
+            or "fred" in self._provided_sources
+            or SOURCE_FACTORIES.get("fred") is not _make_fred
+            or not (fred_required or calendar_may_fetch)
+        ):
+            yield
+            return
+        previous = self._clients.pop("fred", None)
+        if previous is not None:
+            session = getattr(previous, "_session", None)
+            if session is not None and hasattr(session, "close"):
+                session.close()
+        try:
+            route = select_route(self.config.network, self.config.fred_base_url)
+        except NetworkPreflightError:
+            if fred_required:
+                raise
+            log.warning(
+                "FRED release-calendar preflight failed; its refresh will be skipped"
+            )
+            self._network_active = True
+            try:
+                yield
+            finally:
+                self._network_active = False
+            return
+        log.info("FRED startup connectivity selected %s route", route.kind)
+        sessions = RunSessions(route)
+        self._fred_sessions = sessions
+        self._network_active = True
+        try:
+            yield
+        finally:
+            self._clients.pop("fred", None)
+            self._fred_sessions = None
+            self._network_active = False
+            sessions.close()
 
     def _client_for(self, spec: SeriesSpec) -> SourceClient:
         return self._client_for_source(getattr(spec, "source", "fred") or "fred")
@@ -543,23 +622,25 @@ class FredPipeline:
                 not in blocked_sources
             ]
         log.info("Loaded %d active series from %s", len(specs), manifest_path)
-        if self.warehouse is not None:
-            try:
-                self.warehouse.sync_meta(manifests)
-                log.info("Synced %d series to meta layer", len(specs))
-            except Exception:
-                log.exception("Meta sync failed (continuing)")
-        return self.run(
-            specs,
-            manifest_path=manifest_path,
-            triggered_by=triggered_by,
-            build_gold_layer=build_gold_layer,
-            force_full=force_full,
-            skip_not_due=skip_not_due,
-            refresh_fomc_calendar=refresh_fomc_calendar,
-        )
+        with self._fred_network(specs, include_calendar=build_gold_layer):
+            if self.warehouse is not None:
+                try:
+                    self.warehouse.sync_meta(manifests)
+                    log.info("Synced %d series to meta layer", len(specs))
+                except Exception:
+                    log.exception("Meta sync failed (continuing)")
+            return self.run(
+                specs,
+                manifest_path=manifest_path,
+                triggered_by=triggered_by,
+                build_gold_layer=build_gold_layer,
+                force_full=force_full,
+                skip_not_due=skip_not_due,
+                refresh_fomc_calendar=refresh_fomc_calendar,
+            )
 
     @timed("FredPipeline.run")
+    @_with_fred_network
     def run(
         self,
         specs: Iterable[SeriesSpec],

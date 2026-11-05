@@ -1,6 +1,14 @@
 # Module: outbound-network
 
-Status: Draft for review. Parent: [Spec 016](README.md).
+Status: FRED-only first slice implemented; broader module draft for review.
+Parent: [Spec 016](README.md).
+
+The first slice implements managed startup selection for the main pipeline's
+FRED client and its FRED release-calendar calls. Other source clients, the ECB
+hook, FOMC, Graph, SMTP and webhooks are not yet covered by managed routing;
+the cross-consumer acceptance criteria below remain open until those paths are
+wired and verified. The diagnostic command and preflight-stage alert are also
+future work.
 
 ## Objective and scope
 

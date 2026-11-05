@@ -132,6 +132,49 @@ PYTHONPATH=src python -m fred_pipeline run --env dev --dry-run
 
 Get a free FRED API key at <https://fredaccount.stlouisfed.org/apikeys>.
 
+### Configure managed FRED networking
+
+By default the main pipeline's FRED client continues to use Requests' normal
+environment-based proxy handling. To choose a route at the start of a run,
+set the `network` section in `config/config.yaml`, or set the corresponding
+environment variables. For example:
+
+```yaml
+default:
+  network:
+    mode: auto
+    preference: proxy_first
+    https_proxy_env: PIPELINE_HTTPS_PROXY
+    no_proxy: [localhost, 127.0.0.1, ".internal.example"]
+```
+
+Set `PIPELINE_HTTPS_PROXY` to the HTTP(S) proxy URL in the process environment.
+Proxy credentials must stay in the environment, not in the YAML file. Standard
+`https_proxy` / `HTTPS_PROXY`, `http_proxy` / `HTTP_PROXY`, `all_proxy` /
+`ALL_PROXY`, and `no_proxy` / `NO_PROXY` are inherited by default. The `FRED_`
+overrides are `FRED_NETWORK_MODE`, `FRED_NETWORK_PREFERENCE`,
+`FRED_HTTP_PROXY`, `FRED_HTTPS_PROXY`, `FRED_NO_PROXY` (comma-separated), and
+`FRED_CA_BUNDLE` (trusted CA bundle path). `REQUESTS_CA_BUNDLE` and
+`CURL_CA_BUNDLE` are respected when no FRED-specific bundle is configured.
+`inherit_proxy_env: false` disables standard proxy/bypass inheritance.
+
+`auto` probes the preferred available route, then the alternative only after a
+connectivity failure. `direct` and `proxy` are strict modes; bypass hosts are
+always direct. TLS validation and proxy authentication/policy errors do not
+trigger fallback. A selected route is reused for the invocation and checked
+again on the next run; later request failures use the existing retries on the
+same route. The connectivity probe sends no FRED API key. DNS resolution may
+exceed the configured connect/read timeouts on some operating systems.
+Selection occurs before manifest metadata writes and cadence planning, so it
+can probe FRED even when all selected FRED series are later skipped as not due.
+
+This first integration applies only to FRED requests made by the main pipeline,
+including its FRED release-calendar refresh. Other sources, the ECB hook,
+FOMC refresh, Graph, SMTP, and webhooks retain their existing independent
+routing. Managed FRED mode also blocks cross-origin redirects; use a base URL
+that serves the configured FRED endpoint directly. See the [network spec](specs/spec016/SPEC-outbound-network.md)
+for the remaining integration scope.
+
 ### Install the optional Dagster development runtime
 
 Run these commands from the repository root (the directory containing

@@ -715,6 +715,7 @@ def _cmd_validate(args: argparse.Namespace) -> int:
 
 def _cmd_run(args: argparse.Namespace) -> int:
     from fred_pipeline.config import _ENV_OVERRIDES
+    from fred_pipeline.network import NetworkPreflightError
     from fred_pipeline.pipeline import missing_source_keys
 
     config = PipelineConfig.resolve(
@@ -875,6 +876,9 @@ def _cmd_run(args: argparse.Namespace) -> int:
                     action="poll",
                     error=str(exc),
                 )
+    except NetworkPreflightError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 1
     finally:
         if warehouse is not None:
             warehouse.close()

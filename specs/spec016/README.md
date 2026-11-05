@@ -1,6 +1,6 @@
 # Spec 016: Dagster, configurable email, and outbound network selection
 
-Status: **Draft for user review. Specification only; implementation has not started.**
+Status: **First outbound-network slice implemented; remaining scope is draft.**
 
 Date: 2026-11-04
 
@@ -21,8 +21,9 @@ the applicable connections at startup, choose the working routes, and reuse
 those choices throughout that pipeline invocation. Avoid trying both routes on
 every source request.
 
-The immediate deliverable is this reviewable specification. Implementation
-starts after the user reviews the scope and proposed defaults below.
+The user authorized the first implementation slice: managed startup route
+selection for the main pipeline's FRED client. The other source clients,
+outbound consumers, email additions and Dagster jobs remain subsequent work.
 
 ## Capability map
 
@@ -119,6 +120,18 @@ characterization command in the Dagster module passed **98 tests**. Spec links,
 Markdown structure, the documentation staleness check and `git diff --check`
 also passed. The refresh-on default and additional jobs remain specified
 behavior awaiting implementation, not outcomes proven by these existing tests.
+
+The first FRED-network slice adds managed per-run startup route selection while
+leaving `env` as the default. The focused pipeline/config/alert/CLI suite passed
+144 tests; the final network-specific suite passed 29 tests, including local
+proxy/origin and CLI coverage of the routing paths.
+The full suite reported 1,554 passed, one skipped, and four failures. The same
+four failures reproduce against a clean archive of the pre-slice branch: three
+schema-parity tests search for an outdated Spark-writer text pattern, and the
+Power BI catalog test reports the existing missing `mmkt_rate_snapshot` entry.
+The full run preceded the last focused test additions; no full-suite pass is
+claimed. Managed routing for other consumers and preflight-failure alerting
+remain open.
 
 ## Conventions and boundaries
 
