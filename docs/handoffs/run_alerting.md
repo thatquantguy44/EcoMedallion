@@ -70,6 +70,45 @@ weekends and closing days are excluded from freshness expectations. A late,
 gapped, or unusually large release is `partial`; a failed/quarantined release,
 invalid signature, or missing accepted baseline is `failure`.
 
+### 2.1.1 Named delivery profiles and SMTP security
+
+As an alternative to the legacy root sender and `transport`, configure
+`default_profile` and `profiles`. Each profile contains its own
+`from_address`, optional `from_name`, and `transport`. A route may specify a
+`profile`; otherwise it uses the default. Run and ECB alerts use the same
+selection. Do not mix profile settings with root sender or transport fields.
+
+```yaml
+enabled: true
+policy: failure
+default_profile: relay
+profiles:
+  relay:
+    from_address: pipeline@example.com
+    transport:
+      kind: smtp
+      host: smtp.example.com
+      port: 465
+      tls: implicit_tls
+      auth: password
+      username: pipeline@example.com
+      password_env: FRED_SMTP_PASSWORD
+routes:
+  failure:
+    to: [data-oncall@example.com]
+```
+
+Generic SMTP supports `tls: starttls`, `implicit_tls` or `none`, and
+`auth: password` or `none`. Password authentication requires TLS and an
+environment-variable reference; `tls: none` is only for unauthenticated
+relays. TLS verifies server certificates. Legacy `use_starttls` remains
+supported but cannot be combined with `tls`; legacy password configurations
+using cleartext must migrate to TLS. SMTP partial-recipient refusals are
+reported as failures. Microsoft Graph application-credential delivery now
+includes configured JSON attachments. These SMTP and Graph transports still
+use their existing independent network paths; managed proxy routing and
+personal Outlook.com OAuth remain in progress.
+
 ### 2.2 Stages
 
 `EXPECTED_STAGES` declares the phases `run()` actually has:

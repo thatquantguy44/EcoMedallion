@@ -11,7 +11,7 @@ rebuild, and metadata reconciliation**. The full pipeline must also enable
 confirm the workload scope; the remaining specification is still under review.
 
 Branch: `feature/dagster-alerts-network-spec`, created from the locally available
-`origin/main` at `8f88ff7`. No remote fetch or push was performed.
+`origin/main` at `8f88ff7` and published to the matching remote branch.
 
 ## Objective
 
@@ -23,8 +23,9 @@ every source request.
 
 The implemented slices cover managed startup route selection for the main
 pipeline's source clients, FOMC refresh, and ECB eligible-assets polling in the
-main hook and standalone poll, plus default-on CLI FOMC refresh. Other outbound
-consumers, email additions and Dagster jobs remain subsequent work.
+main hook and standalone poll, plus default-on CLI FOMC refresh. Named email
+profiles, SMTP TLS/password options and Graph attachments are also implemented.
+Other outbound consumers, personal Outlook OAuth and Dagster jobs remain work.
 
 ## Capability map
 

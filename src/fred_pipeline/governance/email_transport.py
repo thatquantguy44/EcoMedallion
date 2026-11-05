@@ -16,9 +16,11 @@ credential cannot end up in a config file, a log line, or a stack trace.
 
 from __future__ import annotations
 
+import base64
 import logging
 import os
 import smtplib
+import ssl
 from dataclasses import dataclass
 from email.message import EmailMessage
 from email.utils import formataddr, make_msgid
@@ -80,7 +82,9 @@ def _build_mime(message: EmailMessageSpec) -> EmailMessage:
     for filename, data, mime_type in message.attachments:
         maintype, _, subtype = mime_type.partition("/")
         mime.add_attachment(
-            data, maintype=maintype or "application", subtype=subtype or "octet-stream",
+            data,
+            maintype=maintype or "application",
+            subtype=subtype or "octet-stream",
             filename=filename,
         )
     return mime
@@ -102,7 +106,7 @@ class SmtpEmailTransport:
     def send(self, message: EmailMessageSpec) -> None:
         cfg = self._config
         password = cfg.resolve_secret()
-        if cfg.username and not password:
+        if cfg.smtp_auth == "password" and not password:
             raise EmailSendError(
                 f"SMTP username {cfg.username!r} is configured but the password "
                 f"env var {cfg.password_env or '(unset)'!r} is empty. Set it in "
@@ -110,30 +114,45 @@ class SmtpEmailTransport:
             )
         mime = _build_mime(message)
         try:
-            with smtplib.SMTP(cfg.host, cfg.port, timeout=cfg.timeout_seconds) as smtp:
+            context = ssl.create_default_context() if cfg.smtp_tls != "none" else None
+            if cfg.smtp_tls == "implicit_tls":
+                connection = smtplib.SMTP_SSL(
+                    cfg.host, cfg.port, timeout=cfg.timeout_seconds, context=context
+                )
+            else:
+                connection = smtplib.SMTP(
+                    cfg.host, cfg.port, timeout=cfg.timeout_seconds
+                )
+            with connection as smtp:
                 smtp.ehlo()
-                if cfg.use_starttls:
-                    smtp.starttls()
+                if cfg.smtp_tls == "starttls":
+                    smtp.starttls(context=context)
                     smtp.ehlo()
-                if cfg.username:
+                if cfg.smtp_auth == "password":
                     smtp.login(cfg.username, password)
                 # Envelope recipients include bcc; headers do not.
-                smtp.send_message(
+                refused = smtp.send_message(
                     mime,
                     from_addr=message.from_address,
                     to_addrs=message.all_recipients,
                 )
-        except smtplib.SMTPAuthenticationError as exc:
+                if refused:
+                    raise EmailSendError(
+                        f"SMTP server refused {len(refused)} recipient(s); delivery was partial"
+                    )
+        except EmailSendError:
+            raise
+        except smtplib.SMTPAuthenticationError:
             raise EmailSendError(
                 f"SMTP authentication failed for {cfg.username!r} at {cfg.host}. "
                 f"For Microsoft 365 this usually means SMTP AUTH is disabled for "
                 f"the mailbox or the account requires modern auth — consider the "
-                f"'microsoft_graph' transport. ({exc})"
-            ) from exc
+                f"'microsoft_graph' transport."
+            ) from None
         except Exception as exc:
             raise EmailSendError(
-                f"SMTP send to {cfg.host}:{cfg.port} failed: {exc}"
-            ) from exc
+                f"SMTP send to {cfg.host}:{cfg.port} failed ({type(exc).__name__})"
+            ) from None
 
 
 class MicrosoftGraphTransport:
@@ -159,22 +178,26 @@ class MicrosoftGraphTransport:
                 f"env var {cfg.client_secret_env!r} is empty — Microsoft Graph "
                 f"needs the app registration's client secret."
             )
-        response = requests_mod.post(
-            self.TOKEN_URL.format(tenant=cfg.tenant_id),
-            data={
-                "client_id": cfg.client_id,
-                "client_secret": secret,
-                "scope": "https://graph.microsoft.com/.default",
-                "grant_type": "client_credentials",
-            },
-            timeout=cfg.timeout_seconds,
-        )
+        try:
+            response = requests_mod.post(
+                self.TOKEN_URL.format(tenant=cfg.tenant_id),
+                data={
+                    "client_id": cfg.client_id,
+                    "client_secret": secret,
+                    "scope": "https://graph.microsoft.com/.default",
+                    "grant_type": "client_credentials",
+                },
+                timeout=cfg.timeout_seconds,
+            )
+        except Exception as exc:
+            raise EmailSendError(
+                f"Microsoft Graph token request failed ({type(exc).__name__})"
+            ) from None
         if response.status_code >= 300:
             # Deliberately does not echo the body: token endpoints can reflect
             # request parameters, and this string may reach a log.
             raise EmailSendError(
-                f"Microsoft Graph token request failed with HTTP "
-                f"{response.status_code}"
+                f"Microsoft Graph token request failed with HTTP {response.status_code}"
             )
         token = response.json().get("access_token", "")
         if not token:
@@ -185,35 +208,46 @@ class MicrosoftGraphTransport:
         try:
             import requests
         except ImportError as exc:  # pragma: no cover - requests is a core dep
-            raise EmailSendError("requests is required for the Graph transport") from exc
+            raise EmailSendError(
+                "requests is required for the Graph transport"
+            ) from exc
 
         token = self._access_token(requests)
         payload = {
             "message": {
                 "subject": message.subject,
                 "body": {"contentType": "HTML", "content": message.html_body},
-                "toRecipients": [
-                    {"emailAddress": {"address": a}} for a in message.to
-                ],
-                "ccRecipients": [
-                    {"emailAddress": {"address": a}} for a in message.cc
-                ],
+                "toRecipients": [{"emailAddress": {"address": a}} for a in message.to],
+                "ccRecipients": [{"emailAddress": {"address": a}} for a in message.cc],
                 "bccRecipients": [
                     {"emailAddress": {"address": a}} for a in message.bcc
+                ],
+                "attachments": [
+                    {
+                        "@odata.type": "#microsoft.graph.fileAttachment",
+                        "name": name,
+                        "contentType": mime,
+                        "contentBytes": base64.b64encode(data).decode("ascii"),
+                    }
+                    for name, data, mime in message.attachments
                 ],
             },
             "saveToSentItems": True,
         }
-        response = requests.post(
-            self.SEND_URL.format(sender=message.from_address),
-            json=payload,
-            headers={"Authorization": f"Bearer {token}"},
-            timeout=self._config.timeout_seconds,
-        )
+        try:
+            response = requests.post(
+                self.SEND_URL.format(sender=message.from_address),
+                json=payload,
+                headers={"Authorization": f"Bearer {token}"},
+                timeout=self._config.timeout_seconds,
+            )
+        except Exception as exc:
+            raise EmailSendError(
+                f"Microsoft Graph sendMail failed ({type(exc).__name__}); delivery may be unknown"
+            ) from None
         if response.status_code >= 300:
             raise EmailSendError(
-                f"Microsoft Graph sendMail failed with HTTP {response.status_code}: "
-                f"{response.text[:400]}"
+                f"Microsoft Graph sendMail failed with HTTP {response.status_code}"
             )
 
 
@@ -243,31 +277,36 @@ class FileEmailTransport:
 
     def send(self, message: EmailMessageSpec) -> None:
         self._dir.mkdir(parents=True, exist_ok=True)
-        stem = "".join(
-            c if c.isalnum() or c in "-_" else "_" for c in message.subject
-        )[:80]
+        stem = "".join(c if c.isalnum() or c in "-_" else "_" for c in message.subject)[
+            :80
+        ]
         base = self._dir / stem
         try:
             base.with_suffix(".html").write_text(message.html_body, encoding="utf-8")
             base.with_suffix(".txt").write_text(message.text_body, encoding="utf-8")
         except OSError as exc:
-            raise EmailSendError(f"could not write alert to {self._dir}: {exc}") from exc
+            raise EmailSendError(
+                f"could not write alert to {self._dir}: {exc}"
+            ) from exc
         log.info("ALERT written to %s.{html,txt}", base)
 
 
-def build_transport(config: AlertingConfig) -> EmailTransport:
+def build_transport(config: AlertingConfig, *, verdict: str = "") -> EmailTransport:
     """Instantiate the transport named in the config."""
-    kind = config.transport.kind
+    transport = config.profile_for(verdict).transport
+    kind = transport.kind
     if kind in ("outlook_smtp", "smtp"):
-        return SmtpEmailTransport(config.transport)
+        return SmtpEmailTransport(transport)
     if kind == "microsoft_graph":
-        return MicrosoftGraphTransport(config.transport)
+        return MicrosoftGraphTransport(transport)
     if kind == "file":
-        return FileEmailTransport(config.transport)
+        return FileEmailTransport(transport)
     return ConsoleEmailTransport()
 
 
-def outlook_defaults(username: str, password_env: str = "FRED_SMTP_PASSWORD") -> TransportConfig:
+def outlook_defaults(
+    username: str, password_env: str = "FRED_SMTP_PASSWORD"
+) -> TransportConfig:
     """A ready-made Microsoft 365 SMTP transport, for callers configuring in
     code rather than YAML."""
     return TransportConfig(

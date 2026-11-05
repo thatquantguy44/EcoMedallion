@@ -236,6 +236,7 @@ def _build_message(
                 "application/json",
             ),
         )
+    profile = config.profile_for(assessment.verdict)
     return EmailMessageSpec(
         subject=subject,
         text_body=text_body,
@@ -243,8 +244,8 @@ def _build_message(
         to=route.to,
         cc=route.cc,
         bcc=route.bcc,
-        from_address=config.from_address,
-        from_name=config.from_name,
+        from_address=profile.from_address,
+        from_name=profile.from_name,
         attachments=attachments,
     )
 
@@ -286,7 +287,7 @@ def send_ecb_assets_alert(
         if message is None:
             log.warning("ECB alert has no recipients for %s", assessment.verdict)
             return False
-        (transport or build_transport(config)).send(message)
+        (transport or build_transport(config, verdict=assessment.verdict)).send(message)
         log.info("ECB alert sent to %s", ", ".join(message.all_recipients))
         return True
     except EmailSendError:

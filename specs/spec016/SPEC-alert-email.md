@@ -1,7 +1,13 @@
 # Module: alert-email
 
-Status: Draft for review. Parent: [Spec 016](README.md).
+Status: Profile routing, SMTP TLS/password options and Graph attachments implemented; remaining scope draft. Parent: [Spec 016](README.md).
 Depends on: [outbound-network](SPEC-outbound-network.md).
+
+Implemented so far: legacy or named profile configuration, per-verdict sender
+and transport selection for run and ECB alerts, validated SMTP STARTTLS,
+implicit TLS or unauthenticated relay, SMTP partial-refusal reporting and
+Graph application-credential attachments. Personal OAuth, Graph managed
+networking, SMTP proxying, structured outcomes and diagnostics remain open.
 
 ## Objective and existing contract
 

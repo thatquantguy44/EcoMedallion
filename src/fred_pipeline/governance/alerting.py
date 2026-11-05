@@ -77,6 +77,7 @@ def build_message(
             )
         )
 
+    profile = config.profile_for(summary.verdict)
     return EmailMessageSpec(
         subject=render_subject(summary, config.subject_prefix),
         text_body=render_text(summary, max_failures=config.max_failures_listed),
@@ -84,8 +85,8 @@ def build_message(
         to=route.to,
         cc=route.cc,
         bcc=route.bcc,
-        from_address=config.from_address,
-        from_name=config.from_name,
+        from_address=profile.from_address,
+        from_name=profile.from_name,
         attachments=attachments,
     )
 
@@ -107,9 +108,7 @@ def send_run_alert(
     try:
         config = config or load_alerting_config(config_path)
     except Exception:
-        log.exception(
-            "Could not load alerting config; falling back to no email alert"
-        )
+        log.exception("Could not load alerting config; falling back to no email alert")
         return False
 
     try:
@@ -133,9 +132,12 @@ def send_run_alert(
             # a silent failure is the thing this module exists to prevent.
             if verdict != "success":
                 log.warning(
-                    "Run %s finished %s (%s) — no email sent (policy=%s, "
-                    "enabled=%s)",
-                    summary.run_id, verdict, reason, config.policy, config.enabled,
+                    "Run %s finished %s (%s) — no email sent (policy=%s, enabled=%s)",
+                    summary.run_id,
+                    verdict,
+                    reason,
+                    config.policy,
+                    config.enabled,
                 )
             return False
 
@@ -144,15 +146,17 @@ def send_run_alert(
             log.warning(
                 "Run %s finished %s but no recipients are routed for that "
                 "verdict in config/alerting.yml",
-                summary.run_id, verdict,
+                summary.run_id,
+                verdict,
             )
             return False
 
-        sender = transport or build_transport(config)
+        sender = transport or build_transport(config, verdict=verdict)
         sender.send(message)
         log.info(
             "Run alert sent to %s (verdict=%s)",
-            ", ".join(message.all_recipients), verdict,
+            ", ".join(message.all_recipients),
+            verdict,
         )
         return True
     except EmailSendError:
