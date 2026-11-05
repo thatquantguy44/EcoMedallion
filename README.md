@@ -38,7 +38,11 @@ BIS, BEA, Census, SEC (company financials), Tiingo, Stooq, and iShares — see
 > [`specs/spec013/README.md`](./specs/spec013/README.md), with the next build
 > task, **T1 — complete optional runtime installation and verification**, in
 > [`docs/handoffs/dagster_orchestration.md`](./docs/handoffs/dagster_orchestration.md#next-task-t1).
-> Continue that work on the existing branch `spec012-dagster-orchestration`.
+> That earlier draft's continuation branch is `spec012-dagster-orchestration`.
+> The new combined Dagster, email-provider and proxy/direct networking proposal
+> is [Spec 016](./specs/spec016/README.md), on
+> `feature/dagster-alerts-network-spec`. Review that spec before starting its
+> implementation; its branch/scope take precedence for the combined initiative.
 > The series geography mapping specification from main is
 > [`Spec 012`](./specs/spec012/README.md); Dagster is Spec 013.
 
