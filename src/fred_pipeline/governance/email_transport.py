@@ -20,12 +20,13 @@ import base64
 import logging
 import os
 import smtplib
-import ssl
+import re
 from dataclasses import dataclass
 from email.message import EmailMessage
 from email.utils import formataddr, make_msgid
 from pathlib import Path
 from typing import Any, Optional, Protocol, Sequence
+from urllib.parse import quote
 
 from fred_pipeline.governance.alerting_config import AlertingConfig, TransportConfig
 
@@ -36,6 +37,13 @@ class EmailSendError(RuntimeError):
     """Raised when a transport cannot deliver. Callers decide whether that is
     fatal; the pipeline treats it as non-fatal by design (an alerting failure
     must never fail a run that otherwise succeeded)."""
+
+    def __init__(
+        self, message: str, *, category: str = "delivery", uncertain: bool = False
+    ) -> None:
+        super().__init__(message)
+        self.category = category
+        self.uncertain = uncertain
 
 
 @dataclass(frozen=True)
@@ -51,6 +59,7 @@ class EmailMessageSpec:
     from_address: str = ""
     from_name: str = ""
     attachments: Sequence[tuple[str, bytes, str]] = ()  # (filename, data, mime)
+    correlation_id: str = ""
 
     @property
     def all_recipients(self) -> list[str]:
@@ -74,7 +83,12 @@ def _build_mime(message: EmailMessageSpec) -> EmailMessage:
     mime["To"] = ", ".join(message.to)
     if message.cc:
         mime["Cc"] = ", ".join(message.cc)
-    mime["Message-ID"] = make_msgid(domain="fred-pipeline.local")
+    correlation = (
+        message.correlation_id
+        if re.fullmatch(r"[0-9a-f]{32}", message.correlation_id)
+        else None
+    )
+    mime["Message-ID"] = make_msgid(idstring=correlation, domain="fred-pipeline.local")
     # Bcc is deliberately NOT set as a header -- it is passed at the envelope
     # level by the SMTP transport, otherwise every recipient sees the bcc list.
     mime.set_content(message.text_body)
@@ -100,11 +114,45 @@ class SmtpEmailTransport:
     use :class:`MicrosoftGraphTransport`, which uses the modern API instead.
     """
 
-    def __init__(self, transport: TransportConfig) -> None:
+    def __init__(
+        self,
+        transport: TransportConfig,
+        *,
+        http_client: Any = None,
+        smtp_route: Any = None,
+    ) -> None:
         self._config = transport
+        self._http_client = http_client
+        self._smtp_route = smtp_route
+
+    def check_connection(self) -> None:
+        """Probe SMTP and TLS without AUTH or sending mail."""
+        cfg = self._config
+        if cfg.network is not None and self._smtp_route is None:
+            raise EmailSendError(
+                "SMTP managed route is unavailable; startup preflight failed"
+            )
+        from fred_pipeline.governance.smtp_network import (
+            SmtpRoute,
+            smtp_connection,
+            smtp_hello,
+        )
+
+        route = self._smtp_route or SmtpRoute("direct")
+        try:
+            with smtp_connection(cfg, route) as smtp:
+                smtp_hello(smtp, cfg, route)
+        except Exception as exc:
+            raise EmailSendError(
+                f"SMTP readiness check failed ({type(exc).__name__})"
+            ) from None
 
     def send(self, message: EmailMessageSpec) -> None:
         cfg = self._config
+        if cfg.network is not None and self._smtp_route is None:
+            raise EmailSendError(
+                "SMTP managed route is unavailable; startup preflight failed"
+            )
         password = cfg.resolve_secret()
         if cfg.smtp_auth == "password" and not password:
             raise EmailSendError(
@@ -112,25 +160,41 @@ class SmtpEmailTransport:
                 f"env var {cfg.password_env or '(unset)'!r} is empty. Set it in "
                 f"the environment; it must not go in config/alerting.yml."
             )
+        access_token = ""
+        if cfg.smtp_auth == "oauth2":
+            if cfg.username.casefold() != message.from_address.casefold():
+                raise EmailSendError(
+                    "SMTP OAuth sender must match the authenticated username"
+                )
+            from fred_pipeline.governance.email_oauth import delegated_token
+
+            access_token = delegated_token(
+                cfg, message.from_address, http_client=self._http_client
+            )
         mime = _build_mime(message)
+        send_started = False
         try:
-            context = ssl.create_default_context() if cfg.smtp_tls != "none" else None
-            if cfg.smtp_tls == "implicit_tls":
-                connection = smtplib.SMTP_SSL(
-                    cfg.host, cfg.port, timeout=cfg.timeout_seconds, context=context
-                )
-            else:
-                connection = smtplib.SMTP(
-                    cfg.host, cfg.port, timeout=cfg.timeout_seconds
-                )
+            from fred_pipeline.governance.smtp_network import (
+                SmtpRoute,
+                smtp_connection,
+                smtp_hello,
+            )
+
+            route = self._smtp_route or SmtpRoute("direct")
+            connection = smtp_connection(cfg, route)
             with connection as smtp:
-                smtp.ehlo()
-                if cfg.smtp_tls == "starttls":
-                    smtp.starttls(context=context)
-                    smtp.ehlo()
+                smtp_hello(smtp, cfg, route)
                 if cfg.smtp_auth == "password":
                     smtp.login(cfg.username, password)
+                elif cfg.smtp_auth == "oauth2":
+                    smtp.auth(
+                        "XOAUTH2",
+                        lambda _challenge=None: (
+                            f"user={cfg.username}\x01auth=Bearer {access_token}\x01\x01"
+                        ),
+                    )
                 # Envelope recipients include bcc; headers do not.
+                send_started = True
                 refused = smtp.send_message(
                     mime,
                     from_addr=message.from_address,
@@ -138,7 +202,8 @@ class SmtpEmailTransport:
                 )
                 if refused:
                     raise EmailSendError(
-                        f"SMTP server refused {len(refused)} recipient(s); delivery was partial"
+                        f"SMTP server refused {len(refused)} recipient(s); delivery was partial",
+                        category="partial_recipient_refusal",
                     )
         except EmailSendError:
             raise
@@ -151,7 +216,9 @@ class SmtpEmailTransport:
             ) from None
         except Exception as exc:
             raise EmailSendError(
-                f"SMTP send to {cfg.host}:{cfg.port} failed ({type(exc).__name__})"
+                f"SMTP send to {cfg.host}:{cfg.port} failed ({type(exc).__name__})",
+                category="network",
+                uncertain=send_started,
             ) from None
 
 
@@ -167,8 +234,9 @@ class MicrosoftGraphTransport:
     TOKEN_URL = "https://login.microsoftonline.com/{tenant}/oauth2/v2.0/token"
     SEND_URL = "https://graph.microsoft.com/v1.0/users/{sender}/sendMail"
 
-    def __init__(self, transport: TransportConfig) -> None:
+    def __init__(self, transport: TransportConfig, *, http_client: Any = None) -> None:
         self._config = transport
+        self._http_client = http_client
 
     def _access_token(self, requests_mod: Any) -> str:
         cfg = self._config
@@ -188,6 +256,7 @@ class MicrosoftGraphTransport:
                     "grant_type": "client_credentials",
                 },
                 timeout=cfg.timeout_seconds,
+                allow_redirects=False,
             )
         except Exception as exc:
             raise EmailSendError(
@@ -199,7 +268,10 @@ class MicrosoftGraphTransport:
             raise EmailSendError(
                 f"Microsoft Graph token request failed with HTTP {response.status_code}"
             )
-        token = response.json().get("access_token", "")
+        try:
+            token = response.json().get("access_token", "")
+        except Exception:
+            raise EmailSendError("Microsoft Graph token response was invalid") from None
         if not token:
             raise EmailSendError("Microsoft Graph token response had no access_token")
         return token
@@ -212,7 +284,15 @@ class MicrosoftGraphTransport:
                 "requests is required for the Graph transport"
             ) from exc
 
-        token = self._access_token(requests)
+        http = self._http_client or requests
+        if self._config.auth == "delegated":
+            from fred_pipeline.governance.email_oauth import delegated_token
+
+            token = delegated_token(
+                self._config, message.from_address, http_client=self._http_client
+            )
+        else:
+            token = self._access_token(http)
         payload = {
             "message": {
                 "subject": message.subject,
@@ -234,20 +314,32 @@ class MicrosoftGraphTransport:
             },
             "saveToSentItems": True,
         }
+        if re.fullmatch(r"[0-9a-f]{32}", message.correlation_id):
+            payload["message"]["internetMessageHeaders"] = [
+                {"name": "x-fred-correlation-id", "value": message.correlation_id}
+            ]
         try:
-            response = requests.post(
-                self.SEND_URL.format(sender=message.from_address),
+            response = http.post(
+                "https://graph.microsoft.com/v1.0/me/sendMail"
+                if self._config.auth == "delegated"
+                else self.SEND_URL.format(sender=quote(message.from_address, safe="")),
                 json=payload,
                 headers={"Authorization": f"Bearer {token}"},
                 timeout=self._config.timeout_seconds,
+                allow_redirects=False,
             )
         except Exception as exc:
             raise EmailSendError(
-                f"Microsoft Graph sendMail failed ({type(exc).__name__}); delivery may be unknown"
+                f"Microsoft Graph sendMail failed ({type(exc).__name__}); delivery may be unknown",
+                category="network",
+                uncertain=True,
             ) from None
-        if response.status_code >= 300:
+        if response.status_code != 202:
             raise EmailSendError(
-                f"Microsoft Graph sendMail failed with HTTP {response.status_code}"
+                f"Microsoft Graph sendMail failed with HTTP {response.status_code}",
+                category="provider",
+                uncertain=response.status_code >= 500
+                or 200 <= response.status_code < 300,
             )
 
 
@@ -262,7 +354,7 @@ class ConsoleEmailTransport:
     def send(self, message: EmailMessageSpec) -> None:
         log.info(
             "ALERT (console transport, not sent)\nTo: %s\nSubject: %s\n\n%s",
-            ", ".join(message.all_recipients) or "(no recipients)",
+            ", ".join([*message.to, *message.cc]) or "(no visible recipients)",
             message.subject,
             message.text_body,
         )
@@ -291,14 +383,21 @@ class FileEmailTransport:
         log.info("ALERT written to %s.{html,txt}", base)
 
 
-def build_transport(config: AlertingConfig, *, verdict: str = "") -> EmailTransport:
+def build_transport(
+    config: AlertingConfig,
+    *,
+    verdict: str = "",
+    http_client: Any = None,
+    smtp_routes: Any = None,
+) -> EmailTransport:
     """Instantiate the transport named in the config."""
     transport = config.profile_for(verdict).transport
     kind = transport.kind
-    if kind in ("outlook_smtp", "smtp"):
-        return SmtpEmailTransport(transport)
+    if kind in ("outlook_smtp", "outlook_com_smtp", "smtp"):
+        route = smtp_routes.get(transport) if smtp_routes is not None else None
+        return SmtpEmailTransport(transport, http_client=http_client, smtp_route=route)
     if kind == "microsoft_graph":
-        return MicrosoftGraphTransport(transport)
+        return MicrosoftGraphTransport(transport, http_client=http_client)
     if kind == "file":
         return FileEmailTransport(transport)
     return ConsoleEmailTransport()

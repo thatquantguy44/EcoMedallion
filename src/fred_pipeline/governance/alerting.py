@@ -34,9 +34,12 @@ from fred_pipeline.governance.email_report import (
 )
 from fred_pipeline.governance.email_transport import (
     EmailMessageSpec,
-    EmailSendError,
     EmailTransport,
-    build_transport,
+)
+from fred_pipeline.governance.email_delivery import (
+    DeliveryResult,
+    deliver_message,
+    new_delivery,
 )
 from fred_pipeline.governance.stages import (
     RunStageTracker,
@@ -91,7 +94,7 @@ def build_message(
     )
 
 
-def send_run_alert(
+def send_run_alert_result(
     run: Any,
     tracker: RunStageTracker,
     *,
@@ -99,8 +102,10 @@ def send_run_alert(
     environment: str = "",
     transport: Optional[EmailTransport] = None,
     config_path: Optional[str] = None,
-) -> bool:
-    """Render and send the run summary. Returns True iff a message was sent.
+    http_client: Any = None,
+    smtp_routes: Any = None,
+) -> DeliveryResult:
+    """Render and attempt the run summary, returning a structured outcome.
 
     ``transport`` is injectable so tests never touch a network or a mailbox;
     when omitted it is built from the config.
@@ -109,7 +114,7 @@ def send_run_alert(
         config = config or load_alerting_config(config_path)
     except Exception:
         log.exception("Could not load alerting config; falling back to no email alert")
-        return False
+        return new_delivery(AlertingConfig(), status="failed", category="configuration")
 
     try:
         stages: Sequence[StageRecord] = tracker.records()
@@ -139,7 +144,11 @@ def send_run_alert(
                     config.policy,
                     config.enabled,
                 )
-            return False
+            return new_delivery(
+                config,
+                verdict,
+                status="disabled" if not config.enabled else "suppressed",
+            )
 
         message = build_message(summary, config)
         if message is None:
@@ -149,19 +158,28 @@ def send_run_alert(
                 summary.run_id,
                 verdict,
             )
-            return False
+            return new_delivery(config, verdict, status="suppressed")
 
-        sender = transport or build_transport(config, verdict=verdict)
-        sender.send(message)
-        log.info(
-            "Run alert sent to %s (verdict=%s)",
-            ", ".join(message.all_recipients),
+        result = deliver_message(
+            message,
+            config,
             verdict,
+            transport=transport,
+            http_client=http_client,
+            smtp_routes=smtp_routes,
         )
-        return True
-    except EmailSendError:
-        log.exception("Run alert could not be delivered")
-        return False
-    except Exception:
-        log.exception("Unexpected error while sending the run alert")
-        return False
+        log.info(
+            "Run alert %s (verdict=%s, correlation=%s)",
+            result.status,
+            verdict,
+            result.correlation_id,
+        )
+        return result
+    except Exception as exc:
+        log.error("Unexpected error while preparing run alert (%s)", type(exc).__name__)
+        return new_delivery(config, status="failed", category="preparation")
+
+
+def send_run_alert(run: Any, tracker: RunStageTracker, **kwargs: Any) -> bool:
+    """Preserve the legacy boolean API; use send_run_alert_result for detail."""
+    return send_run_alert_result(run, tracker, **kwargs).handled

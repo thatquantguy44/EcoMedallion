@@ -1,11 +1,12 @@
 # Module: outbound-network
 
-Status: Main-pipeline source, FOMC and ECB polling routing implemented; broader module draft.
+Status: Main-pipeline source, FOMC, ECB polling and alert routing implemented; broader module draft.
 Parent: [Spec 016](README.md).
 
 Managed startup selection covers all built-in main-pipeline source clients,
 the FRED release calendar, FOMC refresh, ECB eligible-assets hook and standalone
-`ecb-assets poll`. Other ECB actions, Graph, SMTP and webhooks are not yet covered; cross-consumer acceptance
+`ecb-assets poll`, plus Graph/identity alerts and explicitly configured SMTP
+routes. Other ECB source actions and webhooks are not yet covered; cross-consumer acceptance
 criteria remain open until those paths are wired and verified. The diagnostic
 command and preflight-stage alert are also future work.
 

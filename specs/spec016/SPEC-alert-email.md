@@ -1,13 +1,15 @@
 # Module: alert-email
 
-Status: Profile routing, SMTP TLS/password options and Graph attachments implemented; remaining scope draft. Parent: [Spec 016](README.md).
+Status: Core email additions implemented; Graph text/HTML parity and deployment verification remain open. Parent: [Spec 016](README.md).
 Depends on: [outbound-network](SPEC-outbound-network.md).
 
 Implemented so far: legacy or named profile configuration, per-verdict sender
 and transport selection for run and ECB alerts, validated SMTP STARTTLS,
 implicit TLS or unauthenticated relay, SMTP partial-refusal reporting and
-Graph application-credential attachments. Personal OAuth, Graph managed
-networking, SMTP proxying, structured outcomes and diagnostics remain open.
+Graph attachments, delegated personal Outlook OAuth, managed Graph/SMTP
+networking, structured delivery outcomes and diagnostics. Graph still sends
+HTML rather than both text and HTML. Real mailbox acceptance/receipt evidence
+and Dagster integration remain deployment work.
 
 ## Objective and existing contract
 
@@ -57,7 +59,7 @@ owns its sender and transport. Existing routes gain an optional `profile` key;
 routes without it use `default_profile`. Preserve existing root sender fields
 for legacy configs, and reject ambiguous sender declarations in profile mode.
 
-Example proposed profile-mode YAML:
+Example profile-mode YAML:
 
 ```yaml
 enabled: true
@@ -124,9 +126,9 @@ other mailboxes and SMTP provider failover are deferred.
 
 ## OAuth lifecycle
 
-Add an optional `email-oauth` dependency group using MSAL; resolve and record
-its exact tested version/constraints during implementation. Basic SMTP,
-console/file, existing app-only Graph, and core CLI import must work without it.
+The optional `email-oauth` dependency group uses MSAL `>=1.39,<2`; tests used
+1.39.0. Basic SMTP, console/file, existing app-only Graph, and core CLI import
+work without it.
 
 Provide an explicit one-time interactive bootstrap command for delegated
 profiles, using authorization code + PKCE and a registered loopback redirect.
@@ -167,7 +169,7 @@ or route after ambiguous SMTP DATA/Graph send completion. Stable message/correla
 ids aid investigation but do not guarantee exactly-once delivery. Dagster's
 fallback sensor must use these outcomes and the ownership contract in its spec.
 
-Proposed commands (not implemented):
+Available commands:
 
 ```bash
 python -m fred_pipeline alerts check --profile relay --env dev \

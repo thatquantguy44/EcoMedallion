@@ -107,3 +107,32 @@ def test_partial_recipient_refusal_is_not_success(tmp_path, monkeypatch):
     monkeypatch.setattr(smtplib, "SMTP", SMTP)
     with pytest.raises(EmailSendError, match="recipient"):
         SmtpEmailTransport(config).send(_message())
+
+
+def test_smtp_timeout_during_send_reports_unknown_without_replay(tmp_path, monkeypatch):
+    config = _config(
+        tmp_path, "  kind: smtp\n  host: smtp.example.com\n  tls: none\n  auth: none\n"
+    )
+    calls = []
+
+    class SMTP:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            pass
+
+        def ehlo(self):
+            pass
+
+        def send_message(self, *_args, **_kwargs):
+            calls.append("send")
+            raise TimeoutError("potentially accepted")
+
+    monkeypatch.setattr(smtplib, "SMTP", SMTP)
+    with pytest.raises(EmailSendError) as exc:
+        SmtpEmailTransport(config).send(_message())
+    assert exc.value.uncertain and calls == ["send"]

@@ -88,6 +88,11 @@ routes:
         load_alerting_config(str(path))
 
 
+def test_profile_name_must_be_a_string(tmp_path):
+    with pytest.raises(AlertingConfigError, match="default_profile"):
+        _load(tmp_path, "default_profile: [invalid]\n")
+
+
 def test_ecb_alert_uses_verdict_profile_in_actual_delivery(tmp_path):
     config = _load(tmp_path)
     from dataclasses import replace

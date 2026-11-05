@@ -5,7 +5,10 @@ import base64
 import pytest
 import requests
 
-from fred_pipeline.governance.alerting_config import TransportConfig
+from fred_pipeline.governance.alerting_config import (
+    AlertingConfigError,
+    TransportConfig,
+)
 from fred_pipeline.governance.email_transport import (
     EmailMessageSpec,
     EmailSendError,
@@ -57,3 +60,15 @@ def test_graph_sends_attachments_and_sanitizes_response(monkeypatch):
     attachment = requests_seen[1][1]["json"]["message"]["attachments"][0]
     assert attachment["@odata.type"] == "#microsoft.graph.fileAttachment"
     assert base64.b64decode(attachment["contentBytes"]) == b"{}"
+    assert requests_seen[1][1]["allow_redirects"] is False
+    assert requests_seen[0][1]["allow_redirects"] is False
+
+
+def test_graph_tenant_rejects_path_segments():
+    with pytest.raises(AlertingConfigError, match="tenant"):
+        TransportConfig(
+            kind="microsoft_graph",
+            tenant_id="../other",
+            client_id="client",
+            client_secret_env="SECRET",
+        )

@@ -495,6 +495,8 @@ class FredPipeline:
         self._provided_sources = set(self._clients)
         self._run_sessions: RunSessions | None = None
         self._ecb_sessions: RunSessions | None = None
+        self._alert_sessions: RunSessions | None = None
+        self._smtp_routes: dict[Any, Any] | None = None
         self._network_active = False
         self._notify_transport = notify_transport
         # Injectable so tests never touch a mailbox; None means the
@@ -502,6 +504,7 @@ class FredPipeline:
         self._alert_transport = alert_transport
         self._stage_tracker: Any = None
         self._alert_sent = False
+        self._last_alert_result = None
         # Resolve the storage backend: explicit warehouse > Spark > None (dry run).
         if warehouse is not None:
             self.warehouse: Warehouse | None = warehouse
@@ -549,8 +552,20 @@ class FredPipeline:
         refresh_fomc: bool = False,
         include_ecb: bool = False,
     ):
-        if self._network_active or self.config.network.mode == "env":
+        if self._network_active:
             yield
+            return
+
+        from fred_pipeline.governance.email_network import plan_alert_smtp
+
+        if self.config.network.mode == "env":
+            self._smtp_routes = plan_alert_smtp(self.config.environment.value)
+            self._network_active = True
+            try:
+                yield
+            finally:
+                self._network_active = False
+                self._smtp_routes = None
             return
 
         selected = {(getattr(s, "source", "fred") or "fred").lower() for s in specs}
@@ -630,6 +645,12 @@ class FredPipeline:
                 False,
             )
 
+        from fred_pipeline.governance.email_network import alert_http_targets
+
+        alert_targets = alert_http_targets(self.config.environment.value)
+        for url, label in alert_targets:
+            register(url, label, {}, False)
+
         network_environment = dict(os.environ)
 
         def choose(target):
@@ -680,6 +701,14 @@ class FredPipeline:
         # Restrict MID to its configured origin even when other origins are in
         # the shared plan: RSS links must not borrow another source's route.
         self._ecb_sessions = RunSessions(ecb_route) if ecb_route else None
+        self._alert_sessions = RunSessions(
+            {
+                _origin(url): routes[_origin(url)]
+                for url, _ in alert_targets
+                if _origin(url) in routes
+            }
+        )
+        self._smtp_routes = plan_alert_smtp(self.config.environment.value)
         self._network_active = True
         try:
             yield
@@ -689,10 +718,17 @@ class FredPipeline:
             self._run_sessions = None
             ecb_sessions = self._ecb_sessions
             self._ecb_sessions = None
+            alert_sessions = self._alert_sessions
+            self._alert_sessions = None
+            self._smtp_routes = None
             self._network_active = False
             try:
-                if ecb_sessions is not None:
-                    ecb_sessions.close()
+                try:
+                    if alert_sessions is not None:
+                        alert_sessions.close()
+                finally:
+                    if ecb_sessions is not None:
+                        ecb_sessions.close()
             finally:
                 sessions.close()
 
@@ -771,6 +807,8 @@ class FredPipeline:
         refresh_fomc_calendar: bool = False,
     ) -> EtlRun:
         specs = list(specs)
+        self._alert_sent = False
+        self._last_alert_result = None
         run = EtlRun(
             environment=self.config.environment.value,
             manifest_path=manifest_path,
@@ -1042,13 +1080,15 @@ class FredPipeline:
             return
         self._alert_sent = True
         try:
-            from fred_pipeline.governance.alerting import send_run_alert
+            from fred_pipeline.governance.alerting import send_run_alert_result
 
-            send_run_alert(
+            self._last_alert_result = send_run_alert_result(
                 run,
                 tracker,
                 environment=self.config.environment.value,
                 transport=self._alert_transport,
+                http_client=self._alert_sessions,
+                smtp_routes=self._smtp_routes,
             )
         except Exception:  # never let alerting fail a run
             log.exception("Run alert step failed for run %s", run.run_id)

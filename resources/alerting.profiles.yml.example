@@ -1,0 +1,48 @@
+# Copy to a private deployment config and opt in deliberately. Environment
+# variables contain secrets and proxy URLs; this file contains only their names.
+enabled: false
+policy: failure
+subject_prefix: "[FRED]"
+environments: [prod]
+default_profile: relay
+profiles:
+  relay:
+    from_address: pipeline@example.com
+    from_name: FRED pipeline
+    transport:
+      kind: smtp
+      host: smtp.example.com
+      port: 587
+      tls: starttls
+      auth: password
+      username: pipeline@example.com
+      password_env: FRED_SMTP_PASSWORD
+      network:
+        mode: auto
+        preference: proxy_first
+        proxy_url_env: FRED_SMTP_PROXY
+        # no_proxy: [".internal.example"]
+        # ca_bundle_env: FRED_SMTP_CA_BUNDLE
+  outlook-personal:
+    from_address: operator@outlook.com
+    from_name: FRED pipeline
+    transport:
+      kind: microsoft_graph
+      auth: delegated
+      tenant_id: consumers
+      client_id: REPLACE_WITH_PUBLIC_CLIENT_ID
+      token_cache_path_env: FRED_OUTLOOK_TOKEN_CACHE
+  outlook-personal-smtp:
+    from_address: operator@outlook.com
+    from_name: FRED pipeline
+    transport:
+      kind: outlook_com_smtp
+      username: operator@outlook.com
+      client_id: REPLACE_WITH_PUBLIC_CLIENT_ID
+      token_cache_path_env: FRED_OUTLOOK_SMTP_TOKEN_CACHE
+routes:
+  failure:
+    to: [data-oncall@example.com]
+    # profile: outlook-personal
+  partial:
+    to: [data-oncall@example.com]

@@ -176,9 +176,15 @@ startup fails explicitly. Caller-injected clients own their own networking.
 Managed ECB polling requires release and attachment URLs to match the configured
 `ECB_MID_BASE_URL` origin. If its startup probe fails in a main run, observation
 processing continues and the ECB hook reports failure; a standalone poll fails
-before downloading. Other ECB commands, discovery/reconciliation commands,
-Graph, SMTP, and webhooks retain their independent routing. See the
+before downloading. Graph and Microsoft identity alerts use selected HTTP
+routes. SMTP profiles can opt into a separate direct/HTTP CONNECT plan; without
+an SMTP network block, SMTP connects directly. Other ECB source commands,
+discovery/reconciliation commands and webhooks retain independent routing. See the
 [network spec](specs/spec016/SPEC-outbound-network.md) for the remaining scope.
+
+For email profiles, Outlook.com OAuth, SMTP proxy settings and safe test
+commands, see the [alerting guide](docs/handoffs/run_alerting.md) and
+[example profiles](resources/alerting.profiles.yml.example).
 
 CLI `run` refreshes the FOMC calendar before Gold by default. Use
 `--no-refresh-fomc-calendar` for the offline calendar check. The refresh adds
@@ -384,6 +390,7 @@ only the flags that differ in meaning are listed per command. (Full detail:
 | `discover` | Generates a new manifest from a FRED category/release/search — not a refresh, a discovery/authoring tool | `--category-id` / `--release-id` / `--search`, `--frequencies`, `--min-popularity`, `--max`, `--out`, `--dry-run` |
 | `discover-ecb` | Lists ECB SDMX dataflows for candidate manifest authoring | `--list-flows`, `--search`, `--max`, `--json` |
 | `ecb-assets` | `poll`/`ingest-release` discover signed ECB MID releases and advance the point-in-time eligible-securities history; `status`/`verify`/`as-of` inspect it; `inventory` inventories the archive; `alert-drill` safely proves four ECB alert paths to files; `backfill-stage` builds isolated resumable history; and `backfill-promote` atomically publishes a reconciled run. The production PostgreSQL timer templates are `resources/ecb-eligible-assets.*`. | action, `--local --db-path`, `--release-url`, `--release-id`, `--as-of`, `--asset-key`, `--allow-gap` (operator override only), `--from-year`, `--to-year`, `--deep`, `--summary-only`, `--output`, `--max-archive-mb`, `--archive-dir`, `--backfill-run-id`, `--acknowledge-quarantines` |
+| `alerts` | Check an email profile, authorize delegated Microsoft access, or preview/test delivery. Test messages are sent only with `--send` and an explicit recipient. | `check` / `auth` / `test`, `--profile`, `--alerting-file`, `--to`, `--send` |
 
 ### Refresh (rebuilds from already-ingested data — no external API calls)
 

@@ -1,6 +1,6 @@
 # Spec 016: Dagster, configurable email, and outbound network selection
 
-Status: **Main-pipeline and ECB polling routing and CLI FOMC refresh implemented; remaining scope is draft.**
+Status: **Pipeline/ECB routing, core email additions and CLI FOMC refresh implemented; Dagster and remaining networking are draft.**
 
 Date: 2026-11-04
 
@@ -24,8 +24,10 @@ every source request.
 The implemented slices cover managed startup route selection for the main
 pipeline's source clients, FOMC refresh, and ECB eligible-assets polling in the
 main hook and standalone poll, plus default-on CLI FOMC refresh. Named email
-profiles, SMTP TLS/password options and Graph attachments are also implemented.
-Other outbound consumers, personal Outlook OAuth and Dagster jobs remain work.
+profiles, SMTP TLS/auth and proxy options, Outlook OAuth, Graph attachments,
+delivery outcomes and email diagnostics are also implemented. Graph text/HTML
+parity, other outbound consumers and Dagster jobs remain work; live mailbox
+acceptance and receipt have not been verified.
 
 ## Capability map
 
@@ -103,8 +105,8 @@ git diff --check
 ```
 
 Module specs define additional commands and acceptance tests for the remaining
-work. The current managed-network coverage is described above; the proposed
-diagnostics, email additions and Dagster runtime remain unimplemented.
+work. Email diagnostics are available; the general network diagnostic command
+and Dagster runtime remain unimplemented.
 
 ### Draft verification record
 
@@ -152,6 +154,13 @@ failure isolation. No live ECB request or production data write was performed.
 The authoritative writer lock remains planned and was not added by this slice.
 The full project-environment suite again reported the same four baseline
 failures described above, with no new failures.
+
+The email additions were tested with local SMTP/HTTP CONNECT servers, local
+STARTTLS and implicit TLS with certificate verification, fake Graph calls and
+an injected identity endpoint with MSAL 1.39.0. Tests also cover private cache
+locking, account binding, route reuse, and preview/unknown delivery outcomes.
+No live mailbox was authorized or sent mail; provider acceptance and actual
+recipient receipt remain deployment checks. Graph HTML/text parity is open.
 
 ## Conventions and boundaries
 

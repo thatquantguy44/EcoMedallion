@@ -111,6 +111,8 @@ def run_ecb_alert_drill(
     live_delivery: bool = False,
     environment: str = "prod",
     transport: EmailTransport | None = None,
+    http_client: Any = None,
+    smtp_routes: Any = None,
 ) -> dict[str, Any]:
     """Deliver four synthetic alerts and return an evidence manifest.
 
@@ -207,6 +209,8 @@ def run_ecb_alert_drill(
             environment=delivery_environment,
             config=drill_config,
             transport=delivery_transport,
+            http_client=http_client,
+            smtp_routes=smtp_routes,
             now=_FIXTURE_NOW,
         )
         after = {path.name for path in run_dir.iterdir()}

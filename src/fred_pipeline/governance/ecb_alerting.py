@@ -22,11 +22,14 @@ from fred_pipeline.governance.alerting_config import (
     ECBAssetsAlertConfig,
     load_alerting_config,
 )
+from fred_pipeline.governance.email_delivery import (
+    DeliveryResult,
+    deliver_message,
+    new_delivery,
+)
 from fred_pipeline.governance.email_transport import (
     EmailMessageSpec,
-    EmailSendError,
     EmailTransport,
-    build_transport,
 )
 
 log = logging.getLogger("fred_pipeline.ecb_alerting")
@@ -250,7 +253,7 @@ def _build_message(
     )
 
 
-def send_ecb_assets_alert(
+def send_ecb_assets_alert_result(
     *,
     action: str,
     results: Sequence[Mapping[str, Any]] = (),
@@ -259,13 +262,15 @@ def send_ecb_assets_alert(
     environment: str = "",
     config: AlertingConfig | None = None,
     transport: EmailTransport | None = None,
+    http_client: Any = None,
+    smtp_routes: Any = None,
     now: datetime | None = None,
-) -> bool:
+) -> DeliveryResult:
     """Assess and send one ECB alert, without ever failing the pipeline."""
     try:
         config = config or load_alerting_config()
-        if not config.ecb_assets.enabled:
-            return False
+        if not config.enabled or not config.ecb_assets.enabled:
+            return new_delivery(config, status="disabled")
         assessment = assess_ecb_assets(
             action=action,
             results=results,
@@ -282,17 +287,28 @@ def send_ecb_assets_alert(
                     config.policy,
                     config.enabled,
                 )
-            return False
+            return new_delivery(config, assessment.verdict, status="suppressed")
         message = _build_message(assessment, config, environment=environment)
         if message is None:
             log.warning("ECB alert has no recipients for %s", assessment.verdict)
-            return False
-        (transport or build_transport(config, verdict=assessment.verdict)).send(message)
-        log.info("ECB alert sent to %s", ", ".join(message.all_recipients))
-        return True
-    except EmailSendError:
-        log.exception("ECB alert could not be delivered")
-        return False
-    except Exception:
-        log.exception("Unexpected error while sending ECB alert")
-        return False
+            return new_delivery(config, assessment.verdict, status="suppressed")
+        result = deliver_message(
+            message,
+            config,
+            assessment.verdict,
+            transport=transport,
+            http_client=http_client,
+            smtp_routes=smtp_routes,
+        )
+        log.info("ECB alert %s (correlation=%s)", result.status, result.correlation_id)
+        return result
+    except Exception as exc:
+        log.error("Unexpected error while preparing ECB alert (%s)", type(exc).__name__)
+        return new_delivery(
+            config or AlertingConfig(), status="failed", category="preparation"
+        )
+
+
+def send_ecb_assets_alert(**kwargs: Any) -> bool:
+    """Preserve the legacy boolean API; use send_ecb_assets_alert_result for detail."""
+    return send_ecb_assets_alert_result(**kwargs).handled
