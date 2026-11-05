@@ -1,6 +1,6 @@
 # Spec 016: Dagster, configurable email, and outbound network selection
 
-Status: **First outbound-network slice implemented; remaining scope is draft.**
+Status: **Main-pipeline source routing and CLI FOMC refresh implemented; remaining scope is draft.**
 
 Date: 2026-11-04
 
@@ -21,9 +21,10 @@ the applicable connections at startup, choose the working routes, and reuse
 those choices throughout that pipeline invocation. Avoid trying both routes on
 every source request.
 
-The user authorized the first implementation slice: managed startup route
-selection for the main pipeline's FRED client. The other source clients,
-outbound consumers, email additions and Dagster jobs remain subsequent work.
+The implemented slices cover managed startup route selection for the main
+pipeline's source clients and FOMC refresh, and default-on CLI FOMC refresh.
+The separate ECB eligible-assets hook, other outbound consumers, email
+additions and Dagster jobs remain subsequent work.
 
 ## Capability map
 
@@ -55,7 +56,7 @@ contracts/defaults are proposals for review, not an implementation checklist.
 | `catalogs/fomc_calendar.py`, `governance/notify.py`, `governance/email_transport.py`: direct Requests calls | Include calendar refresh, webhook, Graph token and Graph send paths |
 | Alerting already supports `smtp`, `outlook_smtp`, `microsoft_graph`, `console`, `file` | Extend the existing renderer, routes and transports instead of creating a second alert system |
 | Current SMTP uses STARTTLS/password login; Graph uses tenant client credentials | Add implicit TLS and OAuth; personal Outlook.com is not covered by the current Graph flow |
-| Main-run FOMC refresh currently requires `--refresh-fomc-calendar`; its pre-Gold stage adds dates and retains the local file on fetch/parse/write failure | Change the full-run default as requested, retain an explicit opt-out and existing additive/fallback behavior |
+| Main-run FOMC refresh adds dates before Gold and retains the local file on fetch/parse/write failure | CLI `run` now enables it by default, with an explicit opt-out and existing additive/fallback behavior |
 | Standalone Gold/reconciliation commands select SQLite/Spark directly; the main run uses `WarehouseFactory` | Adapt shared maintenance services to the configured authoritative backend, including PostgreSQL; do not shell-wrap the current CLI and assume parity |
 | [Spec 013](../spec013/README.md) and [its handoff](../../docs/handoffs/dagster_orchestration.md) are draft-only | Reuse the detailed ECB safety and operational contracts; no Dagster runtime is assumed installed |
 
@@ -111,15 +112,14 @@ in the repository's `.venv`. The documentation staleness check passed. Local
 links and Markdown fence/whitespace structure in the new spec files passed;
 the README additions also resolve. A broader README link scan identified two
 pre-existing missing Power BI handoff targets; this change does not alter them.
-`git diff --check` passed. These results characterize the existing code and
-validate documentation only; the new capabilities have not been implemented
-or runtime-tested.
+`git diff --check` passed. At that point, these results characterized existing
+code and validated documentation only.
 
 After the scope/FOMC update, the focused FOMC, reconciliation, pipeline and CLI
 characterization command in the Dagster module passed **98 tests**. Spec links,
 Markdown structure, the documentation staleness check and `git diff --check`
-also passed. The refresh-on default and additional jobs remain specified
-behavior awaiting implementation, not outcomes proven by these existing tests.
+also passed. At that point, the refresh-on default and additional jobs remained
+specified behavior awaiting implementation.
 
 The first FRED-network slice adds managed per-run startup route selection while
 leaving `env` as the default. The focused pipeline/config/alert/CLI suite passed
@@ -131,7 +131,17 @@ schema-parity tests search for an outdated Spark-writer text pattern, and the
 Power BI catalog test reports the existing missing `mmkt_rate_snapshot` entry.
 The full run preceded the last focused test additions; no full-suite pass is
 claimed. Managed routing for other consumers and preflight-failure alerting
-remain open.
+remained open after that slice.
+
+The next slice implements per-origin managed routing for all built-in
+main-pipeline source clients and FOMC refresh, and makes FOMC refresh the CLI
+`run` default with `--no-refresh-fomc-calendar` as an opt-out. Focused routing,
+calendar, pipeline and CLI tests passed (250 tests before the final additional
+coverage). The complete suite then reported **1,592 passed, one skipped, and
+the same four baseline failures** documented above. After simplifying the
+internal run-session lifecycle, 142 affected tests passed. Tests include mixed
+actual local direct/proxy connections and a managed FOMC refresh with injected
+Fed content; no live Fed fetch or production data operation was performed.
 
 ## Conventions and boundaries
 

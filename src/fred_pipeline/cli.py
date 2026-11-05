@@ -1499,11 +1499,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     r.add_argument(
         "--refresh-fomc-calendar",
-        action="store_true",
+        action=argparse.BooleanOptionalAction,
+        default=True,
         help=(
             "before Gold, fetch the Fed's FOMC calendar and add newly "
-            "published meetings to config/fomc.yml (spec008). Opt-in: it adds "
-            "a federalreserve.gov dependency to the run. Any failure is "
+            "published meetings to config/fomc.yml (default on; spec008). "
+            "Use --no-refresh-fomc-calendar to skip the fetch. Any failure is "
             "logged and the calendar already on disk is used unchanged; "
             "additions are written to the file but NOT committed. The "
             "calendar health check itself always runs and needs no flag."

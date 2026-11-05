@@ -1,14 +1,13 @@
 # Module: outbound-network
 
-Status: FRED-only first slice implemented; broader module draft for review.
+Status: Main-pipeline source and FOMC routing implemented; broader module draft.
 Parent: [Spec 016](README.md).
 
-The first slice implements managed startup selection for the main pipeline's
-FRED client and its FRED release-calendar calls. Other source clients, the ECB
-hook, FOMC, Graph, SMTP and webhooks are not yet covered by managed routing;
-the cross-consumer acceptance criteria below remain open until those paths are
-wired and verified. The diagnostic command and preflight-stage alert are also
-future work.
+Managed startup selection covers all built-in main-pipeline source clients,
+the FRED release calendar and FOMC refresh. The separate ECB eligible-assets
+hook, Graph, SMTP and webhooks are not yet covered; cross-consumer acceptance
+criteria remain open until those paths are wired and verified. The diagnostic
+command and preflight-stage alert are also future work.
 
 ## Objective and scope
 

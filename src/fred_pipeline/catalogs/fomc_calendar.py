@@ -41,6 +41,7 @@ import sys
 from collections.abc import Iterable
 from dataclasses import dataclass, replace
 from datetime import date
+from typing import Any
 
 FOMC_CALENDAR_URL = "https://www.federalreserve.gov/monetarypolicy/fomccalendars.htm"
 
@@ -855,6 +856,7 @@ def fetch_calendar_html_requests(
     *,
     timeout_seconds: int = 30,
     user_agent: str = DEFAULT_USER_AGENT,
+    session: Any = None,
 ) -> str:
     """Fetch the calendar page with a plain HTTP GET.
 
@@ -874,7 +876,7 @@ def fetch_calendar_html_requests(
         ) from exc
 
     try:
-        response = requests.get(
+        response = (session or requests).get(
             url,
             timeout=timeout_seconds,
             headers={"User-Agent": user_agent, "Accept": "text/html"},

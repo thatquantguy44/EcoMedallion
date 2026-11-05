@@ -136,7 +136,7 @@ def test_empty_run_never_probes_the_release_calendar(monkeypatch):
         fred_api_key="key", config_file="/nonexistent", network={"mode": "direct"}
     )
     pipe = FredPipeline(cfg, warehouse=object(), persist_audit=False)
-    with pipe._fred_network([], include_calendar=True):
+    with pipe._run_network([], include_calendar=True):
         pass
 
 
@@ -148,9 +148,11 @@ def test_unavailable_advisory_fred_route_does_not_escape_directly(monkeypatch):
     cfg = PipelineConfig.resolve(
         fred_api_key="key", config_file="/nonexistent", network={"mode": "direct"}
     )
-    pipe = FredPipeline(cfg, warehouse=object(), persist_audit=False)
+    pipe = FredPipeline(
+        cfg, warehouse=object(), clients={"bea": object()}, persist_audit=False
+    )
     specs = [SeriesSpec(series_id="A", title="A", frequency="d", source="bea")]
-    with pipe._fred_network(specs, include_calendar=True):
+    with pipe._run_network(specs, include_calendar=True):
         with pytest.raises(NetworkPreflightError, match="no selected route"):
             pipe._client_for_source("fred")
 
@@ -537,7 +539,7 @@ def test_pipeline_selects_once_per_run_and_uses_selected_route(
         item.get("https") == "http://proxy.example:8080" for item in requests_seen
     )
     assert len(closed) >= 2
-    assert pipe._fred_sessions is None
+    assert pipe._run_sessions is None
 
 
 def test_preflight_failure_precedes_manifest_metadata_writes(monkeypatch):

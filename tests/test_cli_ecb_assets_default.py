@@ -2,6 +2,8 @@
 
 from types import SimpleNamespace
 
+import pytest
+
 from fred_pipeline import cli
 from fred_pipeline.config import Environment, PipelineConfig
 
@@ -64,6 +66,31 @@ def test_run_parser_enables_ecb_assets_by_default_and_allows_opt_out():
     parser = cli.build_parser()
     assert parser.parse_args(["run"]).ecb_assets is True
     assert parser.parse_args(["run", "--no-ecb-assets"]).ecb_assets is False
+
+
+@pytest.mark.parametrize(
+    ("flags", "expected"),
+    [([], True), (["--full"], True), (["--no-refresh-fomc-calendar"], False)],
+)
+def test_cli_passes_fomc_refresh_choice_to_pipeline(
+    monkeypatch, capsys, flags, expected
+):
+    _install_run_fakes(monkeypatch)
+    seen = []
+
+    class Pipeline:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def run_from_manifest(self, *_args, **kwargs):
+            seen.append(kwargs["refresh_fomc_calendar"])
+            return _Run()
+
+    monkeypatch.setattr(cli, "FredPipeline", Pipeline)
+    args = cli.build_parser().parse_args(["run", "--no-ecb-assets", *flags])
+    assert cli._cmd_run(args) == 0
+    assert seen == [expected]
+    capsys.readouterr()
 
 
 def test_run_polls_ecb_assets_by_default(monkeypatch, capsys):

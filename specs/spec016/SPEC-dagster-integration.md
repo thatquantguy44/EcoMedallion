@@ -71,6 +71,9 @@ operator explicitly uses `--no-ecb-assets` during scheduler cutover.
 
 ### Full-run FOMC refresh
 
+The CLI default and opt-out described here are implemented. The Dagster job
+and its corresponding default are still pending.
+
 Set `refresh_fomc_calendar: true` by default in the full Dagster job and the
 CLI `run` entry point, including routine incremental runs. This behavior is
 independent of `--full`, which controls source history extraction. Retain

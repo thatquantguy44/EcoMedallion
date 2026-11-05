@@ -1,14 +1,11 @@
-"""Run-scoped, opt-in HTTP routing for the main pipeline's FRED client.
-
-Only FRED participates in this first integration slice. Other outbound clients
-continue to use their existing transport and environment behavior.
-"""
+"""Run-scoped, opt-in HTTP routing for main-pipeline data sources."""
 
 from __future__ import annotations
 
 import ipaddress
 import os
 import threading
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any
 from urllib.parse import urlsplit
@@ -124,6 +121,7 @@ class NetworkConfig:
     ca_bundle_env: str = ""
     connect_timeout_seconds: float = 3
     read_timeout_seconds: float = 3
+    max_parallel_targets: int = 4
     origins: tuple[tuple[tuple[str, str, int], str], ...] = ()
 
     @classmethod
@@ -234,6 +232,7 @@ class NetworkConfig:
             read_timeout_seconds=_positive(
                 probe.get("read_timeout_seconds", 3), "probe.read_timeout_seconds"
             ),
+            max_parallel_targets=probe.get("max_parallel_targets", 4),
         )
 
 
@@ -243,18 +242,21 @@ class Route:
     origin: tuple[str, str, int]
     proxy_url: str = field(default="", repr=False)
     ca_bundle: str | bool = field(default=True, repr=False)
+    probe_headers: dict[str, str] = field(
+        default_factory=dict, repr=False, compare=False
+    )
 
     @property
     def proxies(self) -> dict[str, str]:
         return {self.origin[0]: self.proxy_url} if self.kind == "proxy" else {}
 
 
-def _env(lower: str) -> str:
-    if lower in os.environ:
-        return os.environ[lower]
-    if lower == "http_proxy" and "REQUEST_METHOD" in os.environ:
+def _env(lower: str, environ: Mapping[str, str]) -> str:
+    if lower in environ:
+        return environ[lower]
+    if lower == "http_proxy" and "REQUEST_METHOD" in environ:
         return ""
-    return os.environ.get(lower.upper(), "")
+    return environ.get(lower.upper(), "")
 
 
 def _matches_bypass(origin: tuple[str, str, int], values: list[str]) -> bool:
@@ -278,6 +280,7 @@ def _probe(url: str, route: Route, settings: NetworkConfig) -> None:
             proxies=route.proxies,
             verify=route.ca_bundle,
             allow_redirects=False,
+            headers=route.probe_headers,
             timeout=(settings.connect_timeout_seconds, settings.read_timeout_seconds),
         ) as response:
             if route.kind == "proxy" and (
@@ -294,22 +297,30 @@ def _probe(url: str, route: Route, settings: NetworkConfig) -> None:
                 raise _PolicyError("proxy refused probe")
 
 
-def select_route(settings: NetworkConfig, url: str) -> Route:
-    """Probe at most two permitted routes without sending credentials to FRED."""
+def select_route(
+    settings: NetworkConfig,
+    url: str,
+    *,
+    label: str = "FRED",
+    headers: dict[str, str] | None = None,
+    environ: Mapping[str, str] | None = None,
+) -> Route:
+    """Probe at most two permitted routes without source credentials."""
+    environ = dict(os.environ) if environ is None else environ
     target = _origin(url)
     mode = dict(settings.origins).get(target, settings.mode)
     if mode == "env":
         raise NetworkConfigError("env mode does not select managed routes")
     bypass = list(settings.no_proxy)
-    if "FRED_NO_PROXY" in os.environ:
+    if "FRED_NO_PROXY" in environ:
         bypass = [
-            item.strip()
-            for item in os.environ["FRED_NO_PROXY"].split(",")
-            if item.strip()
+            item.strip() for item in environ["FRED_NO_PROXY"].split(",") if item.strip()
         ]
     if settings.inherit_proxy_env:
         bypass.extend(
-            item.strip() for item in _env("no_proxy").split(",") if item.strip()
+            item.strip()
+            for item in _env("no_proxy", environ).split(",")
+            if item.strip()
         )
     if _matches_bypass(target, bypass):
         mode = "direct"
@@ -321,20 +332,16 @@ def select_route(settings: NetworkConfig, url: str) -> Route:
             else settings.http_proxy_env
         )
         app_var = "FRED_HTTPS_PROXY" if target[0] == "https" else "FRED_HTTP_PROXY"
-        proxy = os.environ.get(app_var, "") or (
-            os.environ.get(named, "") if named else ""
-        )
+        proxy = environ.get(app_var, "") or (environ.get(named, "") if named else "")
         if not proxy and settings.inherit_proxy_env:
-            proxy = _env(f"{target[0]}_proxy") or _env("all_proxy")
+            proxy = _env(f"{target[0]}_proxy", environ) or _env("all_proxy", environ)
     if proxy:
         proxy = _proxy_url(proxy)
     ca_bundle = (
-        os.environ.get("FRED_CA_BUNDLE")
-        or (
-            os.environ.get(settings.ca_bundle_env, "") if settings.ca_bundle_env else ""
-        )
-        or os.environ.get("REQUESTS_CA_BUNDLE")
-        or os.environ.get("CURL_CA_BUNDLE")
+        environ.get("FRED_CA_BUNDLE")
+        or (environ.get(settings.ca_bundle_env, "") if settings.ca_bundle_env else "")
+        or environ.get("REQUESTS_CA_BUNDLE")
+        or environ.get("CURL_CA_BUNDLE")
         or True
     )
     candidates = (
@@ -348,18 +355,20 @@ def select_route(settings: NetworkConfig, url: str) -> Route:
     )
     if mode == "proxy" and not proxy:
         raise NetworkPreflightError(
-            "FRED proxy route is required but no proxy is configured"
+            f"{label} proxy route is required but no proxy is configured"
         )
     for kind in candidates:
         if kind == "proxy" and not proxy:
             continue
-        route = Route(kind, target, proxy if kind == "proxy" else "", ca_bundle)
+        route = Route(
+            kind, target, proxy if kind == "proxy" else "", ca_bundle, headers or {}
+        )
         try:
             probe_url = urlsplit(url)._replace(query="", fragment="").geturl()
             _probe(probe_url, route, settings)
         except (requests.exceptions.SSLError, _PolicyError):
             raise NetworkPreflightError(
-                f"FRED {kind} route failed TLS or proxy policy validation"
+                f"{label} {kind} route failed TLS or proxy policy validation"
             ) from None
         except requests.exceptions.ProxyError as exc:
             message = str(exc).lower()
@@ -367,45 +376,51 @@ def select_route(settings: NetworkConfig, url: str) -> Route:
                 text in message for text in ("407", "403", "tunnel connection failed")
             ):
                 raise NetworkPreflightError(
-                    "FRED proxy route failed authentication or CONNECT policy"
+                    f"{label} proxy route failed authentication or CONNECT policy"
                 ) from None
             continue
         except (requests.exceptions.ConnectionError, requests.exceptions.Timeout):
             continue
         except requests.exceptions.RequestException:
-            raise NetworkPreflightError(f"FRED {kind} route probe failed") from None
+            raise NetworkPreflightError(f"{label} {kind} route probe failed") from None
         return route
     raise NetworkPreflightError(
-        "no permitted FRED route passed the startup connectivity check"
+        f"no permitted {label} route passed the startup connectivity check"
     )
 
 
 class _OriginSession(requests.Session):
-    def __init__(self, route: Route):
+    def __init__(self, routes: dict[tuple[str, str, int], Route]):
         super().__init__()
         self.trust_env = False
-        self.proxies = route.proxies
-        self.verify = route.ca_bundle
-        self._origin = route.origin
+        self._routes = routes
 
     def send(self, request, **kwargs):
-        if _origin(request.url) != self._origin:
+        route = self._routes.get(_origin(request.url))
+        if route is None:
             raise requests.exceptions.RequestException(
-                "FRED request or redirect left its selected origin"
+                "request or redirect left the registered origins"
             )
+        # Redirect preparation may have carried a different proxy's credentials.
+        # The adapter adds authentication for this route's proxy when needed.
+        request.headers.pop("Proxy-Authorization", None)
+        kwargs["proxies"] = route.proxies
+        kwargs["verify"] = route.ca_bundle
         try:
             return super().send(request, **kwargs)
         except requests.exceptions.RequestException:
             raise requests.exceptions.RequestException(
-                "FRED request failed on the selected route"
+                "request failed on the selected route"
             ) from None
 
 
 class RunSessions:
     """One configured Requests session per thread; close all at run end."""
 
-    def __init__(self, route: Route):
-        self._route = route
+    def __init__(self, routes: Route | dict[tuple[str, str, int], Route]):
+        self._routes = (
+            {routes.origin: routes} if isinstance(routes, Route) else dict(routes)
+        )
         self._local = threading.local()
         self._lock = threading.Lock()
         self._sessions: list[_OriginSession] = []
@@ -413,7 +428,7 @@ class RunSessions:
     def _session(self) -> _OriginSession:
         session = getattr(self._local, "session", None)
         if session is None:
-            session = _OriginSession(self._route)
+            session = _OriginSession(self._routes)
             with self._lock:
                 self._sessions.append(session)
             self._local.session = session

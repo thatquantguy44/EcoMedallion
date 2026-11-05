@@ -132,10 +132,10 @@ PYTHONPATH=src python -m fred_pipeline run --env dev --dry-run
 
 Get a free FRED API key at <https://fredaccount.stlouisfed.org/apikeys>.
 
-### Configure managed FRED networking
+### Configure managed source networking
 
-By default the main pipeline's FRED client continues to use Requests' normal
-environment-based proxy handling. To choose a route at the start of a run,
+By default the main pipeline's source clients use Requests' normal
+environment-based proxy handling. To choose routes at the start of a run,
 set the `network` section in `config/config.yaml`, or set the corresponding
 environment variables. For example:
 
@@ -163,17 +163,25 @@ connectivity failure. `direct` and `proxy` are strict modes; bypass hosts are
 always direct. TLS validation and proxy authentication/policy errors do not
 trigger fallback. A selected route is reused for the invocation and checked
 again on the next run; later request failures use the existing retries on the
-same route. The connectivity probe sends no FRED API key. DNS resolution may
+same route. The connectivity probes send no source API keys. DNS resolution may
 exceed the configured connect/read timeouts on some operating systems.
 Selection occurs before manifest metadata writes and cadence planning, so it
-can probe FRED even when all selected FRED series are later skipped as not due.
+can probe a source even when all of its selected series are later skipped as not due.
 
-This first integration applies only to FRED requests made by the main pipeline,
-including its FRED release-calendar refresh. Other sources, the ECB hook,
-FOMC refresh, Graph, SMTP, and webhooks retain their existing independent
-routing. Managed FRED mode also blocks cross-origin redirects; use a base URL
-that serves the configured FRED endpoint directly. See the [network spec](specs/spec016/SPEC-outbound-network.md)
-for the remaining integration scope.
+Managed routing covers the main pipeline's built-in data sources, its FRED
+release calendar and the optional FOMC refresh. ETF holdings destinations are
+selected per requested fund. A redirect to an origin that was not selected at
+startup fails explicitly. Caller-injected clients own their own networking.
+The standalone ECB eligible-assets hook and commands, discovery/reconciliation
+commands, Graph, SMTP, and webhooks retain their independent routing. See the
+[network spec](specs/spec016/SPEC-outbound-network.md) for the remaining scope.
+
+CLI `run` refreshes the FOMC calendar before Gold by default. Use
+`--no-refresh-fomc-calendar` for the offline calendar check. The refresh adds
+new dates to the configured `FRED_FOMC_CONFIG_FILE` (default `config/fomc.yml`)
+without committing them. If fetching or writing fails, the run retains the
+existing file and records a warning. The stage is skipped when Gold is not
+built, including dry runs; library callers retain their explicit refresh option.
 
 ### Install the optional Dagster development runtime
 

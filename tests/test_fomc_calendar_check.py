@@ -579,3 +579,102 @@ def test_a_refresh_lands_before_gold_reads_the_calendar(
     assert tracker.get("fomc_calendar").detail["added_dates"] == (
         "2027-12-08, 2028-01-26"
     )
+
+
+def test_managed_fomc_refresh_reuses_selected_proxy_before_gold(
+    cfg_path, observations_payload, fake_client_cls, monkeypatch
+):
+    import functools
+    import requests
+    from fred_pipeline.governance import fomc_calendar_check as mod
+
+    _drop_dates(cfg_path, "2028-01-26")
+    monkeypatch.setenv("FRED_FOMC_CONFIG_FILE", str(cfg_path))
+    monkeypatch.setenv("FRED_HTTPS_PROXY", "http://proxy.example:8080")
+    monkeypatch.setenv("NO_PROXY", "")
+    monkeypatch.setenv("no_proxy", "")
+    probes, sends = [], []
+    monkeypatch.setattr(
+        "fred_pipeline.network._probe",
+        lambda url, route, _settings: probes.append((url, route.kind)),
+    )
+    monkeypatch.setattr(
+        mod,
+        "check_fomc_calendar",
+        functools.partial(mod.check_fomc_calendar, today=TODAY),
+    )
+
+    def send(_adapter, request, **kwargs):
+        sends.append((request.url, kwargs.get("proxies", {})))
+        response = requests.Response()
+        response.status_code = 200
+        response._content = FED_PAGE.encode()
+        response.url = request.url
+        response.request = request
+        return response
+
+    monkeypatch.setattr(requests.adapters.HTTPAdapter, "send", send)
+    wh = _Warehouse()
+    config = PipelineConfig(
+        environment=Environment.DEV, fred_api_key="k", network={"mode": "auto"}
+    )
+    pipe = FredPipeline(
+        config,
+        client=fake_client_cls({"DGS10": observations_payload}),
+        warehouse=wh,
+        persist_audit=False,
+    )
+    run = pipe.run([_spec()], refresh_fomc_calendar=True)
+    assert run.series_succeeded == 1
+    assert wh.calendar_end_seen_by_gold == LAST_MEETING
+    assert len(probes) == 1 and probes[0][1] == "proxy"
+    assert len(sends) == 1 and sends[0][1].get("https") == "http://proxy.example:8080"
+    assert (
+        pipe._stage_tracker.get("fomc_calendar").detail["refresh_outcome"] == "updated"
+    )
+
+
+def test_unavailable_managed_fomc_preflight_keeps_local_calendar_and_warns(
+    cfg_path, observations_payload, fake_client_cls, monkeypatch
+):
+    import functools
+    import requests
+    from fred_pipeline.governance import fomc_calendar_check as mod
+
+    monkeypatch.setenv("FRED_FOMC_CONFIG_FILE", str(cfg_path))
+    monkeypatch.setattr(
+        mod,
+        "check_fomc_calendar",
+        functools.partial(mod.check_fomc_calendar, today=TODAY),
+    )
+    monkeypatch.setattr(
+        "fred_pipeline.network._probe",
+        lambda *_args: (_ for _ in ()).throw(requests.ConnectionError("offline")),
+    )
+    before = cfg_path.read_bytes()
+    wh = _Warehouse()
+    config = PipelineConfig(
+        environment=Environment.DEV, fred_api_key="k", network={"mode": "direct"}
+    )
+    pipe = FredPipeline(
+        config,
+        client=fake_client_cls({"DGS10": observations_payload}),
+        warehouse=wh,
+        persist_audit=False,
+    )
+    run = pipe.run([_spec()], refresh_fomc_calendar=True)
+    assert run.series_succeeded == 1
+    assert wh.gold_built == 1
+    assert cfg_path.read_bytes() == before
+    stage = pipe._stage_tracker.get("fomc_calendar")
+    assert stage.status is StageStatus.WARNED
+    assert stage.detail["refresh_outcome"] == "failed"
+
+
+def test_fomc_refresh_detail_distinguishes_disabled_and_unchanged(cfg_path):
+    disabled = check_fomc_calendar(str(cfg_path), today=TODAY, refresh=False)
+    unchanged = check_fomc_calendar(
+        str(cfg_path), today=TODAY, refresh=True, fetch=Fetch(html=FED_PAGE)
+    )
+    assert disabled.detail()["refresh_outcome"] == "disabled"
+    assert unchanged.detail()["refresh_outcome"] == "no_change"
