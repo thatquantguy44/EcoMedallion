@@ -1,25 +1,24 @@
 # Spec 013 Task Checklist
 
-Status: Draft for review. All implementation tasks are pending; T1 published
-package metadata research is complete, but runtime verification is not.
+Status: T1 complete; shared execution, writer safety and orchestration tasks
+remain pending.
 
-**Continue on the existing branch `spec012-dagster-orchestration`**,
-tracking `origin/spec012-dagster-orchestration`.
+The combined initiative follows [Spec 016](../specs/spec016/README.md), which
+supersedes the earlier ECB-only branch and job scope.
 
-**Next task: complete T1**, following the [canonical handoff](../docs/handoffs/dagster_orchestration.md#next-task-t1).
+**Next task: T2 shared ECB execution**, followed by T3 writer exclusion.
 
 Requirements: [spec](../specs/spec013/README.md). Sequence: [plan](plan.md).
-Dagster is Spec 013; geography is Spec 012. The continuation branch remains
-`spec012-dagster-orchestration`.
+Dagster is Spec 013; geography is Spec 012.
 Each task includes code/docs and focused tests for its behavior; preserve the
 repository's existing suites. Listed new files are proposals, not existing code.
 
 ## Phase 1: Execution foundation
 
-- [ ] **T1 — Resolve the optional runtime** (S/M; no dependency)
-  - Established: candidate pins are `dagster==1.13.26`,
-    `dagster-webserver==1.13.26`, `dagster-postgres==0.29.26`; PyPI declares
-    matching dependencies and Python 3.12 support. No clean install recorded.
+- [x] **T1 — Resolve the optional runtime** (S/M; no dependency)
+  - Verified: candidate pins and locked clean installs on Python 3.12 Linux and
+    locally; core-only installation does not require Dagster. See the
+    [runbook](../docs/deployment/dagster_runbook.md).
   - Acceptance: Python 3.12 resolves a compatible exact Dagster/webserver/Postgres
     set; core installation still works without Dagster; resolved versions and
     commands are recorded (AC-01).
@@ -28,9 +27,7 @@ repository's existing suites. Listed new files are proposals, not existing code.
   - Files: `pyproject.toml`, `requirements-dagster.lock.txt`, planned
     `docs/deployment/dagster_runbook.md`,
     `tests/test_dagster_optional_dependencies.py`, README install section.
-  - Handoff: record actual two-environment results; keep T1 unchecked until
-    they pass, then update all pickup pointers to T2. Definitions import safety
-    is the later T4 portion of AC-01, not a missing module to implement in T1.
+  - Definitions import safety remains the later T4 portion of AC-01.
 
 - [ ] **T2 — Share the ECB poll service** (M; no dependency)
   - Acceptance: CLI and main-run hook delegate through one service; report has

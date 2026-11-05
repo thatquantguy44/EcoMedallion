@@ -1,19 +1,18 @@
 # Implementation Plan: Spec 013 Dagster Orchestration
 
-Status: Draft for review, 2026-10-25. T1 package metadata research is complete;
-installation, locking and integration verification remain pending.
+Status: T1 optional runtime verification complete; execution, writer locking,
+and Dagster integration remain pending.
 
-**Continuation branch: `spec012-dagster-orchestration`** (existing branch;
-tracking `origin/spec012-dagster-orchestration`). Continue implementation here.
+The current combined initiative follows [Spec 016](../specs/spec016/README.md),
+which supersedes the earlier ECB-only branch and job scope.
 
 This is the active implementation plan for [Spec 013](../specs/spec013/README.md).
-Dagster was renumbered after main added the geography Spec 012; continue on
-the existing `spec012-dagster-orchestration` branch.
+Dagster was renumbered after the geography Spec 012 was added.
 Tasks are tracked in [todo.md](todo.md); acceptance IDs refer to the spec.
 This plan does not replace the remaining Spec 011 production-host proof.
 
-**Next task: complete T1.** Use the [canonical pickup instructions](../docs/handoffs/dagster_orchestration.md#next-task-t1)
-for established candidate versions, remaining work and completion evidence.
+**Next task: T2 shared ECB execution**, followed by T3 writer exclusion. T1
+evidence is in the [Dagster runbook](../docs/deployment/dagster_runbook.md).
 
 ## Decisions
 
@@ -84,11 +83,8 @@ AC-01–AC-12 gate. Completion is evidence-based, not inferred from a green CI r
 
 ## Next action
 
-Complete T1 using `dagster==1.13.26`, `dagster-webserver==1.13.26` and
-`dagster-postgres==0.29.26`, whose published metadata matches Python 3.12.
-Clean installation, transitive constraints and core-only verification are still
-required; see the [T1 handoff](../docs/handoffs/dagster_orchestration.md#next-task-t1).
-After evidence passes, mark T1 complete and move the pickup pointer to T2.
+Complete T2 shared execution and T3 writer exclusion before adding a Dagster
+writer. T1 clean installation and core-only verification have passed.
 No host credentials or running production scheduler are needed for these slices.
 Production hostname, access, protected paths, monitor route, capacity and
 backup target must be resolved before T9–T11 production execution.

@@ -34,15 +34,11 @@ BIS, BEA, Census, SEC (company financials), Tiingo, Stooq, and iShares — see
 > [`docs/handoffs/run_alerting.md`](./docs/handoffs/run_alerting.md).
 > The active ECB eligible-assets production pickup point is in
 > [`docs/handoffs/ecb_eligible_assets.md`](./docs/handoffs/ecb_eligible_assets.md).
-> Proposed Dagster orchestration (specification only) is scoped in
-> [`specs/spec013/README.md`](./specs/spec013/README.md), with the next build
-> task, **T1 — complete optional runtime installation and verification**, in
-> [`docs/handoffs/dagster_orchestration.md`](./docs/handoffs/dagster_orchestration.md#next-task-t1).
-> That earlier draft's continuation branch is `spec012-dagster-orchestration`.
-> The new combined Dagster, email-provider and proxy/direct networking proposal
-> is [Spec 016](./specs/spec016/README.md), on
-> `feature/dagster-alerts-network-spec`. Review that spec before starting its
-> implementation; its branch/scope take precedence for the combined initiative.
+> The optional Dagster runtime is available; jobs and schedules remain planned.
+> The expanded orchestration, email and networking scope is in
+> [Spec 016](./specs/spec016/README.md), with execution and writer-safety
+> requirements in [Spec 013](./specs/spec013/README.md) and the
+> [Dagster handoff](./docs/handoffs/dagster_orchestration.md).
 > The series geography mapping specification from main is
 > [`Spec 012`](./specs/spec012/README.md); Dagster is Spec 013.
 
@@ -205,22 +201,18 @@ python3.12 -m venv .venv
 
 .venv/bin/python -m pip install --upgrade pip
 
-.venv/bin/python -m pip install \
-  -e '.[postgres,dev]' \
-  'dagster==1.13.26' \
-  'dagster-webserver==1.13.26' \
-  'dagster-postgres==0.29.26'
+.venv/bin/python -m pip install -e '.[postgres,dagster,dev]' \
+  -c requirements-dagster.lock.txt
 ```
 
-This installs the repository in editable mode with PostgreSQL and test
-dependencies, plus the matching Dagster packages. Dagster is specified
-explicitly because the planned `dagster` optional dependency group has not
-been added yet. Published package metadata identifies
+This installs the repository in editable mode with PostgreSQL, test, and
+optional Dagster dependencies using the recorded Python 3.12 constraints.
+The matched package versions are
 [`dagster` 1.13.26](https://pypi.org/project/dagster/1.13.26/),
 [`dagster-webserver` 1.13.26](https://pypi.org/project/dagster-webserver/1.13.26/),
-and [`dagster-postgres` 0.29.26](https://pypi.org/project/dagster-postgres/0.29.26/)
-as a compatible set supporting Python 3.12; repository integration verification
-remains part of [Spec 013](specs/spec013/README.md).
+and [`dagster-postgres` 0.29.26](https://pypi.org/project/dagster-postgres/0.29.26/).
+Their clean-install verification is recorded in the
+[Dagster development runbook](docs/deployment/dagster_runbook.md).
 
 Verify the installation without polling ECB or writing to a database:
 
@@ -240,9 +232,8 @@ source .venv/bin/activate
 
 The Dagster jobs and schedules are not implemented yet. Installing these
 packages does not start ECB polling or activate production schedules. See the
-[canonical T1 handoff](docs/handoffs/dagster_orchestration.md#next-task-t1) for
-the remaining clean-install, constraints and core-only verification work.
-The commands above are bootstrap instructions, not evidence that T1 has passed.
+[Dagster handoff](docs/handoffs/dagster_orchestration.md) for the remaining
+shared-execution and writer-lock work.
 
 ### Run fully locally and save to a database file
 

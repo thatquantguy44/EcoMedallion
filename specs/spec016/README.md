@@ -1,6 +1,6 @@
 # Spec 016: Dagster, configurable email, and outbound network selection
 
-Status: **Pipeline/ECB routing, core email additions and CLI FOMC refresh implemented; Dagster and remaining networking are draft.**
+Status: **Pipeline/ECB routing, core email additions, CLI FOMC refresh and optional Dagster runtime implemented; Dagster jobs and remaining networking are draft.**
 
 Date: 2026-11-04
 
@@ -28,6 +28,8 @@ profiles, SMTP TLS/auth and proxy options, Outlook OAuth, Graph attachments,
 delivery outcomes and email diagnostics are also implemented. Graph text/HTML
 parity for messages with BCC, other outbound consumers and Dagster jobs remain work; live mailbox
 acceptance and receipt have not been verified.
+The optional Dagster dependency set is locked and clean-install verified; it
+does not yet provide jobs or activate schedules.
 
 ## Capability map
 
@@ -61,13 +63,11 @@ contracts/defaults are proposals for review, not an implementation checklist.
 | Current SMTP uses STARTTLS/password login; Graph uses tenant client credentials | Add implicit TLS and OAuth; personal Outlook.com is not covered by the current Graph flow |
 | Main-run FOMC refresh adds dates before Gold and retains the local file on fetch/parse/write failure | CLI `run` now enables it by default, with an explicit opt-out and existing additive/fallback behavior |
 | Standalone Gold/reconciliation commands select SQLite/Spark directly; the main run uses `WarehouseFactory` | Adapt shared maintenance services to the configured authoritative backend, including PostgreSQL; do not shell-wrap the current CLI and assume parity |
-| [Spec 013](../spec013/README.md) and [its handoff](../../docs/handoffs/dagster_orchestration.md) are draft-only | Reuse the detailed ECB safety and operational contracts; no Dagster runtime is assumed installed |
+| [Spec 013](../spec013/README.md) and [its handoff](../../docs/handoffs/dagster_orchestration.md) specify the writer safety work | Reuse those contracts; the optional runtime is installed separately from core |
 
-For this initiative, this branch and Spec 016 are the review/pickup point.
-The old draft's instruction to continue on `spec012-dagster-orchestration`
-applies to that older workstream. Do not switch branches or execute its T1
-merely because the older handoff says to. Do not overwrite its plan/checklist
-or mark its gates complete. Reconcile those documents when this spec is approved.
+For this initiative, this branch and Spec 016 are the pickup point. The user's
+confirmed job scope supersedes the earlier ECB-only draft. The runtime's T1
+dependency checks are complete; shared execution and writer exclusion remain.
 
 ## Proposed defaults for review
 
