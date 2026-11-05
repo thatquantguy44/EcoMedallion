@@ -37,6 +37,7 @@ def test_shared_poll_ingests_signed_releases_and_borrows_warehouse(tmp_path):
             pipeline_factory=factory,
         )
         assert report.outcome == "accepted"
+        assert report.notification_status == "not_attempted"
         assert len(report.releases) == 1
         assert report.releases[0]["status"] == "accepted"
         assert (
@@ -162,6 +163,14 @@ def test_failure_report_keeps_previously_committed_releases(tmp_path):
             w, client=fixture, signature_verifier=_verified
         )
 
+    notifications = []
+
+    def notify(results, status, error):
+        from fred_pipeline.governance.email_delivery import DeliveryResult
+
+        notifications.append((results, status, error))
+        return DeliveryResult("accepted", "test", "delivery-id")
+
     try:
         with pytest.raises(ECBPollFailure) as failure:
             execute_ecb_poll(
@@ -171,14 +180,57 @@ def test_failure_report_keeps_previously_committed_releases(tmp_path):
                 authoritative_backend="local",
                 client=client,
                 pipeline_factory=factory,
+                notify=notify,
             )
         report = failure.value.report
         assert report.outcome == "failed"
         assert len(report.releases) == 1
         assert report.releases[0]["status"] == "accepted"
+        assert report.health_verdict == "failure"
+        assert report.notification_status == "accepted"
+        assert len(notifications) == 1
+        assert notifications[0][0] == list(report.releases)
+        assert notifications[0][2]
         status = ECBEligibleAssetRepository(warehouse).status()
         assert status["current_eligible_count"] == 2
         assert status["quarantined"]
+    finally:
+        warehouse.close()
+
+
+def test_delivery_failure_does_not_undo_an_accepted_release(tmp_path):
+    from fred_pipeline.ecb_execution import execute_ecb_poll
+
+    config = PipelineConfig.resolve(config_file="/nonexistent", rate_limit_per_minute=0)
+    warehouse = LocalWarehouse(config, db_path=str(tmp_path / "ecb.db"))
+    client, release_url, _ = _fixture_client()
+    client.rss = f"""<rss><channel><item>
+    <title>List of eligible marketable assets</title><link>{release_url}</link>
+    <pubDate>Mon, 01 Jan 2024 17:56:07 +0100</pubDate>
+    </item></channel></rss>""".encode()
+
+    def factory(w, fixture):
+        return ECBEligibleAssetsPipeline(
+            w, client=fixture, signature_verifier=_verified
+        )
+
+    def notify(_results, _status, _error):
+        raise RuntimeError("private-alert-error")
+
+    try:
+        report = execute_ecb_poll(
+            config,
+            warehouse=warehouse,
+            selected_backend="local",
+            authoritative_backend="local",
+            client=client,
+            pipeline_factory=factory,
+            notify=notify,
+        )
+        assert report.outcome == "accepted"
+        assert report.notification_status == "failed"
+        assert report.repository_status["current_eligible_count"] == 2
+        assert "private-alert-error" not in repr(report)
     finally:
         warehouse.close()
 

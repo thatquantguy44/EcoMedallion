@@ -31,6 +31,9 @@ class ECBPollReport:
     releases: tuple[dict[str, Any], ...]
     started_at: str
     finished_at: str
+    repository_status: dict[str, Any]
+    health_verdict: str
+    notification_status: str
 
 
 class ECBPollFailure(ECBExecutionError):
@@ -52,8 +55,15 @@ def execute_ecb_poll(
     client: Any = None,
     pipeline_factory: Callable[..., Any] | None = None,
     clock: Callable[[], datetime] | None = None,
+    health_settings: Any = None,
+    notify: Callable[[list[dict[str, Any]], dict[str, Any], str], Any] | None = None,
 ) -> ECBPollReport:
-    """Poll one authoritative SQL warehouse without taking ownership of it."""
+    """Poll a borrowed warehouse and optionally notify with the raw health inputs.
+
+    Inject the configured ECB alert settings when reporting health. Without a
+    notifier, the report records that delivery was not attempted; callers that
+    still own alerting must not treat that as a delivery decision.
+    """
     if authoritative_backend == "disabled":
         raise ECBAuthorityError("ECB eligible-assets writes are disabled")
     if selected_backend != authoritative_backend:
@@ -66,9 +76,11 @@ def execute_ecb_poll(
         raise ECBExecutionError("managed ECB polling requires a startup-selected route")
 
     from fred_pipeline.ecb_eligible_assets import (
+        ECBEligibleAssetRepository,
         ECBEligibleAssetsPipeline,
         ECBMIDClient,
     )
+    from fred_pipeline.governance.ecb_alerting import assess_ecb_assets
 
     now = clock or (lambda: datetime.now(timezone.utc))
     started_at = now().isoformat()
@@ -83,29 +95,80 @@ def execute_ecb_poll(
         )
     factory = pipeline_factory or (lambda w, c: ECBEligibleAssetsPipeline(w, client=c))
     releases: list[dict[str, Any]] = []
+    error: Exception | None = None
     try:
         factory(warehouse, client).poll(
             allow_gap=allow_gap, on_result=lambda row: releases.append(row.to_dict())
         )
     except Exception as exc:
-        report = ECBPollReport(
-            operation_id=operation_id,
-            selected_backend=selected_backend,
-            outcome="failed",
-            releases=tuple(releases),
-            started_at=started_at,
-            finished_at=now().isoformat(),
-        )
-        # Preserve existing CLI error messages; consumers must use the report
-        # for safe orchestration metadata, not the exception text or cause.
-        raise ECBPollFailure(str(exc), report) from exc
-    return ECBPollReport(
+        error = exc
+
+    status: dict[str, Any] = {}
+    health_error = str(error) if error is not None else ""
+    health_verdict = "unknown"
+    try:
+        status = ECBEligibleAssetRepository(warehouse).status()
+        health_verdict = assess_ecb_assets(
+            action="poll",
+            results=releases,
+            status=status,
+            error=health_error,
+            now=now(),
+            settings=health_settings,
+        ).verdict
+    except Exception:  # health reporting must not undo a committed release
+        if not health_error:
+            health_error = "could not assess ECB health status"
+
+    notification_status = "not_attempted"
+    if notify is not None:
+        try:
+            delivery = notify(list(releases), status, health_error)
+            notification_status = getattr(delivery, "status", "unknown")
+            if notification_status not in {
+                "accepted",
+                "disabled",
+                "failed",
+                "previewed",
+                "suppressed",
+                "unknown",
+            }:
+                notification_status = "unknown"
+        except Exception:  # delivery is nonfatal and may contain credentials
+            notification_status = "failed"
+
+    latest = status.get("latest_accepted") or {}
+    safe_status = {
+        "latest_accepted": {
+            key: latest.get(key)
+            for key in (
+                "release_id",
+                "publication_at_utc",
+                "coverage_status",
+                "reconciliation_status",
+            )
+        }
+        if latest
+        else None,
+        "current_eligible_count": status.get("current_eligible_count"),
+        "quarantined_count": len(status.get("quarantined") or []),
+    }
+    report = ECBPollReport(
         operation_id=operation_id,
         selected_backend=selected_backend,
-        outcome="accepted"
+        outcome="failed"
+        if error is not None
+        else "accepted"
         if any(row.get("status") == "accepted" for row in releases)
         else "no_new_release",
         releases=tuple(releases),
         started_at=started_at,
         finished_at=now().isoformat(),
+        repository_status=safe_status,
+        health_verdict=health_verdict,
+        notification_status=notification_status,
     )
+    if error is not None:
+        # Preserve CLI diagnostics; orchestration metadata must use the report.
+        raise ECBPollFailure(str(error), report) from error
+    return report
