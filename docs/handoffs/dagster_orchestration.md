@@ -22,11 +22,12 @@ and network client. Its typed poll failure report retains results for releases
 committed before a later failure; the report excludes source exception text.
 The exception text and cause retain the existing CLI diagnostic and must not be
 emitted as Dagster metadata. The report now includes a restricted repository
-snapshot and health verdict and can record the result of an injected
-notification attempt. The existing CLI still owns its alert and cleanup, so
-the report explicitly marks service-level notification as not attempted.
-Unify alert ownership and configuration, complete the service lifecycle,
-then implement T3 writer exclusion before introducing any Dagster writer.
+snapshot and health verdict and records the result of an injected notification
+attempt. Both CLI poll paths now supply their existing alert sender to that
+service; pre-service startup failures retain the CLI alert path. The CLI still
+owns network and warehouse cleanup. Complete configuration and lifecycle
+handling, then implement T3 writer exclusion before introducing any Dagster
+writer.
 
 ## T1 runtime verification
 

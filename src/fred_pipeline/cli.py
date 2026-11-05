@@ -876,6 +876,23 @@ def _cmd_run(args: argparse.Namespace) -> int:
                 ),
             }
         else:
+            alert_attempted = False
+            alert_result = None
+
+            def notify_poll(results, _status, error):
+                nonlocal alert_attempted, alert_result
+                alert_attempted = True
+                alert_result = _send_ecb_assets_health_alert(
+                    config,
+                    warehouse,
+                    action="poll",
+                    results=results,
+                    error=error,
+                    http_client=getattr(pipeline, "_alert_sessions", None),
+                    smtp_routes=getattr(pipeline, "_smtp_routes", None),
+                )
+                return alert_result
+
             try:
                 if config.network.mode == "env":
                     releases = _poll_ecb_assets_for_run(
@@ -883,6 +900,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
                         warehouse,
                         selected_backend=selected_backend,
                         authoritative_backend=warehouse_config.ecb_assets_authoritative_backend,
+                        notify=notify_poll,
                     )
                 else:
                     if pipeline._ecb_sessions is None:
@@ -895,32 +913,21 @@ def _cmd_run(args: argparse.Namespace) -> int:
                         session=pipeline._ecb_sessions,
                         selected_backend=selected_backend,
                         authoritative_backend=warehouse_config.ecb_assets_authoritative_backend,
+                        notify=notify_poll,
                     )
                 ecb_assets_result = {
                     "status": "succeeded",
                     "releases": releases,
                 }
-                alert_result = _send_ecb_assets_health_alert(
-                    config,
-                    warehouse,
-                    action="poll",
-                    results=releases,
-                    http_client=getattr(pipeline, "_alert_sessions", None),
-                    smtp_routes=getattr(pipeline, "_smtp_routes", None),
-                )
+                if not alert_attempted:
+                    notify_poll(releases, {}, "")
             except Exception as exc:  # noqa: BLE001 - reflected in run exit/status
                 ecb_assets_result = {
                     "status": "failed",
                     "error": str(exc),
                 }
-                alert_result = _send_ecb_assets_health_alert(
-                    config,
-                    warehouse,
-                    action="poll",
-                    error=str(exc),
-                    http_client=getattr(pipeline, "_alert_sessions", None),
-                    smtp_routes=getattr(pipeline, "_smtp_routes", None),
-                )
+                if not alert_attempted:
+                    notify_poll([], {}, str(exc))
             from fred_pipeline.governance.email_delivery import DeliveryResult
 
             if isinstance(alert_result, DeliveryResult):
@@ -966,6 +973,7 @@ def _poll_ecb_assets_for_run(
     selected_backend: str,
     authoritative_backend: str,
     session: Any = None,
+    notify: Any = None,
 ) -> list[dict]:
     """Poll signed MID releases after the observation pipeline has persisted."""
     from fred_pipeline.ecb_execution import execute_ecb_poll
@@ -976,6 +984,7 @@ def _poll_ecb_assets_for_run(
         selected_backend=selected_backend,
         authoritative_backend=authoritative_backend,
         session=session,
+        notify=notify,
     )
     return list(report.releases)
 
@@ -1446,6 +1455,21 @@ def _cmd_ecb_assets(args: argparse.Namespace) -> int:
     network_stack = ExitStack()
     alert_session = None
     smtp_routes = None
+    poll_alert_attempted = False
+
+    def notify_poll(results, _status, error):
+        nonlocal poll_alert_attempted
+        poll_alert_attempted = True
+        return _send_ecb_assets_health_alert(
+            config,
+            warehouse,
+            action="poll",
+            results=results,
+            error=error,
+            http_client=alert_session,
+            smtp_routes=smtp_routes,
+        )
+
     try:
         session = None
         if args.action in {"poll", "ingest-release", "verify"}:
@@ -1494,6 +1518,7 @@ def _cmd_ecb_assets(args: argparse.Namespace) -> int:
                 authoritative_backend=authoritative_backend,
                 allow_gap=args.allow_gap,
                 client=client,
+                notify=notify_poll,
             )
             result: object = list(report.releases)
         elif args.action == "ingest-release":
@@ -1520,7 +1545,9 @@ def _cmd_ecb_assets(args: argparse.Namespace) -> int:
         else:
             result = repository.status()
         print(json.dumps(result, default=str, indent=2))
-        if args.action in {"poll", "ingest-release", "verify"}:
+        if args.action in {"poll", "ingest-release", "verify"} and not (
+            args.action == "poll" and poll_alert_attempted
+        ):
             if isinstance(result, list):
                 alert_rows: list[dict[str, Any]] = [
                     row for row in result if isinstance(row, dict)
@@ -1539,7 +1566,9 @@ def _cmd_ecb_assets(args: argparse.Namespace) -> int:
             )
         return 0
     except Exception as exc:  # noqa: BLE001 - CLI reports source/quarantine errors
-        if args.action in {"poll", "ingest-release", "verify"}:
+        if args.action in {"poll", "ingest-release", "verify"} and not (
+            args.action == "poll" and poll_alert_attempted
+        ):
             _send_ecb_assets_health_alert(
                 config,
                 warehouse,

@@ -143,6 +143,78 @@ def test_standalone_poll_selects_once_and_fetches_signed_artifacts(
         )
 
 
+def test_poll_sends_one_alert_from_the_shared_service(
+    tmp_path, monkeypatch, capsys, observations_payload
+):
+    import fred_pipeline.ecb_execution as execution
+
+    config = _config(tmp_path, monkeypatch)
+    _install_fixture_transport(monkeypatch, observations_payload)
+    alerts = []
+    monkeypatch.setattr(
+        cli, "_send_ecb_assets_health_alert", lambda *_a, **kw: alerts.append(kw)
+    )
+    original = execution.execute_ecb_poll
+
+    def checked(*args, **kwargs):
+        report = original(*args, **kwargs)
+        assert len(alerts) == 1
+        assert alerts[0]["results"][0]["status"] == "accepted"
+        return report
+
+    monkeypatch.setattr(execution, "execute_ecb_poll", checked)
+    assert (
+        cli.main(
+            [
+                "ecb-assets",
+                "poll",
+                "--local",
+                "--db-path",
+                str(tmp_path / "ecb.db"),
+                "--config",
+                str(config),
+            ]
+        )
+        == 0
+    )
+    capsys.readouterr()
+    assert len(alerts) == 1
+
+
+def test_poll_failure_sends_one_alert_from_the_shared_service(
+    tmp_path, monkeypatch, capsys, observations_payload
+):
+    config = _config(tmp_path, monkeypatch)
+    _install_fixture_transport(
+        monkeypatch,
+        observations_payload,
+        verifier=lambda *_: SignatureResult(
+            False, "digest_mismatch", detail="tampered"
+        ),
+    )
+    alerts = []
+    monkeypatch.setattr(
+        cli, "_send_ecb_assets_health_alert", lambda *_a, **kw: alerts.append(kw)
+    )
+    assert (
+        cli.main(
+            [
+                "ecb-assets",
+                "poll",
+                "--local",
+                "--db-path",
+                str(tmp_path / "ecb.db"),
+                "--config",
+                str(config),
+            ]
+        )
+        == 1
+    )
+    assert "signature failed" in capsys.readouterr().err
+    assert len(alerts) == 1
+    assert "signature failed" in alerts[0]["error"]
+
+
 def test_main_run_selects_ecb_route_before_metadata_and_reuses_it_for_hook(
     tmp_path, monkeypatch, capsys, observations_payload
 ):
@@ -191,6 +263,49 @@ def test_main_run_selects_ecb_route_before_metadata_and_reuses_it_for_hook(
             ).fetchone()[0]
             == 2
         )
+
+
+def test_main_poll_sends_one_alert_from_the_shared_service(
+    tmp_path, monkeypatch, capsys, observations_payload
+):
+    import fred_pipeline.ecb_execution as execution
+
+    config = _config(tmp_path, monkeypatch)
+    monkeypatch.setenv("FRED_API_KEY", "key")
+    _install_fixture_transport(monkeypatch, observations_payload)
+    alerts = []
+    monkeypatch.setattr(
+        cli, "_send_ecb_assets_health_alert", lambda *_a, **kw: alerts.append(kw)
+    )
+    original = execution.execute_ecb_poll
+
+    def checked(*args, **kwargs):
+        report = original(*args, **kwargs)
+        assert len(alerts) == 1
+        assert alerts[0]["results"][0]["status"] == "accepted"
+        return report
+
+    monkeypatch.setattr(execution, "execute_ecb_poll", checked)
+    assert (
+        cli.main(
+            [
+                "run",
+                "--local",
+                "--db-path",
+                str(tmp_path / "run.db"),
+                "--config",
+                str(config),
+                "--manifests",
+                "manifests/rates.yml",
+                "--series",
+                "DGS10",
+                "--no-gold",
+            ]
+        )
+        == 0
+    )
+    capsys.readouterr()
+    assert len(alerts) == 1
 
 
 def test_standalone_preflight_failure_sends_alert_and_downloads_nothing(
