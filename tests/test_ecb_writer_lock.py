@@ -136,6 +136,34 @@ def test_cleanup_failure_closes_writing_session(connections):
         assert successor.acquired
 
 
+def test_existing_warehouse_can_open_without_initialization_writes(pg_dsn, monkeypatch):
+    psycopg = pytest.importorskip("psycopg")
+    from fred_pipeline.config import PipelineConfig
+    from fred_pipeline.io.postgres_store import PostgresWarehouse
+
+    original_connect = PostgresWarehouse._connect
+
+    def read_only_connect(warehouse, dsn):
+        connection = original_connect(warehouse, dsn)
+        connection.read_only = True
+        return connection
+
+    monkeypatch.setattr(PostgresWarehouse, "_connect", read_only_connect)
+    warehouse = PostgresWarehouse(
+        PipelineConfig.resolve(config_file="/nonexistent"),
+        dsn=pg_dsn,
+        initialize=False,
+    )
+    try:
+        assert (
+            warehouse._pg_conn.info.transaction_status
+            == psycopg.pq.TransactionStatus.IDLE
+        )
+        assert warehouse.conn.execute("SELECT 1 AS value").fetchone()["value"] == 1
+    finally:
+        warehouse.close()
+
+
 def test_lock_released_by_process_death(pg_dsn):
     from fred_pipeline.ecb_writer_lock import ECBWriterLock
 

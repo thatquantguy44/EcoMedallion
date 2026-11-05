@@ -36,10 +36,12 @@ verify T3 writer exclusion before introducing any Dagster writer.
 Independent sessions in a disposable PostgreSQL 16 container verified
 contention, commit survival, exception and aborted-transaction cleanup,
 cleanup failure, and process-death release. It does not yet protect any
-production path. PostgreSQL warehouse construction currently executes schema
-DDL and a data backfill on every initialization, before the caller can take a
-lock; simply wrapping the poll after construction is therefore insufficient.
-Resolve that initialization boundary and cover standalone polling, explicit
+production path. PostgreSQL warehouse construction normally executes schema
+DDL and a data backfill before the caller can take a lock; simply wrapping the
+poll after construction is therefore insufficient. The new `initialize=False`
+option opens a connection without those writes, verified using a read-only
+transaction. It does not validate an existing schema or make later writes
+read-only. Resolve schema readiness and cover standalone polling, explicit
 ingestion, the main-run hook and live archive promotion before enabling the
 Dagster writer. See the [PostgreSQL advisory-lock documentation](https://www.postgresql.org/docs/16/explicit-locking.html#ADVISORY-LOCKS)
 for session lock semantics.
