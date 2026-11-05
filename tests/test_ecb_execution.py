@@ -257,3 +257,42 @@ def test_failure_report_does_not_include_source_exception_text():
             client=BrokenClient(),
         )
     assert "private-token-in-source-error" not in repr(failure.value.report)
+
+
+def test_shared_health_uses_the_configured_alert_thresholds(tmp_path, monkeypatch):
+    from fred_pipeline.ecb_execution import execute_ecb_poll
+    from fred_pipeline.governance import alerting_config, ecb_alerting
+    from fred_pipeline.governance.alerting_config import (
+        AlertingConfig,
+        ECBAssetsAlertConfig,
+    )
+
+    settings = ECBAssetsAlertConfig(grace_period_minutes=42)
+    monkeypatch.setattr(
+        alerting_config,
+        "load_alerting_config",
+        lambda: AlertingConfig(ecb_assets=settings),
+    )
+    assessments = []
+    original = ecb_alerting.assess_ecb_assets
+
+    def assess(**kwargs):
+        assessments.append(kwargs["settings"])
+        return original(**kwargs)
+
+    monkeypatch.setattr(ecb_alerting, "assess_ecb_assets", assess)
+    config = PipelineConfig.resolve(config_file="/nonexistent", rate_limit_per_minute=0)
+    warehouse = LocalWarehouse(config, db_path=str(tmp_path / "ecb.db"))
+    client, _, _ = _fixture_client()
+    client.rss = b"<rss><channel/></rss>"
+    try:
+        execute_ecb_poll(
+            config,
+            warehouse=warehouse,
+            selected_backend="local",
+            authoritative_backend="local",
+            client=client,
+        )
+        assert assessments == [settings]
+    finally:
+        warehouse.close()

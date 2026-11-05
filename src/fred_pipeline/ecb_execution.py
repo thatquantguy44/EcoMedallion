@@ -60,9 +60,8 @@ def execute_ecb_poll(
 ) -> ECBPollReport:
     """Poll a borrowed warehouse and optionally notify with the raw health inputs.
 
-    Inject the configured ECB alert settings when reporting health. Without a
-    notifier, the report records that delivery was not attempted; callers that
-    still own alerting must not treat that as a delivery decision.
+    Health uses the configured ECB alert settings unless explicitly injected.
+    Without a notifier, the report records that delivery was not attempted.
     """
     if authoritative_backend == "disabled":
         raise ECBAuthorityError("ECB eligible-assets writes are disabled")
@@ -107,6 +106,10 @@ def execute_ecb_poll(
     health_error = str(error) if error is not None else ""
     health_verdict = "unknown"
     try:
+        if health_settings is None:
+            from fred_pipeline.governance.alerting_config import load_alerting_config
+
+            health_settings = load_alerting_config().ecb_assets
         status = ECBEligibleAssetRepository(warehouse).status()
         health_verdict = assess_ecb_assets(
             action="poll",
