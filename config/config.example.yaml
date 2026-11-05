@@ -31,13 +31,13 @@ default:
   max_retries: 5
   rate_limit_per_minute: 120
 
-  # --- Optional managed source networking (main pipeline only) ---
+  # --- Optional managed source networking ---
   # env preserves the existing Requests/environment behavior and does not probe.
   # direct / proxy are strict; auto probes the preferred route, then the other
   # on connectivity failure, and keeps the selected route for this run.
-  # Covers main-pipeline source clients, the FRED release calendar and FOMC.
-  # The separate ECB eligible-assets hook, email and webhooks retain their
-  # existing routing.
+  # Covers main-pipeline sources, the FRED release calendar, FOMC, the ECB
+  # eligible-assets hook and standalone ecb-assets poll. Other ECB commands,
+  # email and webhooks retain their existing routing.
   network:
     mode: env                  # FRED_NETWORK_MODE: env | direct | proxy | auto
     preference: proxy_first    # FRED_NETWORK_PREFERENCE: proxy_first | direct_first

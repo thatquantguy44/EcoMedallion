@@ -169,11 +169,15 @@ Selection occurs before manifest metadata writes and cadence planning, so it
 can probe a source even when all of its selected series are later skipped as not due.
 
 Managed routing covers the main pipeline's built-in data sources, its FRED
-release calendar and the optional FOMC refresh. ETF holdings destinations are
+release calendar, optional FOMC refresh, ECB eligible-assets hook, and the
+standalone `ecb-assets poll` command. ETF holdings destinations are
 selected per requested fund. A redirect to an origin that was not selected at
 startup fails explicitly. Caller-injected clients own their own networking.
-The standalone ECB eligible-assets hook and commands, discovery/reconciliation
-commands, Graph, SMTP, and webhooks retain their independent routing. See the
+Managed ECB polling requires release and attachment URLs to match the configured
+`ECB_MID_BASE_URL` origin. If its startup probe fails in a main run, observation
+processing continues and the ECB hook reports failure; a standalone poll fails
+before downloading. Other ECB commands, discovery/reconciliation commands,
+Graph, SMTP, and webhooks retain their independent routing. See the
 [network spec](specs/spec016/SPEC-outbound-network.md) for the remaining scope.
 
 CLI `run` refreshes the FOMC calendar before Gold by default. Use

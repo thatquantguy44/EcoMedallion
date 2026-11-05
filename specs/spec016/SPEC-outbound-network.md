@@ -1,11 +1,11 @@
 # Module: outbound-network
 
-Status: Main-pipeline source and FOMC routing implemented; broader module draft.
+Status: Main-pipeline source, FOMC and ECB polling routing implemented; broader module draft.
 Parent: [Spec 016](README.md).
 
 Managed startup selection covers all built-in main-pipeline source clients,
-the FRED release calendar and FOMC refresh. The separate ECB eligible-assets
-hook, Graph, SMTP and webhooks are not yet covered; cross-consumer acceptance
+the FRED release calendar, FOMC refresh, ECB eligible-assets hook and standalone
+`ecb-assets poll`. Other ECB actions, Graph, SMTP and webhooks are not yet covered; cross-consumer acceptance
 criteria remain open until those paths are wired and verified. The diagnostic
 command and preflight-stage alert are also future work.
 
@@ -140,6 +140,10 @@ preflight. A contender must retain Spec 013's prompt, source-call-free busy
 behavior. Read-only health jobs have no source preflight unless they send an
 enabled notification. Include an invoked ECB hook's known destinations in the
 parent run plan so it cannot add a second fallback loop later in the invocation.
+The current CLI polling slice has no new authoritative writer lock; that
+ordering remains a prerequisite for the planned Dagster live-writer work.
+Managed MID polling confines feed, release and attachment requests to the
+configured MID origin, even if another origin is registered for the main run.
 
 Automatic fallback applies only to connectivity failures: connection refused,
 unreachable route, DNS failure and connection/read timeout during a safe probe.

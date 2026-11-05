@@ -1,6 +1,6 @@
 # Spec 016: Dagster, configurable email, and outbound network selection
 
-Status: **Main-pipeline source routing and CLI FOMC refresh implemented; remaining scope is draft.**
+Status: **Main-pipeline and ECB polling routing and CLI FOMC refresh implemented; remaining scope is draft.**
 
 Date: 2026-11-04
 
@@ -22,9 +22,9 @@ those choices throughout that pipeline invocation. Avoid trying both routes on
 every source request.
 
 The implemented slices cover managed startup route selection for the main
-pipeline's source clients and FOMC refresh, and default-on CLI FOMC refresh.
-The separate ECB eligible-assets hook, other outbound consumers, email
-additions and Dagster jobs remain subsequent work.
+pipeline's source clients, FOMC refresh, and ECB eligible-assets polling in the
+main hook and standalone poll, plus default-on CLI FOMC refresh. Other outbound
+consumers, email additions and Dagster jobs remain subsequent work.
 
 ## Capability map
 
@@ -101,9 +101,9 @@ Existing offline characterization commands (use the project's environment):
 git diff --check
 ```
 
-Module specs define additional commands to implement and their acceptance
-tests. Proposed commands, files and dependency extras do not exist yet.
-No current command should be advertised as supporting the new settings.
+Module specs define additional commands and acceptance tests for the remaining
+work. The current managed-network coverage is described above; the proposed
+diagnostics, email additions and Dagster runtime remain unimplemented.
 
 ### Draft verification record
 
@@ -142,6 +142,15 @@ the same four baseline failures** documented above. After simplifying the
 internal run-session lifecycle, 142 affected tests passed. Tests include mixed
 actual local direct/proxy connections and a managed FOMC refresh with injected
 Fed content; no live Fed fetch or production data operation was performed.
+
+The ECB polling slice extends the selected route to the main-run ECB hook and
+standalone poll, with a separate same-origin session boundary for MID links.
+The affected networking, ECB, CLI and pipeline tests passed, including local
+direct/proxy connections, signature-failure quarantine and ECB preflight
+failure isolation. No live ECB request or production data write was performed.
+The authoritative writer lock remains planned and was not added by this slice.
+The full project-environment suite again reported the same four baseline
+failures described above, with no new failures.
 
 ## Conventions and boundaries
 

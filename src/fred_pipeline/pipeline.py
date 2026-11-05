@@ -494,6 +494,7 @@ class FredPipeline:
             self._clients.setdefault("fred", client)
         self._provided_sources = set(self._clients)
         self._run_sessions: RunSessions | None = None
+        self._ecb_sessions: RunSessions | None = None
         self._network_active = False
         self._notify_transport = notify_transport
         # Injectable so tests never touch a mailbox; None means the
@@ -546,6 +547,7 @@ class FredPipeline:
         *,
         include_calendar: bool = False,
         refresh_fomc: bool = False,
+        include_ecb: bool = False,
     ):
         if self._network_active or self.config.network.mode == "env":
             yield
@@ -620,6 +622,14 @@ class FredPipeline:
                 FOMC_CALENDAR_URL, "FOMC", {"User-Agent": DEFAULT_USER_AGENT}, False
             )
 
+        if include_ecb:
+            register(
+                f"{self.config.ecb_mid_base_url.rstrip('/')}/rss/mid.xml",
+                "ECB MID",
+                {"Accept": "application/xml, application/rss+xml, */*"},
+                False,
+            )
+
         network_environment = dict(os.environ)
 
         def choose(target):
@@ -664,6 +674,12 @@ class FredPipeline:
             client._session = sessions
             self._clients[source] = client
         self._run_sessions = sessions
+        ecb_route = (
+            routes.get(_origin(self.config.ecb_mid_base_url)) if include_ecb else None
+        )
+        # Restrict MID to its configured origin even when other origins are in
+        # the shared plan: RSS links must not borrow another source's route.
+        self._ecb_sessions = RunSessions(ecb_route) if ecb_route else None
         self._network_active = True
         try:
             yield
@@ -671,8 +687,14 @@ class FredPipeline:
             for source in owned:
                 self._clients.pop(source, None)
             self._run_sessions = None
+            ecb_sessions = self._ecb_sessions
+            self._ecb_sessions = None
             self._network_active = False
-            sessions.close()
+            try:
+                if ecb_sessions is not None:
+                    ecb_sessions.close()
+            finally:
+                sessions.close()
 
     def _client_for(self, spec: SeriesSpec) -> SourceClient:
         return self._client_for_source(getattr(spec, "source", "fred") or "fred")

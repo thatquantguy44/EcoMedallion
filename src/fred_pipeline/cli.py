@@ -33,6 +33,7 @@ import datetime as _dt
 import json
 import logging
 import sys
+from contextlib import ExitStack
 from pathlib import Path
 from typing import Any
 
@@ -801,7 +802,27 @@ def _cmd_run(args: argparse.Namespace) -> int:
         config, spark=spark, warehouse=warehouse, persist_audit=persist
     )
     ecb_assets_result: dict[str, object]
+    network_stack = ExitStack()
     try:
+        if config.network.mode != "env":
+            include_ecb = (
+                not args.dry_run
+                and getattr(args, "ecb_assets", True)
+                and warehouse_config is not None
+                and warehouse_config.ecb_assets_authoritative_backend != "disabled"
+                and selected_backend
+                == warehouse_config.ecb_assets_authoritative_backend
+                and hasattr(warehouse, "conn")
+                and hasattr(warehouse, "_insert")
+            )
+            network_stack.enter_context(
+                pipeline._run_network(
+                    active,
+                    include_calendar=not args.dry_run and not args.no_gold,
+                    refresh_fomc=args.refresh_fomc_calendar,
+                    include_ecb=include_ecb,
+                )
+            )
         run = pipeline.run_from_manifest(
             args.manifests,
             triggered_by="cli-local" if args.local else "cli",
@@ -854,7 +875,16 @@ def _cmd_run(args: argparse.Namespace) -> int:
             }
         else:
             try:
-                releases = _poll_ecb_assets_for_run(config, warehouse)
+                if config.network.mode == "env":
+                    releases = _poll_ecb_assets_for_run(config, warehouse)
+                else:
+                    if pipeline._ecb_sessions is None:
+                        raise NetworkPreflightError(
+                            "ECB MID route was unavailable at startup"
+                        )
+                    releases = _poll_ecb_assets_for_run(
+                        config, warehouse, session=pipeline._ecb_sessions
+                    )
                 ecb_assets_result = {
                     "status": "succeeded",
                     "releases": releases,
@@ -880,8 +910,11 @@ def _cmd_run(args: argparse.Namespace) -> int:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 1
     finally:
-        if warehouse is not None:
-            warehouse.close()
+        try:
+            network_stack.close()
+        finally:
+            if warehouse is not None:
+                warehouse.close()
 
     output = run.to_row()
     output["ecb_assets"] = ecb_assets_result
@@ -898,7 +931,9 @@ def _cmd_run(args: argparse.Namespace) -> int:
     return 0 if pipeline_succeeded and ecb_succeeded else 1
 
 
-def _poll_ecb_assets_for_run(config: PipelineConfig, warehouse) -> list[dict]:
+def _poll_ecb_assets_for_run(
+    config: PipelineConfig, warehouse, *, session: Any = None
+) -> list[dict]:
     """Poll signed MID releases after the observation pipeline has persisted."""
     from fred_pipeline.ecb_eligible_assets import (
         ECBEligibleAssetsPipeline,
@@ -912,6 +947,7 @@ def _poll_ecb_assets_for_run(config: PipelineConfig, warehouse) -> list[dict]:
         timeout=config.request_timeout_seconds,
         max_retries=config.max_retries,
         rate_limit_per_minute=min(config.rate_limit_per_minute, 60),
+        session=session,
     )
     pipeline = ECBEligibleAssetsPipeline(warehouse, client=client)
     return [result.to_dict() for result in pipeline.poll()]
@@ -1359,15 +1395,29 @@ def _cmd_ecb_assets(args: argparse.Namespace) -> int:
         finally:
             warehouse.close()
 
-    client = ECBMIDClient(
-        base_url=config.ecb_mid_base_url,
-        timeout=config.request_timeout_seconds,
-        max_retries=config.max_retries,
-        rate_limit_per_minute=min(config.rate_limit_per_minute, 60),
-    )
-    pipeline = ECBEligibleAssetsPipeline(warehouse, client=client)
-    repository = ECBEligibleAssetRepository(warehouse)
+    network_stack = ExitStack()
     try:
+        session = None
+        if args.action == "poll" and config.network.mode != "env":
+            from fred_pipeline.network import RunSessions, select_route
+
+            route = select_route(
+                config.network,
+                f"{config.ecb_mid_base_url.rstrip('/')}/rss/mid.xml",
+                label="ECB MID",
+                headers={"Accept": "application/xml, application/rss+xml, */*"},
+            )
+            session = RunSessions(route)
+            network_stack.callback(session.close)
+        client = ECBMIDClient(
+            base_url=config.ecb_mid_base_url,
+            timeout=config.request_timeout_seconds,
+            max_retries=config.max_retries,
+            rate_limit_per_minute=min(config.rate_limit_per_minute, 60),
+            session=session,
+        )
+        pipeline = ECBEligibleAssetsPipeline(warehouse, client=client)
+        repository = ECBEligibleAssetRepository(warehouse)
         if args.action == "poll":
             result: object = [
                 row.to_dict() for row in pipeline.poll(allow_gap=args.allow_gap)
@@ -1423,7 +1473,10 @@ def _cmd_ecb_assets(args: argparse.Namespace) -> int:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 1
     finally:
-        warehouse.close()
+        try:
+            network_stack.close()
+        finally:
+            warehouse.close()
 
 
 def build_parser() -> argparse.ArgumentParser:
