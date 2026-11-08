@@ -24,3 +24,10 @@ repository's instructions take precedence over vendored guidance.
 Do not edit vendored files from the parent repository. Pin upgrades by moving
 the submodule commit in a dedicated reviewed change, following
 `docs/development/agent_library.md`.
+
+## Portable documentation
+
+Keep documentation and examples independent of any maintainer's GitHub
+account or workstation. Use repository-relative links for project files and
+generic placeholders for repository owners, addresses, and local paths.
+Keep genuine third-party source links and attribution when relevant.
