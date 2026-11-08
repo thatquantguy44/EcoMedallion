@@ -193,14 +193,23 @@ class PostgresWarehouse:
     supports_incremental_audit = True
     _bounded_gold_memory = True
 
-    def __init__(self, config: PipelineConfig, **kwargs: Any):
+    def __init__(
+        self, config: PipelineConfig, *, initialize: bool = True, **kwargs: Any
+    ):
+        """Connect, optionally deferring schema setup to a separately guarded step.
+
+        ``initialize=False`` performs no schema validation or migration and
+        does not make subsequent operations read-only. Callers must ensure the
+        destination has been initialized before using its relations.
+        """
         self.config = config
         self.settings = resolve_postgres_settings(kwargs)
         self._pg_conn = self._connect(self.settings.dsn)
         self.conn = _PostgresConnAdapter(self)
         self._defer_commits = False
         try:
-            self._bootstrap_schema()
+            if initialize:
+                self._bootstrap_schema()
         except BaseException:
             # A half-constructed warehouse is never returned to anyone to close.
             self._pg_conn.close()

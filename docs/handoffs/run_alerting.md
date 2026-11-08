@@ -70,6 +70,123 @@ weekends and closing days are excluded from freshness expectations. A late,
 gapped, or unusually large release is `partial`; a failed/quarantined release,
 invalid signature, or missing accepted baseline is `failure`.
 
+### 2.1.1 Named delivery profiles and SMTP security
+
+As an alternative to the legacy root sender and `transport`, configure
+`default_profile` and `profiles`. Each profile contains its own
+`from_address`, optional `from_name`, and `transport`. A route may specify a
+`profile`; otherwise it uses the default. Run and ECB alerts use the same
+selection. Do not mix profile settings with root sender or transport fields.
+
+```yaml
+enabled: true
+policy: failure
+default_profile: relay
+profiles:
+  relay:
+    from_address: pipeline@example.com
+    transport:
+      kind: smtp
+      host: smtp.example.com
+      port: 465
+      tls: implicit_tls
+      auth: password
+      username: pipeline@example.com
+      password_env: FRED_SMTP_PASSWORD
+routes:
+  failure:
+    to: [data-oncall@example.com]
+```
+
+Generic SMTP supports `tls: starttls`, `implicit_tls` or `none`, and
+`auth: password`, `oauth2`, or `none`. Password authentication requires TLS and an
+environment-variable reference; `tls: none` is only for unauthenticated
+relays. TLS verifies server certificates. Legacy `use_starttls` remains
+supported but cannot be combined with `tls`; legacy password configurations
+using cleartext must migrate to TLS. SMTP partial-recipient refusals are
+reported as failures. Microsoft Graph delivery includes configured JSON attachments.
+Graph messages without BCC use MIME with both plain-text and HTML alternatives.
+When BCC is present, Graph uses its structured `bccRecipients` field and the
+HTML body; the separate plain-text alternative remains unavailable for that
+case. This preserves existing BCC routing without assuming the raw MIME API
+will deliver and hide a `Bcc` header. Attachments are included in either path.
+For both, a Graph `202` confirms acceptance for processing, not receipt. Verify
+delivery and recipient privacy in the target environment before activation.
+Use controlled sender, visible-recipient and BCC-recipient mailboxes. For a
+message without BCC, inspect the received raw message for both MIME alternatives
+and each attachment. For a separate message using a test-only BCC route, confirm
+both mailboxes receive it and inspect the visible recipient's raw headers for
+the absence of BCC addresses. Record the result without publishing message
+content, recipient addresses or tokens.
+
+SMTP can optionally select a route using its own `transport.network` block:
+`mode: direct`, `proxy`, or `auto`; `preference: proxy_first` or `direct_first`;
+`proxy_url_env` names the variable containing an `http://` CONNECT proxy URL;
+`no_proxy` lists bypass hosts, and `ca_bundle_env` names a trusted CA file.
+For example, add `network: {mode: auto, proxy_url_env: FRED_SMTP_PROXY}` under
+the SMTP transport. SMTP uses a direct connection when the block is omitted;
+it does not infer a mail proxy from `HTTPS_PROXY`. The startup check completes
+SMTP greeting, EHLO and TLS without authentication or message data. It reuses
+the chosen route for delivery, never switching routes after an attempted send.
+A proxy must permit CONNECT to the mail host and port.
+
+### 2.1.2 Personal Outlook.com and diagnostics
+
+The [example profiles](../../resources/alerting.profiles.yml.example) include
+both delegated Microsoft Graph and the `outlook_com_smtp` preset. Graph is the
+recommended personal-account option where SMTP ports are blocked; it uses
+`/me/sendMail` and the signed-in mailbox. The SMTP preset uses
+`smtp-mail.outlook.com:587`, STARTTLS and delegated XOAUTH2. The legacy
+`outlook_smtp` profile is Microsoft 365 password authentication; it is not
+personal-account OAuth. See Microsoft's [Graph sendMail documentation](https://learn.microsoft.com/en-us/graph/api/user-sendmail?view=graph-rest-1.0)
+and [SMTP OAuth guidance](https://learn.microsoft.com/en-us/exchange/client-developer/legacy-protocols/how-to-authenticate-an-imap-pop-smtp-application-by-using-oauth).
+
+1. Install the optional dependency with `pip install -e '.[email-oauth]'`.
+   The implementation was tested with MSAL 1.39.0.
+2. Register a public Microsoft application that permits the intended personal
+   account, with `http://localhost` as a mobile/desktop redirect. Grant
+   delegated `Mail.Send` for Graph or `SMTP.Send` for SMTP. Put the client ID
+   and sender in the selected profile. They must identify the mailbox used to
+   sign in; delegated send-as for another mailbox is not supported.
+3. Create an owned, private directory outside the repository (`chmod 700`),
+   and set the profile's cache-path environment variable to an absolute file
+   within it. Graph and SMTP need separate cache paths. The cache contains
+   credentials; exclude it from backups and artifacts. This cache storage is
+   supported on POSIX hosts with private directories and file locking.
+   Set `FRED_ALERTING_FILE` to the selected alerting YAML in the environment
+   used by the scheduled pipeline; otherwise it loads `config/alerting.yml`.
+4. Set `enabled: true` in the alerting config and run the explicit one-time
+   sign-in. Scheduled pipeline runs never open a browser:
+
+   ```bash
+   python -m fred_pipeline alerts auth --profile outlook-personal \
+     --alerting-file /path/to/alerting.yml --config config/config.yaml
+   ```
+
+   Revoked or expired consent may require running this command again.
+
+5. Check readiness and preview a test. The check verifies configuration,
+   credential references, cache metadata and connection reachability; it
+   does not send an email or prove mailbox permissions or receipt.
+
+   ```bash
+   python -m fred_pipeline alerts check --profile outlook-personal \
+     --alerting-file /path/to/alerting.yml --config config/config.yaml
+   python -m fred_pipeline alerts test --profile outlook-personal \
+     --alerting-file /path/to/alerting.yml --to operator@example.com
+   ```
+
+   Add `--send` to the second command only when ready to send a real test to
+   that explicit address. Provider acceptance is not proof of receipt; verify
+   the mailbox separately before enabling a production schedule.
+
+Managed pipeline HTTP modes preselect the Microsoft identity and Graph origins
+for enabled alert routes. In `env` mode Requests uses normal environment proxy
+handling. SMTP uses the separate settings above. Console and file delivery are
+previews. Structured results identify `disabled`, `suppressed`, `previewed`,
+`accepted`, `failed`, or `unknown`, with a correlation ID; an unknown outcome
+is not automatically replayed. Existing boolean alert helpers remain available.
+
 ### 2.2 Stages
 
 `EXPECTED_STAGES` declares the phases `run()` actually has:

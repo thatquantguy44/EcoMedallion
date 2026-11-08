@@ -64,7 +64,7 @@ EXPECTED_STAGES: tuple[StageSpec, ...] = (
     StageSpec(
         "fomc_calendar",
         "Check config/fomc.yml has enough runway for the FOMC Gold tables "
-        "(and, with --refresh-fomc-calendar, add newly published meetings)",
+        "(CLI runs refresh newly published meetings by default)",
         required=False,
     ),
     StageSpec("gold", "Rebuild the Gold analytical layer"),

@@ -1,9 +1,11 @@
 # FOMC Calendar Scraper — Spec & Plan
 
-**Status:** spec approved, implementation shipped alongside this document.
-**The scraper is built but nothing runs it** — see §10 and
-[`specs/spec008`](../../specs/spec008/README.md), which automates that gap.
+**Status:** implemented. CLI pipeline runs refresh before Gold by default;
+the separate scheduled proposal workflow is described in
+[`specs/spec008`](../../specs/spec008/README.md).
 **Owner:** pipeline / governance
+Last verified: 2026-11-04 (CLI default and managed refresh implementation;
+no live Fed call was made for this change).
 **Consumes:** <https://www.federalreserve.gov/monetarypolicy/fomccalendars.htm>
 **Produces:** the `meeting_dates` block of [`config/fomc.yml`](../../config/fomc.yml)
 **Code:** `src/fred_pipeline/catalogs/fomc_calendar.py` (pure parser +
@@ -422,10 +424,12 @@ Running from anywhere but the repo root therefore finds no file, and the
 message says so, naming the path it looked at and the cwd. Set
 `FRED_FOMC_CONFIG_FILE` to pin it.
 
-### The refresh: opt-in, can never stop a run
+### The refresh: on by default for CLI runs
 
 ```bash
-python -m fred_pipeline run --refresh-fomc-calendar
+python -m fred_pipeline run
+# Or keep only the offline health check:
+python -m fred_pipeline run --no-refresh-fomc-calendar
 ```
 
 Before the check, fetches the Fed page (plain HTTP, 15 s timeout, never
@@ -448,9 +452,10 @@ commit. On a deployment where the config is baked into an image or bundle, the
 edit lives only until the next deploy; there the scheduled workflow's PR is the
 durable path, and this flag is just a convenience.
 
-The cost, stated plainly: it puts `federalreserve.gov` in the run's path. The
-fallback means that costs a warning, not a failure, but it is a dependency the
-default run does not have, which is why it is off by default.
+The default CLI run contacts `federalreserve.gov` when it reaches the pre-Gold
+stage. A failure records a warning and falls back to the configured calendar;
+Gold still builds. The check/refresh stage is skipped when Gold is skipped,
+including dry runs. Library callers must request refresh explicitly.
 
 Verified against the live Fed page on a scratch copy of the config with its
 last two meetings removed: it restored both (2027-12-08, 2028-01-26). With the

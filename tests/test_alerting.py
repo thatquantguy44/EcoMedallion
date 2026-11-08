@@ -49,6 +49,7 @@ from fred_pipeline.governance.stages import (
 
 # ---- stage tracking ---------------------------------------------------------
 
+
 def test_stage_records_success_with_duration_and_detail():
     tracker = RunStageTracker()
     with tracker.stage("extract") as stage:
@@ -120,11 +121,14 @@ def test_optional_stage_failure_is_partial_not_failure():
     assert "release_calendar" in reason
 
 
-@pytest.mark.parametrize("failed,total,expected", [
-    (0, 100, "success"),
-    (3, 100, "partial"),
-    (100, 100, "failure"),
-])
+@pytest.mark.parametrize(
+    "failed,total,expected",
+    [
+        (0, 100, "success"),
+        (3, 100, "partial"),
+        (100, 100, "failure"),
+    ],
+)
 def test_series_counts_drive_the_verdict_when_stages_are_clean(failed, total, expected):
     tracker = RunStageTracker()
     for name in ("plan", "extract", "gold", "release_calendar", "persist"):
@@ -137,6 +141,7 @@ def test_series_counts_drive_the_verdict_when_stages_are_clean(failed, total, ex
 
 
 # ---- config -----------------------------------------------------------------
+
 
 def _write(tmp_path, text):
     path = tmp_path / "alerting.yml"
@@ -159,27 +164,33 @@ def test_repo_alerting_config_parses():
 
 def test_inline_secret_is_rejected(tmp_path):
     """config/alerting.yml is in git. A password in it is a leaked mailbox."""
-    path = _write(tmp_path, """
+    path = _write(
+        tmp_path,
+        """
 enabled: true
 from_address: a@b.com
 transport:
   kind: smtp
   host: smtp.example.com
   password: hunter2
-""")
+""",
+    )
     with pytest.raises(AlertingConfigError, match="inline secret"):
         load_alerting_config(path)
 
 
 def test_env_interpolation_is_rejected_rather_than_silently_ignored(tmp_path):
-    path = _write(tmp_path, """
+    path = _write(
+        tmp_path,
+        """
 enabled: true
 from_address: a@b.com
 transport:
   kind: smtp
   host: smtp.example.com
   username: "${SMTP_USER}"
-""")
+""",
+    )
     with pytest.raises(AlertingConfigError, match=r"\$\{"):
         load_alerting_config(path)
 
@@ -190,19 +201,24 @@ def test_malformed_recipient_is_rejected(tmp_path, address):
     covered -- worse than having no alerting at all."""
     # Quoted: "@example.com" is not a valid YAML token unquoted, and we want
     # the loader's validation to be what rejects it, not the YAML scanner.
-    path = _write(tmp_path, f"""
+    path = _write(
+        tmp_path,
+        f"""
 enabled: true
 from_address: a@b.com
 routes:
   failure:
     to: ["{address}"]
-""")
+""",
+    )
     with pytest.raises(AlertingConfigError, match="not a valid email"):
         load_alerting_config(path)
 
 
 def test_unknown_keys_are_rejected(tmp_path):
-    path = _write(tmp_path, "enabled: true\nfrom_address: a@b.com\nrecipients: x@y.com\n")
+    path = _write(
+        tmp_path, "enabled: true\nfrom_address: a@b.com\nrecipients: x@y.com\n"
+    )
     with pytest.raises(AlertingConfigError, match="unknown top-level key"):
         load_alerting_config(path)
 
@@ -214,13 +230,16 @@ def test_enabled_without_from_address_is_rejected(tmp_path):
 
 
 def test_transport_requires_its_own_fields(tmp_path):
-    path = _write(tmp_path, """
+    path = _write(
+        tmp_path,
+        """
 enabled: true
 from_address: a@b.com
 transport:
   kind: microsoft_graph
   tenant_id: t
-""")
+""",
+    )
     with pytest.raises(AlertingConfigError, match="microsoft_graph"):
         load_alerting_config(path)
 
@@ -234,16 +253,21 @@ def test_secret_is_read_from_the_environment_not_the_file(monkeypatch):
     assert transport.resolve_secret() == "s3cret"
 
 
-@pytest.mark.parametrize("policy,verdict,expected", [
-    ("never", "failure", False),
-    ("failure", "success", False),
-    ("failure", "failure", True),
-    ("failure", "partial", True),
-    ("always", "success", True),
-])
+@pytest.mark.parametrize(
+    "policy,verdict,expected",
+    [
+        ("never", "failure", False),
+        ("failure", "success", False),
+        ("failure", "failure", True),
+        ("failure", "partial", True),
+        ("always", "success", True),
+    ],
+)
 def test_policy_controls_sending(policy, verdict, expected):
     config = AlertingConfig(
-        enabled=True, policy=policy, from_address="a@b.com",
+        enabled=True,
+        policy=policy,
+        from_address="a@b.com",
         routes={"default": RouteConfig(to=("ops@example.com",))},
     )
     assert config.should_send(verdict) is expected
@@ -251,7 +275,9 @@ def test_policy_controls_sending(policy, verdict, expected):
 
 def test_environment_gate(tmp_path):
     config = AlertingConfig(
-        enabled=True, policy="always", from_address="a@b.com",
+        enabled=True,
+        policy="always",
+        from_address="a@b.com",
         environments=("prod",),
         routes={"default": RouteConfig(to=("ops@example.com",))},
     )
@@ -265,6 +291,7 @@ def test_no_recipients_means_no_send():
 
 
 # ---- rendering --------------------------------------------------------------
+
 
 def _summary(verdict="failure", reason="required stage(s) failed: gold"):
     tracker = RunStageTracker()
@@ -309,7 +336,10 @@ def test_html_escapes_error_text():
     with tracker.stage("gold", swallow=True):
         raise RuntimeError("<script>alert(1)</script>")
     summary = RunSummary(
-        run_id="r", environment="dev", verdict="failure", reason="boom",
+        run_id="r",
+        environment="dev",
+        verdict="failure",
+        reason="boom",
         stages=tracker.records(),
     )
     html_body = render_html(summary)
@@ -324,6 +354,7 @@ def test_html_uses_tables_and_inline_styles_for_outlook():
 
 
 # ---- transports -------------------------------------------------------------
+
 
 class _FakeSMTP:
     instances: list["_FakeSMTP"] = []
@@ -344,7 +375,8 @@ class _FakeSMTP:
     def ehlo(self):
         pass
 
-    def starttls(self):
+    def starttls(self, *, context=None):
+        assert context is not None and context.check_hostname
         self.started_tls = True
 
     def login(self, user, password):
@@ -357,10 +389,13 @@ class _FakeSMTP:
 def _message(**kw):
     defaults = dict(
         subject="[FRED][prod] FAILURE — gold",
-        text_body="text", html_body="<p>html</p>",
-        to=("ops@example.com",), cc=("lead@example.com",),
+        text_body="text",
+        html_body="<p>html</p>",
+        to=("ops@example.com",),
+        cc=("lead@example.com",),
         bcc=("audit@example.com",),
-        from_address="pipeline@example.com", from_name="FRED Pipeline",
+        from_address="pipeline@example.com",
+        from_name="FRED Pipeline",
     )
     defaults.update(kw)
     return EmailMessageSpec(**defaults)
@@ -372,8 +407,11 @@ def test_smtp_transport_uses_starttls_and_logs_in(monkeypatch):
     monkeypatch.setenv("PW", "secret")
     transport = SmtpEmailTransport(
         TransportConfig(
-            kind="outlook_smtp", host="smtp.office365.com", port=587,
-            username="pipeline@example.com", password_env="PW",
+            kind="outlook_smtp",
+            host="smtp.office365.com",
+            port=587,
+            username="pipeline@example.com",
+            password_env="PW",
         )
     )
     transport.send(_message())
@@ -414,17 +452,21 @@ def test_smtp_auth_failure_points_at_the_graph_transport(monkeypatch):
     monkeypatch.setattr(smtplib, "SMTP", _AuthFail)
     monkeypatch.setenv("PW", "x")
     transport = SmtpEmailTransport(
-        TransportConfig(kind="outlook_smtp", host="smtp.office365.com",
-                        username="u", password_env="PW")
+        TransportConfig(
+            kind="outlook_smtp",
+            host="smtp.office365.com",
+            username="u",
+            password_env="PW",
+        )
     )
     with pytest.raises(EmailSendError, match="microsoft_graph"):
         transport.send(_message())
 
 
 def test_file_transport_writes_both_parts(tmp_path):
-    FileEmailTransport(
-        TransportConfig(kind="file", output_dir=str(tmp_path))
-    ).send(_message())
+    FileEmailTransport(TransportConfig(kind="file", output_dir=str(tmp_path))).send(
+        _message()
+    )
     written = {p.suffix for p in tmp_path.iterdir()}
     assert written == {".html", ".txt"}
 
@@ -448,6 +490,7 @@ def test_redact_never_echoes_a_credential():
 
 
 # ---- end to end -------------------------------------------------------------
+
 
 class _CapturingTransport:
     def __init__(self):
@@ -482,7 +525,9 @@ def test_send_run_alert_reports_gold_failure_to_the_failure_route():
 
     transport = _CapturingTransport()
     config = AlertingConfig(
-        enabled=True, policy="failure", from_address="pipeline@example.com",
+        enabled=True,
+        policy="failure",
+        from_address="pipeline@example.com",
         routes={"failure": RouteConfig(to=("oncall@example.com",))},
     )
     sent = send_run_alert(
@@ -504,10 +549,14 @@ def test_send_run_alert_is_silent_on_a_clean_run_under_the_failure_policy():
             pass
     transport = _CapturingTransport()
     config = AlertingConfig(
-        enabled=True, policy="failure", from_address="a@b.com",
+        enabled=True,
+        policy="failure",
+        from_address="a@b.com",
         routes={"default": RouteConfig(to=("ops@example.com",))},
     )
-    assert send_run_alert(_FakeRun(), tracker, config=config, transport=transport) is False
+    assert (
+        send_run_alert(_FakeRun(), tracker, config=config, transport=transport) is False
+    )
     assert transport.sent == []
 
 
@@ -520,11 +569,15 @@ def test_a_transport_failure_never_fails_the_run():
     with tracker.stage("gold", swallow=True):
         raise RuntimeError("boom")
     config = AlertingConfig(
-        enabled=True, policy="always", from_address="a@b.com",
+        enabled=True,
+        policy="always",
+        from_address="a@b.com",
         routes={"default": RouteConfig(to=("ops@example.com",))},
     )
     # returns False rather than raising
-    assert send_run_alert(_FakeRun(), tracker, config=config, transport=_Broken()) is False
+    assert (
+        send_run_alert(_FakeRun(), tracker, config=config, transport=_Broken()) is False
+    )
 
 
 def test_attach_run_json_carries_the_stage_detail():
@@ -532,12 +585,17 @@ def test_attach_run_json_carries_the_stage_detail():
     with tracker.stage("extract") as stage:
         stage.detail["series_succeeded"] = 10
     config = AlertingConfig(
-        enabled=True, policy="always", from_address="a@b.com",
+        enabled=True,
+        policy="always",
+        from_address="a@b.com",
         attach_run_json=True,
         routes={"default": RouteConfig(to=("ops@example.com",))},
     )
     summary = RunSummary(
-        run_id="r1", environment="dev", verdict="success", reason="ok",
+        run_id="r1",
+        environment="dev",
+        verdict="success",
+        reason="ok",
         stages=tracker.records(),
     )
     message = build_message(summary, config)
@@ -548,6 +606,7 @@ def test_attach_run_json_carries_the_stage_detail():
 
 
 # ---- wired into the real pipeline ------------------------------------------
+
 
 def test_pipeline_run_reports_failure_when_gold_breaks_but_series_succeed(
     tmp_path, observations_payload, fake_client_cls
@@ -579,7 +638,9 @@ def test_pipeline_run_reports_failure_when_gold_breaks_but_series_succeed(
         alert_transport=transport,
     )
     alerting = AlertingConfig(
-        enabled=True, policy="failure", from_address="pipeline@example.com",
+        enabled=True,
+        policy="failure",
+        from_address="pipeline@example.com",
         routes={"failure": RouteConfig(to=("oncall@example.com",))},
     )
     import fred_pipeline.governance.alerting as alerting_mod

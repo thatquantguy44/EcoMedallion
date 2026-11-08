@@ -1,12 +1,11 @@
 # Spec 013: Dagster Orchestration
 
-Status: **Draft for review; specification only. No Dagster dependencies,
-definitions, services, or schedules have been installed or activated.**
+Status: **Optional runtime dependencies verified; definitions, shared services,
+writer exclusion and schedules remain unimplemented.**
 
 Date: 2026-10-25
 
-Renumbered from Spec 012 to preserve main's Series Geography specification.
-The existing branch name `spec012-dagster-orchestration` is intentionally unchanged.
+Renumbered from Spec 012 to preserve the Series Geography specification.
 
 Review status: Pending user review
 
@@ -19,14 +18,10 @@ Task checklist: [tasks/todo.md](../../tasks/todo.md)
 
 Pickup point: [Dagster handoff](../../docs/handoffs/dagster_orchestration.md)
 
-**Continue implementation on the existing branch `spec012-dagster-orchestration`**,
-tracking `origin/spec012-dagster-orchestration`.
-
-**Next task: complete T1 — optional runtime installation and verification.**
-Matching candidate package metadata and README bootstrap instructions are
-established; clean installs, transitive constraints and core-only verification
-remain pending. Follow the [canonical T1 pickup instructions](../../docs/handoffs/dagster_orchestration.md#next-task-t1),
-then advance to T2 only after recording T1 completion evidence.
+For the combined initiative, [Spec 016](../spec016/README.md) and the current
+feature branch supersede the earlier branch and ECB-only job scope. T1 optional
+runtime verification is complete; the next task is shared ECB execution (T2),
+followed by writer exclusion (T3). See the [Dagster handoff](../../docs/handoffs/dagster_orchestration.md).
 
 ## 1. Objective and scope
 
@@ -276,10 +271,10 @@ Python 3.10–3.12 core support intact. Add an optional `dagster` dependency gro
 and a reproducible deployment constraints file. Published metadata verified on
 2026-10-25 establishes the candidate set `dagster==1.13.26`,
 `dagster-webserver==1.13.26`, and `dagster-postgres==0.29.26`; all three declare
-Python `>=3.10,<3.15`. T1 must still prove a clean install with this repository,
-pin transitive dependencies and verify core-only isolation. Record Python
-support, docs version and resolved artifacts; investigate conflicts rather
-than silently replacing the candidates or forcing Dagster onto core-only users.
+Python `>=3.10,<3.15`. T1 has verified clean installs, transitive constraints,
+and core-only isolation; see the [runtime evidence](../../docs/deployment/dagster_runbook.md).
+Investigate conflicts rather than silently replacing the candidates or forcing
+Dagster onto core-only users.
 
 Proposed deployment is a single Linux host with systemd-managed webserver,
 daemon, and gRPC code-location services using an immutable application release
@@ -472,8 +467,7 @@ interact before activating any new macro scheduler.
 Open deployment inputs are hostname/access, capacity, protected config paths,
 metadata backup target, and independent monitor route. These do not block
 spec review or local implementation; they block the production activation
-checkpoint until verified. The candidate Dagster package set is established;
-its repository/runtime verification remains T1 work, not a new architecture choice.
+checkpoint until verified. The Dagster package set has passed T1 runtime verification.
 
 Always preserve the authority, point-in-time and quarantine contracts and
 update evidence with actual results. Seek new direction before expanding v1

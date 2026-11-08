@@ -34,11 +34,11 @@ BIS, BEA, Census, SEC (company financials), Tiingo, Stooq, and iShares — see
 > [`docs/handoffs/run_alerting.md`](./docs/handoffs/run_alerting.md).
 > The active ECB eligible-assets production pickup point is in
 > [`docs/handoffs/ecb_eligible_assets.md`](./docs/handoffs/ecb_eligible_assets.md).
-> Proposed Dagster orchestration (specification only) is scoped in
-> [`specs/spec013/README.md`](./specs/spec013/README.md), with the next build
-> task, **T1 — complete optional runtime installation and verification**, in
-> [`docs/handoffs/dagster_orchestration.md`](./docs/handoffs/dagster_orchestration.md#next-task-t1).
-> Continue that work on the existing branch `spec012-dagster-orchestration`.
+> The optional Dagster runtime is available; jobs and schedules remain planned.
+> The expanded orchestration, email and networking scope is in
+> [Spec 016](./specs/spec016/README.md), with execution and writer-safety
+> requirements in [Spec 013](./specs/spec013/README.md) and the
+> [Dagster handoff](./docs/handoffs/dagster_orchestration.md).
 > The series geography mapping specification from main is
 > [`Spec 012`](./specs/spec012/README.md); Dagster is Spec 013.
 
@@ -128,6 +128,67 @@ PYTHONPATH=src python -m fred_pipeline run --env dev --dry-run
 
 Get a free FRED API key at <https://fredaccount.stlouisfed.org/apikeys>.
 
+### Configure managed source networking
+
+By default the main pipeline's source clients use Requests' normal
+environment-based proxy handling. To choose routes at the start of a run,
+set the `network` section in `config/config.yaml`, or set the corresponding
+environment variables. For example:
+
+```yaml
+default:
+  network:
+    mode: auto
+    preference: proxy_first
+    https_proxy_env: PIPELINE_HTTPS_PROXY
+    no_proxy: [localhost, 127.0.0.1, ".internal.example"]
+```
+
+Set `PIPELINE_HTTPS_PROXY` to the HTTP(S) proxy URL in the process environment.
+Proxy credentials must stay in the environment, not in the YAML file. Standard
+`https_proxy` / `HTTPS_PROXY`, `http_proxy` / `HTTP_PROXY`, `all_proxy` /
+`ALL_PROXY`, and `no_proxy` / `NO_PROXY` are inherited by default. The `FRED_`
+overrides are `FRED_NETWORK_MODE`, `FRED_NETWORK_PREFERENCE`,
+`FRED_HTTP_PROXY`, `FRED_HTTPS_PROXY`, `FRED_NO_PROXY` (comma-separated), and
+`FRED_CA_BUNDLE` (trusted CA bundle path). `REQUESTS_CA_BUNDLE` and
+`CURL_CA_BUNDLE` are respected when no FRED-specific bundle is configured.
+`inherit_proxy_env: false` disables standard proxy/bypass inheritance.
+
+`auto` probes the preferred available route, then the alternative only after a
+connectivity failure. `direct` and `proxy` are strict modes; bypass hosts are
+always direct. TLS validation and proxy authentication/policy errors do not
+trigger fallback. A selected route is reused for the invocation and checked
+again on the next run; later request failures use the existing retries on the
+same route. The connectivity probes send no source API keys. DNS resolution may
+exceed the configured connect/read timeouts on some operating systems.
+Selection occurs before manifest metadata writes and cadence planning, so it
+can probe a source even when all of its selected series are later skipped as not due.
+
+Managed routing covers the main pipeline's built-in data sources, its FRED
+release calendar, optional FOMC refresh, ECB eligible-assets hook, and the
+standalone `ecb-assets poll` command. ETF holdings destinations are
+selected per requested fund. A redirect to an origin that was not selected at
+startup fails explicitly. Caller-injected clients own their own networking.
+Managed ECB polling requires release and attachment URLs to match the configured
+`ECB_MID_BASE_URL` origin. If its startup probe fails in a main run, observation
+processing continues and the ECB hook reports failure; a standalone poll fails
+before downloading. Graph and Microsoft identity alerts use selected HTTP
+routes. SMTP profiles can opt into a separate direct/HTTP CONNECT plan; without
+an SMTP network block, SMTP connects directly. Other ECB source commands,
+discovery/reconciliation commands and webhooks retain independent routing. See the
+[network spec](specs/spec016/SPEC-outbound-network.md) for the remaining scope.
+
+For email profiles, Outlook.com OAuth, SMTP proxy settings and safe test
+commands, see the [alerting guide](docs/handoffs/run_alerting.md) and
+[example profiles](resources/alerting.profiles.yml.example).
+
+CLI `run` refreshes the FOMC calendar before Gold by default. Use
+`--no-refresh-fomc-calendar` for the offline calendar check. The refresh adds
+new dates to the configured `FRED_FOMC_CONFIG_FILE` (default `config/fomc.yml`)
+without committing them. If fetching or writing fails, the run retains the
+existing file and records a warning. The stage is skipped when Gold is not
+built, including dry runs; library callers retain their explicit refresh option.
+
 ### Install the optional Dagster development runtime
 
 Run these commands from the repository root (the directory containing
@@ -140,22 +201,18 @@ python3.12 -m venv .venv
 
 .venv/bin/python -m pip install --upgrade pip
 
-.venv/bin/python -m pip install \
-  -e '.[postgres,dev]' \
-  'dagster==1.13.26' \
-  'dagster-webserver==1.13.26' \
-  'dagster-postgres==0.29.26'
+.venv/bin/python -m pip install -e '.[postgres,dagster,dev]' \
+  -c requirements-dagster.lock.txt
 ```
 
-This installs the repository in editable mode with PostgreSQL and test
-dependencies, plus the matching Dagster packages. Dagster is specified
-explicitly because the planned `dagster` optional dependency group has not
-been added yet. Published package metadata identifies
+This installs the repository in editable mode with PostgreSQL, test, and
+optional Dagster dependencies using the recorded Python 3.12 constraints.
+The matched package versions are
 [`dagster` 1.13.26](https://pypi.org/project/dagster/1.13.26/),
 [`dagster-webserver` 1.13.26](https://pypi.org/project/dagster-webserver/1.13.26/),
-and [`dagster-postgres` 0.29.26](https://pypi.org/project/dagster-postgres/0.29.26/)
-as a compatible set supporting Python 3.12; repository integration verification
-remains part of [Spec 013](specs/spec013/README.md).
+and [`dagster-postgres` 0.29.26](https://pypi.org/project/dagster-postgres/0.29.26/).
+Their clean-install verification is recorded in the
+[Dagster development runbook](docs/deployment/dagster_runbook.md).
 
 Verify the installation without polling ECB or writing to a database:
 
@@ -175,9 +232,8 @@ source .venv/bin/activate
 
 The Dagster jobs and schedules are not implemented yet. Installing these
 packages does not start ECB polling or activate production schedules. See the
-[canonical T1 handoff](docs/handoffs/dagster_orchestration.md#next-task-t1) for
-the remaining clean-install, constraints and core-only verification work.
-The commands above are bootstrap instructions, not evidence that T1 has passed.
+[Dagster handoff](docs/handoffs/dagster_orchestration.md) for the remaining
+shared-execution and writer-lock work.
 
 ### Run fully locally and save to a database file
 
@@ -325,6 +381,7 @@ only the flags that differ in meaning are listed per command. (Full detail:
 | `discover` | Generates a new manifest from a FRED category/release/search — not a refresh, a discovery/authoring tool | `--category-id` / `--release-id` / `--search`, `--frequencies`, `--min-popularity`, `--max`, `--out`, `--dry-run` |
 | `discover-ecb` | Lists ECB SDMX dataflows for candidate manifest authoring | `--list-flows`, `--search`, `--max`, `--json` |
 | `ecb-assets` | `poll`/`ingest-release` discover signed ECB MID releases and advance the point-in-time eligible-securities history; `status`/`verify`/`as-of` inspect it; `inventory` inventories the archive; `alert-drill` safely proves four ECB alert paths to files; `backfill-stage` builds isolated resumable history; and `backfill-promote` atomically publishes a reconciled run. The production PostgreSQL timer templates are `resources/ecb-eligible-assets.*`. | action, `--local --db-path`, `--release-url`, `--release-id`, `--as-of`, `--asset-key`, `--allow-gap` (operator override only), `--from-year`, `--to-year`, `--deep`, `--summary-only`, `--output`, `--max-archive-mb`, `--archive-dir`, `--backfill-run-id`, `--acknowledge-quarantines` |
+| `alerts` | Check an email profile, authorize delegated Microsoft access, or preview/test delivery. Test messages are sent only with `--send` and an explicit recipient. | `check` / `auth` / `test`, `--profile`, `--alerting-file`, `--to`, `--send` |
 
 ### Refresh (rebuilds from already-ingested data — no external API calls)
 

@@ -18,6 +18,8 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
 
+from fred_pipeline.network import NetworkConfig
+
 try:
     import yaml
 except ImportError:  # pragma: no cover - PyYAML is a core dependency
@@ -73,6 +75,7 @@ _SETTING_FIELDS = (
     "persistence_delta_target_file_size_mb",
     "persistence_delta_target_partitions",
     "persistence_batch_max_buffer_bytes",
+    "network",
 )
 
 # Environment-variable name for each setting (12-factor style overrides).
@@ -157,12 +160,31 @@ def load_config_file(
     if "default" in data or "environments" in data:
         settings.update(data.get("default") or {})
         env_section = (data.get("environments") or {}).get(environment) or {}
+        default_network = settings.get("network")
         settings.update(env_section)
+        if (
+            "network" in env_section
+            and isinstance(default_network, dict)
+            and isinstance(env_section["network"], dict)
+        ):
+            settings["network"] = _merge_network(
+                default_network, env_section["network"]
+            )
     else:
         settings.update(data)
 
     # Keep only recognized settings; ignore comments/unknown keys quietly.
     return {k: v for k, v in settings.items() if k in _SETTING_FIELDS}
+
+
+def _merge_network(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
+    merged = dict(base)
+    for key, value in override.items():
+        if isinstance(value, dict) and isinstance(merged.get(key), dict):
+            merged[key] = _merge_network(merged[key], value)
+        else:
+            merged[key] = value
+    return merged
 
 
 def _env_var_settings() -> dict[str, Any]:
@@ -278,8 +300,10 @@ class PipelineConfig:
     persistence_delta_target_file_size_mb: int = 256
     persistence_delta_target_partitions: str | int = "auto"
     persistence_batch_max_buffer_bytes: int = 2 * 1024 * 1024 * 1024
+    network: NetworkConfig = field(default_factory=NetworkConfig)
 
     def __post_init__(self) -> None:
+        object.__setattr__(self, "network", NetworkConfig.from_mapping(self.network))
         if self.persistence_write_mode not in {"per_series", "run_batched"}:
             raise ValueError(
                 "persistence_write_mode must be 'per_series' or 'run_batched'"
@@ -348,7 +372,27 @@ class PipelineConfig:
         settings: dict[str, Any] = {}
         settings.update(load_config_file(config_file, environment.value))
         settings.update(_env_var_settings())
-        settings.update({k: v for k, v in overrides.items() if v is not None})
+        network_env = {
+            key: os.environ[env_name]
+            for key, env_name in (
+                ("mode", "FRED_NETWORK_MODE"),
+                ("preference", "FRED_NETWORK_PREFERENCE"),
+            )
+            if os.environ.get(env_name)
+        }
+        if network_env:
+            base_network = settings.get("network", {})
+            if not isinstance(base_network, dict):
+                raise ValueError("network must be a mapping")
+            settings["network"] = _merge_network(base_network, network_env)
+        explicit = {k: v for k, v in overrides.items() if v is not None}
+        if isinstance(explicit.get("network"), dict) and isinstance(
+            settings.get("network", {}), dict
+        ):
+            explicit["network"] = _merge_network(
+                settings.get("network", {}), explicit["network"]
+            )
+        settings.update(explicit)
         if fred_api_key is not None:
             settings["fred_api_key"] = fred_api_key
         settings = _coerce_settings(settings)

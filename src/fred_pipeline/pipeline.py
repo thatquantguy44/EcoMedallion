@@ -13,11 +13,14 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from collections import defaultdict
 from collections.abc import Iterable
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
+from functools import wraps
 from typing import Any
 
 from fred_pipeline.audit import EtlRun, EtlSeriesRun, RunStatus
@@ -30,8 +33,14 @@ from fred_pipeline.manifest import (
     all_series,
     load_manifests,
 )
+from fred_pipeline.network import (
+    NetworkPreflightError,
+    RunSessions,
+    _origin,
+    select_route,
+)
 from fred_pipeline.quality import run_quality_checks
-from fred_pipeline.sources.base import SourceClient
+from fred_pipeline.sources.base import HTTPSource, SourceClient
 from fred_pipeline.sources.bea import BEAClient
 from fred_pipeline.sources.bis import BISClient
 from fred_pipeline.sources.bls import BLSClient
@@ -74,13 +83,14 @@ class BufferedSeriesOutcome:
     observations_extracted: int
 
 
-def _make_fred(config: PipelineConfig) -> SourceClient:
+def _make_fred(config: PipelineConfig, *, session: Any = None) -> SourceClient:
     return FredClient(
         api_key=config.fred_api_key,
         base_url=config.fred_base_url,
         timeout=config.request_timeout_seconds,
         max_retries=config.max_retries,
         rate_limit_per_minute=_rate_limit_for_source(config, "fred"),
+        session=session,
     )
 
 
@@ -447,6 +457,20 @@ def _series_is_due(
     return now - last >= interval
 
 
+def _with_run_network(func):
+    @wraps(func)
+    def wrapped(self, specs, *args, **kwargs):
+        specs = list(specs)
+        with self._run_network(
+            specs,
+            include_calendar=kwargs.get("build_gold_layer", True),
+            refresh_fomc=kwargs.get("refresh_fomc_calendar", False),
+        ):
+            return func(self, specs, *args, **kwargs)
+
+    return wrapped
+
+
 class FredPipeline:
     def __init__(
         self,
@@ -468,12 +492,19 @@ class FredPipeline:
         self._clients: dict[str, SourceClient] = dict(clients or {})
         if client is not None:
             self._clients.setdefault("fred", client)
+        self._provided_sources = set(self._clients)
+        self._run_sessions: RunSessions | None = None
+        self._ecb_sessions: RunSessions | None = None
+        self._alert_sessions: RunSessions | None = None
+        self._smtp_routes: dict[Any, Any] | None = None
+        self._network_active = False
         self._notify_transport = notify_transport
         # Injectable so tests never touch a mailbox; None means the
         # transport named in config/alerting.yml (console by default).
         self._alert_transport = alert_transport
         self._stage_tracker: Any = None
         self._alert_sent = False
+        self._last_alert_result = None
         # Resolve the storage backend: explicit warehouse > Spark > None (dry run).
         if warehouse is not None:
             self.warehouse: Warehouse | None = warehouse
@@ -497,9 +528,209 @@ class FredPipeline:
                     f"Unknown source {source!r}; known sources: "
                     f"{sorted(SOURCE_FACTORIES)}"
                 )
-            client = factory(self.config)
+            if self.config.network.mode != "env" and self._network_active:
+                raise NetworkPreflightError(
+                    f"{source.upper()} has no selected route for this run"
+                )
+            elif (
+                source == "fred"
+                and factory is _make_fred
+                and self.config.network.mode != "env"
+            ):
+                raise NetworkPreflightError("FRED has no selected route for this run")
+            else:
+                client = factory(self.config)
             self._clients[source] = client
         return client
+
+    @contextmanager
+    def _run_network(
+        self,
+        specs: list[SeriesSpec],
+        *,
+        include_calendar: bool = False,
+        refresh_fomc: bool = False,
+        include_ecb: bool = False,
+    ):
+        if self._network_active:
+            yield
+            return
+
+        from fred_pipeline.governance.email_network import plan_alert_smtp
+
+        if self.config.network.mode == "env":
+            self._smtp_routes = plan_alert_smtp(self.config.environment.value)
+            self._network_active = True
+            try:
+                yield
+            finally:
+                self._network_active = False
+                self._smtp_routes = None
+            return
+
+        selected = {(getattr(s, "source", "fred") or "fred").lower() for s in specs}
+        calendar_may_fetch = (
+            include_calendar and bool(specs) and self.warehouse is not None
+        )
+        candidates = selected - self._provided_sources
+        if (
+            calendar_may_fetch
+            and self.config.fred_api_key
+            and "fred" not in self._provided_sources
+        ):
+            candidates.add("fred")
+        targets: dict[tuple[str, str, int], tuple[str, str, dict[str, str], bool]] = {}
+        owned: dict[str, HTTPSource] = {}
+
+        def register(
+            url: str, label: str, headers: dict[str, str], required: bool
+        ) -> None:
+            origin = _origin(url)
+            prior = targets.get(origin)
+            if prior:
+                targets[origin] = (prior[0], prior[1], prior[2], prior[3] or required)
+            else:
+                targets[origin] = (url, label, headers, required)
+
+        for source in sorted(candidates):
+            factory = SOURCE_FACTORIES.get(source)
+            if factory is None:
+                raise ValueError(
+                    f"Unknown source {source!r}; known sources: {sorted(SOURCE_FACTORIES)}"
+                )
+            previous = self._clients.pop(source, None)
+            if previous is not None and hasattr(previous, "_session"):
+                previous._session.close()
+            client = factory(self.config)
+            if not isinstance(client, HTTPSource):
+                self._clients[source] = client
+                continue
+            # Factories construct an unused default session; all managed I/O
+            # is subsequently sent through the run-owned session pool.
+            client._session.close()
+            owned[source] = client
+            headers = {
+                k: v
+                for k, v in client._request_headers().items()
+                if k.lower() in {"user-agent", "accept"}
+            }
+            required = source in selected
+            if isinstance(client, ISharesClient):
+                urls = [
+                    client.holdings_urls.get(s.series_id.strip().upper())
+                    for s in specs
+                    if (getattr(s, "source", "fred") or "fred").lower() == source
+                ]
+                for url in urls:
+                    if url:
+                        register(url, source.upper(), headers, required)
+            else:
+                register(client.base_url, source.upper(), headers, required)
+
+        if calendar_may_fetch and refresh_fomc:
+            from fred_pipeline.catalogs.fomc_calendar import (
+                DEFAULT_USER_AGENT,
+                FOMC_CALENDAR_URL,
+            )
+
+            register(
+                FOMC_CALENDAR_URL, "FOMC", {"User-Agent": DEFAULT_USER_AGENT}, False
+            )
+
+        if include_ecb:
+            register(
+                f"{self.config.ecb_mid_base_url.rstrip('/')}/rss/mid.xml",
+                "ECB MID",
+                {"Accept": "application/xml, application/rss+xml, */*"},
+                False,
+            )
+
+        from fred_pipeline.governance.email_network import alert_http_targets
+
+        alert_targets = alert_http_targets(self.config.environment.value)
+        for url, label in alert_targets:
+            register(url, label, {}, False)
+
+        network_environment = dict(os.environ)
+
+        def choose(target):
+            url, label, headers, required = target
+            try:
+                return select_route(
+                    self.config.network,
+                    url,
+                    label=label,
+                    headers=headers,
+                    environ=network_environment,
+                )
+            except NetworkPreflightError:
+                if required:
+                    raise
+                log.warning(
+                    "%s preflight failed; its optional refresh will be skipped", label
+                )
+                return None
+
+        with ThreadPoolExecutor(
+            max_workers=self.config.network.max_parallel_targets
+        ) as pool:
+            choices = list(pool.map(choose, targets.values()))
+        routes = {
+            origin: route
+            for origin, route in zip(targets, choices)
+            if route is not None
+        }
+        for route in routes.values():
+            log.info(
+                "Startup connectivity selected %s route for %s",
+                route.kind,
+                route.origin[1],
+            )
+        sessions = RunSessions(routes)
+        for source, client in owned.items():
+            # An unavailable advisory FRED calendar must not escape via a
+            # fresh, unmanaged client later in the run.
+            if source == "fred" and _origin(client.base_url) not in routes:
+                continue
+            client._session = sessions
+            self._clients[source] = client
+        self._run_sessions = sessions
+        ecb_route = (
+            routes.get(_origin(self.config.ecb_mid_base_url)) if include_ecb else None
+        )
+        # Restrict MID to its configured origin even when other origins are in
+        # the shared plan: RSS links must not borrow another source's route.
+        self._ecb_sessions = RunSessions(ecb_route) if ecb_route else None
+        self._alert_sessions = RunSessions(
+            {
+                _origin(url): routes[_origin(url)]
+                for url, _ in alert_targets
+                if _origin(url) in routes
+            }
+        )
+        self._smtp_routes = plan_alert_smtp(self.config.environment.value)
+        self._network_active = True
+        try:
+            yield
+        finally:
+            for source in owned:
+                self._clients.pop(source, None)
+            self._run_sessions = None
+            ecb_sessions = self._ecb_sessions
+            self._ecb_sessions = None
+            alert_sessions = self._alert_sessions
+            self._alert_sessions = None
+            self._smtp_routes = None
+            self._network_active = False
+            try:
+                try:
+                    if alert_sessions is not None:
+                        alert_sessions.close()
+                finally:
+                    if ecb_sessions is not None:
+                        ecb_sessions.close()
+            finally:
+                sessions.close()
 
     def _client_for(self, spec: SeriesSpec) -> SourceClient:
         return self._client_for_source(getattr(spec, "source", "fred") or "fred")
@@ -543,23 +774,27 @@ class FredPipeline:
                 not in blocked_sources
             ]
         log.info("Loaded %d active series from %s", len(specs), manifest_path)
-        if self.warehouse is not None:
-            try:
-                self.warehouse.sync_meta(manifests)
-                log.info("Synced %d series to meta layer", len(specs))
-            except Exception:
-                log.exception("Meta sync failed (continuing)")
-        return self.run(
-            specs,
-            manifest_path=manifest_path,
-            triggered_by=triggered_by,
-            build_gold_layer=build_gold_layer,
-            force_full=force_full,
-            skip_not_due=skip_not_due,
-            refresh_fomc_calendar=refresh_fomc_calendar,
-        )
+        with self._run_network(
+            specs, include_calendar=build_gold_layer, refresh_fomc=refresh_fomc_calendar
+        ):
+            if self.warehouse is not None:
+                try:
+                    self.warehouse.sync_meta(manifests)
+                    log.info("Synced %d series to meta layer", len(specs))
+                except Exception:
+                    log.exception("Meta sync failed (continuing)")
+            return self.run(
+                specs,
+                manifest_path=manifest_path,
+                triggered_by=triggered_by,
+                build_gold_layer=build_gold_layer,
+                force_full=force_full,
+                skip_not_due=skip_not_due,
+                refresh_fomc_calendar=refresh_fomc_calendar,
+            )
 
     @timed("FredPipeline.run")
+    @_with_run_network
     def run(
         self,
         specs: Iterable[SeriesSpec],
@@ -572,6 +807,8 @@ class FredPipeline:
         refresh_fomc_calendar: bool = False,
     ) -> EtlRun:
         specs = list(specs)
+        self._alert_sent = False
+        self._last_alert_result = None
         run = EtlRun(
             environment=self.config.environment.value,
             manifest_path=manifest_path,
@@ -802,7 +1039,23 @@ class FredPipeline:
 
         result = None
         with tracker.stage("fomc_calendar", swallow=True) as stage:
-            result = check_fomc_calendar(refresh=refresh)
+            kwargs: dict[str, Any] = {"refresh": refresh}
+            if refresh and self._run_sessions is not None:
+                from fred_pipeline.catalogs.fomc_calendar import (
+                    fetch_calendar_html_requests,
+                )
+
+                def managed_fetch(*, backend: str, timeout_seconds: int) -> str:
+                    if backend != "requests":
+                        raise ValueError(
+                            "managed FOMC refresh requires the Requests backend"
+                        )
+                    return fetch_calendar_html_requests(
+                        timeout_seconds=timeout_seconds, session=self._run_sessions
+                    )
+
+                kwargs["fetch"] = managed_fetch
+            result = check_fomc_calendar(**kwargs)
             stage.detail.update(result.detail())
             for message in result.messages:
                 log.warning("%s", message)
@@ -827,13 +1080,15 @@ class FredPipeline:
             return
         self._alert_sent = True
         try:
-            from fred_pipeline.governance.alerting import send_run_alert
+            from fred_pipeline.governance.alerting import send_run_alert_result
 
-            send_run_alert(
+            self._last_alert_result = send_run_alert_result(
                 run,
                 tracker,
                 environment=self.config.environment.value,
                 transport=self._alert_transport,
+                http_client=self._alert_sessions,
+                smtp_routes=self._smtp_routes,
             )
         except Exception:  # never let alerting fail a run
             log.exception("Run alert step failed for run %s", run.run_id)

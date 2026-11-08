@@ -115,6 +115,25 @@ not authoritative for ECB, the combined run reports an explicit skip and the
 dedicated poller owns ingestion. Use `--no-ecb-assets` only for a deliberate
 observation-only run; `--dry-run` skips ECB because it has no durable warehouse.
 
+### Managed networking
+
+The main-run ECB hook and standalone `ecb-assets poll` support the managed
+network settings described in the [network configuration](../../README.md#configure-managed-source-networking).
+For example, set `FRED_NETWORK_MODE=auto` and `FRED_HTTPS_PROXY` to a proxy URL
+to try the proxy first and fall back to direct access on a connectivity failure.
+By default, `env` preserves Requests' normal environment handling. Managed
+polling probes once at startup and reuses the chosen route for the RSS feed,
+release and attachments. Release and attachment URLs, including redirects, must
+remain on the configured `ECB_MID_BASE_URL` origin. A mirror must publish links
+that resolve to that same scheme, host and port.
+
+If ECB preflight fails, a standalone poll attempts the configured failure alert and
+exits before downloading. In a combined run, observation processing proceeds;
+the ECB hook reports failure and attempts the configured alert. Other ECB commands,
+including `ingest-release` and archive operations, keep their existing routing.
+This change does not add an authoritative writer lock; the lock and its
+ordering before source preflight remain planned in Spec 013.
+
 ### Authoritative destination
 
 PostgreSQL is the current authoritative production destination. It is selected

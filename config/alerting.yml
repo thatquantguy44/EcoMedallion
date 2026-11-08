@@ -58,7 +58,7 @@ ecb_assets:
 # ---------------------------------------------------------------------------
 # TRANSPORT — pick one `kind`.
 #
-#   outlook_smtp   Microsoft 365 / Outlook over SMTP+STARTTLS.
+#   outlook_smtp   Legacy Microsoft 365 SMTP password login over STARTTLS.
 #                  host smtp.office365.com, port 587. Note that many tenants
 #                  disable SMTP AUTH by default; if login fails with a policy
 #                  error, either enable it for the sending mailbox or switch to
@@ -71,6 +71,9 @@ ecb_assets:
 #                  is visible before it is configured.
 #   file           Write .html/.txt into output_dir. Good for CI and for
 #                  eyeballing the HTML in a browser first.
+#
+# For named profiles, Outlook.com OAuth, SMTP proxy options and diagnostics,
+# see resources/alerting.profiles.yml.example and docs/handoffs/run_alerting.md.
 # ---------------------------------------------------------------------------
 transport:
   kind: console
@@ -80,6 +83,9 @@ transport:
   # host: smtp.office365.com
   # port: 587
   # use_starttls: true
+  # tls: starttls                         # or implicit_tls / none (unauthenticated)
+  # auth: password                        # or none / oauth2; never cleartext auth
+  # network: {mode: auto, proxy_url_env: FRED_SMTP_PROXY}
   # username: fred-pipeline@example.com
   # password_env: FRED_SMTP_PASSWORD      # <-- env var NAME, not the password
 

@@ -31,6 +31,25 @@ default:
   max_retries: 5
   rate_limit_per_minute: 120
 
+  # --- Optional managed source networking ---
+  # env preserves the existing Requests/environment behavior and does not probe.
+  # direct / proxy are strict; auto probes the preferred route, then the other
+  # on connectivity failure, and keeps the selected route for this run.
+  # Covers main-pipeline sources, the FRED release calendar, FOMC, the ECB
+  # eligible-assets hook and standalone ecb-assets poll, plus Graph and
+  # Microsoft identity alerts. SMTP has a separate optional network block;
+  # other ECB source commands and webhooks retain their existing routing.
+  network:
+    mode: env                  # FRED_NETWORK_MODE: env | direct | proxy | auto
+    preference: proxy_first    # FRED_NETWORK_PREFERENCE: proxy_first | direct_first
+    inherit_proxy_env: true    # honor standard http_proxy / https_proxy / no_proxy
+    # https_proxy_env: PIPELINE_HTTPS_PROXY   # environment variable holding proxy URL
+    # no_proxy: [localhost, 127.0.0.1, ".internal.example"]
+    # ca_bundle_env: PIPELINE_CA_BUNDLE      # environment variable holding CA file path
+    # probe: {connect_timeout_seconds: 3, read_timeout_seconds: 3}
+    # origins:
+    #   "https://api.stlouisfed.org:443": {mode: direct}
+
   # --- ECB (European Central Bank Data Portal) ---
   # No API key needed; ECB's SDMX 2.1 endpoint is fully public. Set the URL
   # below only if you route ECB traffic through an approved proxy or mirror.

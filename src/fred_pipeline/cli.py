@@ -33,6 +33,7 @@ import datetime as _dt
 import json
 import logging
 import sys
+from contextlib import ExitStack
 from pathlib import Path
 from typing import Any
 
@@ -715,6 +716,7 @@ def _cmd_validate(args: argparse.Namespace) -> int:
 
 def _cmd_run(args: argparse.Namespace) -> int:
     from fred_pipeline.config import _ENV_OVERRIDES
+    from fred_pipeline.network import NetworkPreflightError
     from fred_pipeline.pipeline import missing_source_keys
 
     config = PipelineConfig.resolve(
@@ -800,7 +802,29 @@ def _cmd_run(args: argparse.Namespace) -> int:
         config, spark=spark, warehouse=warehouse, persist_audit=persist
     )
     ecb_assets_result: dict[str, object]
+    network_stack = ExitStack()
     try:
+        from fred_pipeline.governance.email_network import alert_smtp_targets
+
+        if config.network.mode != "env" or alert_smtp_targets(config.environment.value):
+            include_ecb = (
+                not args.dry_run
+                and getattr(args, "ecb_assets", True)
+                and warehouse_config is not None
+                and warehouse_config.ecb_assets_authoritative_backend != "disabled"
+                and selected_backend
+                == warehouse_config.ecb_assets_authoritative_backend
+                and hasattr(warehouse, "conn")
+                and hasattr(warehouse, "_insert")
+            )
+            network_stack.enter_context(
+                pipeline._run_network(
+                    active,
+                    include_calendar=not args.dry_run and not args.no_gold,
+                    refresh_fomc=args.refresh_fomc_calendar,
+                    include_ecb=include_ecb,
+                )
+            )
         run = pipeline.run_from_manifest(
             args.manifests,
             triggered_by="cli-local" if args.local else "cli",
@@ -852,34 +876,82 @@ def _cmd_run(args: argparse.Namespace) -> int:
                 ),
             }
         else:
+            alert_attempted = False
+            alert_result = None
+
+            def notify_poll(results, _status, error):
+                nonlocal alert_attempted, alert_result
+                alert_attempted = True
+                alert_result = _send_ecb_assets_health_alert(
+                    config,
+                    warehouse,
+                    action="poll",
+                    results=results,
+                    error=error,
+                    http_client=getattr(pipeline, "_alert_sessions", None),
+                    smtp_routes=getattr(pipeline, "_smtp_routes", None),
+                )
+                return alert_result
+
             try:
-                releases = _poll_ecb_assets_for_run(config, warehouse)
+                if config.network.mode == "env":
+                    releases = _poll_ecb_assets_for_run(
+                        config,
+                        warehouse,
+                        selected_backend=selected_backend,
+                        authoritative_backend=warehouse_config.ecb_assets_authoritative_backend,
+                        notify=notify_poll,
+                    )
+                else:
+                    if pipeline._ecb_sessions is None:
+                        raise NetworkPreflightError(
+                            "ECB MID route was unavailable at startup"
+                        )
+                    releases = _poll_ecb_assets_for_run(
+                        config,
+                        warehouse,
+                        session=pipeline._ecb_sessions,
+                        selected_backend=selected_backend,
+                        authoritative_backend=warehouse_config.ecb_assets_authoritative_backend,
+                        notify=notify_poll,
+                    )
                 ecb_assets_result = {
                     "status": "succeeded",
                     "releases": releases,
                 }
-                _send_ecb_assets_health_alert(
-                    config,
-                    warehouse,
-                    action="poll",
-                    results=releases,
-                )
+                if not alert_attempted:
+                    notify_poll(releases, {}, "")
             except Exception as exc:  # noqa: BLE001 - reflected in run exit/status
                 ecb_assets_result = {
                     "status": "failed",
                     "error": str(exc),
                 }
-                _send_ecb_assets_health_alert(
-                    config,
-                    warehouse,
-                    action="poll",
-                    error=str(exc),
-                )
+                if not alert_attempted:
+                    notify_poll([], {}, str(exc))
+            from fred_pipeline.governance.email_delivery import DeliveryResult
+
+            if isinstance(alert_result, DeliveryResult):
+                from dataclasses import asdict
+
+                ecb_assets_result["alert_delivery"] = asdict(alert_result)
+    except NetworkPreflightError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 1
     finally:
-        if warehouse is not None:
-            warehouse.close()
+        try:
+            network_stack.close()
+        finally:
+            if warehouse is not None:
+                warehouse.close()
 
     output = run.to_row()
+    from fred_pipeline.governance.email_delivery import DeliveryResult
+
+    run_alert = getattr(pipeline, "_last_alert_result", None)
+    if isinstance(run_alert, DeliveryResult):
+        from dataclasses import asdict
+
+        output["alert_delivery"] = asdict(run_alert)
     output["ecb_assets"] = ecb_assets_result
     print(json.dumps(output, default=str, indent=2))
     if args.local and not args.dry_run:
@@ -894,23 +966,27 @@ def _cmd_run(args: argparse.Namespace) -> int:
     return 0 if pipeline_succeeded and ecb_succeeded else 1
 
 
-def _poll_ecb_assets_for_run(config: PipelineConfig, warehouse) -> list[dict]:
+def _poll_ecb_assets_for_run(
+    config: PipelineConfig,
+    warehouse,
+    *,
+    selected_backend: str,
+    authoritative_backend: str,
+    session: Any = None,
+    notify: Any = None,
+) -> list[dict]:
     """Poll signed MID releases after the observation pipeline has persisted."""
-    from fred_pipeline.ecb_eligible_assets import (
-        ECBEligibleAssetsPipeline,
-        ECBMIDClient,
-    )
+    from fred_pipeline.ecb_execution import execute_ecb_poll
 
-    if warehouse is None:
-        raise RuntimeError("ECB eligible-assets polling requires a durable warehouse")
-    client = ECBMIDClient(
-        base_url=config.ecb_mid_base_url,
-        timeout=config.request_timeout_seconds,
-        max_retries=config.max_retries,
-        rate_limit_per_minute=min(config.rate_limit_per_minute, 60),
+    report = execute_ecb_poll(
+        config,
+        warehouse=warehouse,
+        selected_backend=selected_backend,
+        authoritative_backend=authoritative_backend,
+        session=session,
+        notify=notify,
     )
-    pipeline = ECBEligibleAssetsPipeline(warehouse, client=client)
-    return [result.to_dict() for result in pipeline.poll()]
+    return list(report.releases)
 
 
 def _send_ecb_assets_health_alert(
@@ -920,10 +996,12 @@ def _send_ecb_assets_health_alert(
     action: str,
     results: list[dict] | None = None,
     error: str = "",
-) -> bool:
+    http_client: Any = None,
+    smtp_routes: Any = None,
+) -> Any:
     """Send the ECB-specific health alert without affecting ingestion."""
     from fred_pipeline.ecb_eligible_assets import ECBEligibleAssetRepository
-    from fred_pipeline.governance.ecb_alerting import send_ecb_assets_alert
+    from fred_pipeline.governance.ecb_alerting import send_ecb_assets_alert_result
 
     status: dict[str, object] = {}
     health_error = error
@@ -932,12 +1010,14 @@ def _send_ecb_assets_health_alert(
     except Exception as exc:  # noqa: BLE001 - alerting must not fail the run
         if not health_error:
             health_error = f"could not read ECB health status: {exc}"
-    return send_ecb_assets_alert(
+    return send_ecb_assets_alert_result(
         action=action,
         results=results or [],
         status=status,
         error=health_error,
         environment=config.environment.value,
+        http_client=http_client,
+        smtp_routes=smtp_routes,
     )
 
 
@@ -1128,12 +1208,29 @@ def _cmd_ecb_assets(args: argparse.Namespace) -> int:
         from fred_pipeline.governance.ecb_alert_drill import run_ecb_alert_drill
 
         try:
-            report = run_ecb_alert_drill(
-                load_alerting_config(),
-                output_dir=args.output or "alerts/ecb-alert-drill",
-                live_delivery=args.live_alert_delivery,
-                environment=args.env,
-            )
+            with ExitStack() as stack:
+                alert_session = None
+                smtp_routes = None
+                if args.live_alert_delivery:
+                    from fred_pipeline.governance.email_network import (
+                        plan_alert_http,
+                        plan_alert_smtp,
+                    )
+
+                    smtp_routes = plan_alert_smtp(config.environment.value)
+                    if config.network.mode != "env":
+                        alert_session = plan_alert_http(
+                            config.network, config.environment.value
+                        )
+                        stack.callback(alert_session.close)
+                report = run_ecb_alert_drill(
+                    load_alerting_config(),
+                    output_dir=args.output or "alerts/ecb-alert-drill",
+                    live_delivery=args.live_alert_delivery,
+                    environment=args.env,
+                    http_client=alert_session,
+                    smtp_routes=smtp_routes,
+                )
         except (OSError, RuntimeError, ValueError) as exc:
             print(f"ERROR: {exc}", file=sys.stderr)
             return 1
@@ -1355,19 +1452,75 @@ def _cmd_ecb_assets(args: argparse.Namespace) -> int:
         finally:
             warehouse.close()
 
-    client = ECBMIDClient(
-        base_url=config.ecb_mid_base_url,
-        timeout=config.request_timeout_seconds,
-        max_retries=config.max_retries,
-        rate_limit_per_minute=min(config.rate_limit_per_minute, 60),
-    )
-    pipeline = ECBEligibleAssetsPipeline(warehouse, client=client)
-    repository = ECBEligibleAssetRepository(warehouse)
+    network_stack = ExitStack()
+    alert_session = None
+    smtp_routes = None
+    poll_alert_attempted = False
+
+    def notify_poll(results, _status, error):
+        nonlocal poll_alert_attempted
+        poll_alert_attempted = True
+        return _send_ecb_assets_health_alert(
+            config,
+            warehouse,
+            action="poll",
+            results=results,
+            error=error,
+            http_client=alert_session,
+            smtp_routes=smtp_routes,
+        )
+
     try:
+        session = None
+        if args.action in {"poll", "ingest-release", "verify"}:
+            from fred_pipeline.governance.email_network import plan_alert_smtp
+
+            smtp_routes = plan_alert_smtp(config.environment.value)
+        if (
+            args.action in {"poll", "ingest-release", "verify"}
+            and config.network.mode != "env"
+        ):
+            from fred_pipeline.governance.email_network import plan_alert_http
+
+            alert_session = plan_alert_http(config.network, config.environment.value)
+            network_stack.callback(alert_session.close)
+        if args.action == "poll" and config.network.mode != "env":
+            from fred_pipeline.network import RunSessions, select_route
+
+            route = select_route(
+                config.network,
+                f"{config.ecb_mid_base_url.rstrip('/')}/rss/mid.xml",
+                label="ECB MID",
+                headers={"Accept": "application/xml, application/rss+xml, */*"},
+            )
+            session = RunSessions(route)
+            network_stack.callback(session.close)
+        client = ECBMIDClient(
+            base_url=config.ecb_mid_base_url,
+            timeout=config.request_timeout_seconds,
+            max_retries=config.max_retries,
+            rate_limit_per_minute=min(config.rate_limit_per_minute, 60),
+            session=session,
+        )
+        pipeline = (
+            ECBEligibleAssetsPipeline(warehouse, client=client)
+            if args.action != "poll"
+            else None
+        )
+        repository = ECBEligibleAssetRepository(warehouse)
         if args.action == "poll":
-            result: object = [
-                row.to_dict() for row in pipeline.poll(allow_gap=args.allow_gap)
-            ]
+            from fred_pipeline.ecb_execution import execute_ecb_poll
+
+            report = execute_ecb_poll(
+                config,
+                warehouse=warehouse,
+                selected_backend=factory.selected_backend_name,
+                authoritative_backend=authoritative_backend,
+                allow_gap=args.allow_gap,
+                client=client,
+                notify=notify_poll,
+            )
+            result: object = list(report.releases)
         elif args.action == "ingest-release":
             if not args.release_url:
                 print("ERROR: ingest-release requires --release-url", file=sys.stderr)
@@ -1392,7 +1545,9 @@ def _cmd_ecb_assets(args: argparse.Namespace) -> int:
         else:
             result = repository.status()
         print(json.dumps(result, default=str, indent=2))
-        if args.action in {"poll", "ingest-release", "verify"}:
+        if args.action in {"poll", "ingest-release", "verify"} and not (
+            args.action == "poll" and poll_alert_attempted
+        ):
             if isinstance(result, list):
                 alert_rows: list[dict[str, Any]] = [
                     row for row in result if isinstance(row, dict)
@@ -1406,20 +1561,228 @@ def _cmd_ecb_assets(args: argparse.Namespace) -> int:
                 warehouse,
                 action=args.action,
                 results=alert_rows,
+                http_client=alert_session,
+                smtp_routes=smtp_routes,
             )
         return 0
     except Exception as exc:  # noqa: BLE001 - CLI reports source/quarantine errors
-        if args.action in {"poll", "ingest-release", "verify"}:
+        if args.action in {"poll", "ingest-release", "verify"} and not (
+            args.action == "poll" and poll_alert_attempted
+        ):
             _send_ecb_assets_health_alert(
                 config,
                 warehouse,
                 action=args.action,
                 error=str(exc),
+                http_client=alert_session,
+                smtp_routes=smtp_routes,
             )
         print(f"ERROR: {exc}", file=sys.stderr)
         return 1
     finally:
-        warehouse.close()
+        try:
+            network_stack.close()
+        finally:
+            warehouse.close()
+
+
+def _cmd_alerts(args: argparse.Namespace) -> int:
+    import os
+
+    from fred_pipeline.governance.alerting_config import (
+        AlertingConfig,
+        AlertingConfigError,
+        _validate_emails,
+        load_alerting_config,
+    )
+    from fred_pipeline.governance.email_network import (
+        GRAPH_URL,
+        IDENTITY_URL,
+        plan_profile_http,
+    )
+    from fred_pipeline.governance.email_oauth import (
+        check_cached_account,
+        delegated_token,
+    )
+    from fred_pipeline.governance.email_transport import (
+        EmailMessageSpec,
+        EmailSendError,
+        SmtpEmailTransport,
+    )
+    from fred_pipeline.network import (
+        NetworkConfigError,
+        NetworkPreflightError,
+        RunSessions,
+        select_route,
+    )
+
+    try:
+        config = load_alerting_config(args.alerting_file)
+        if args.profile not in config.profiles:
+            raise AlertingConfigError("--profile must name a configured profile")
+        profile = config.profiles[args.profile]
+        transport = profile.transport
+        delegated = (
+            transport.kind == "microsoft_graph" and transport.auth == "delegated"
+        ) or (
+            transport.kind in {"smtp", "outlook_smtp", "outlook_com_smtp"}
+            and transport.smtp_auth == "oauth2"
+        )
+        if args.action == "auth" and not delegated:
+            raise AlertingConfigError("alerts auth requires a delegated OAuth profile")
+        if args.action != "test" and (args.send or args.to):
+            raise AlertingConfigError("--send and --to are only valid with alerts test")
+        recipients = _validate_emails(args.to, where="--to") if args.to else ()
+        if args.action == "test" and len(recipients) != 1:
+            raise AlertingConfigError("alerts test requires one explicit --to address")
+        pipeline_config = PipelineConfig.resolve(
+            environment=Environment(args.env), config_file=args.config
+        )
+    except (AlertingConfigError, ValueError) as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 2
+    if args.action == "test" and not args.send:
+        print(
+            json.dumps(
+                {
+                    "status": "previewed",
+                    "profile": args.profile,
+                    "to": recipients[0],
+                    "transport": transport.kind,
+                }
+            )
+        )
+        return 0
+    if not config.enabled:
+        print(
+            "ERROR: alerting is disabled; enable it before connecting or sending",
+            file=sys.stderr,
+        )
+        return 1
+    try:
+        with ExitStack() as stack:
+            session = None
+            if args.action == "auth":
+                if pipeline_config.network.mode != "env":
+                    route = select_route(
+                        pipeline_config.network,
+                        IDENTITY_URL,
+                        label="Microsoft identity",
+                    )
+                    session = RunSessions(route)
+                    stack.callback(session.close)
+                delegated_token(
+                    transport,
+                    profile.from_address,
+                    http_client=session,
+                    interactive=True,
+                )
+                print(f"Authorized profile {args.profile!r} for {profile.from_address}")
+                return 0
+            if (
+                transport.kind in {"smtp", "outlook_smtp", "outlook_com_smtp"}
+                and transport.smtp_auth == "password"
+                and not transport.resolve_secret()
+            ):
+                raise EmailSendError(
+                    f"SMTP password environment variable {transport.password_env!r} is empty"
+                )
+            if (
+                transport.kind == "microsoft_graph"
+                and not delegated
+                and not transport.resolve_secret()
+            ):
+                raise EmailSendError(
+                    f"Graph secret environment variable {transport.client_secret_env!r} is empty"
+                )
+            if delegated:
+                path = os.environ.get(transport.token_cache_path_env, "")
+                if not path or not Path(path).is_file():
+                    raise EmailSendError("OAuth cache is unavailable; run alerts auth")
+                check_cached_account(transport, profile.from_address)
+            smtp_routes = {}
+            if (
+                transport.kind in {"smtp", "outlook_smtp", "outlook_com_smtp"}
+                and transport.network is not None
+            ):
+                from fred_pipeline.governance.smtp_network import plan_smtp_route
+
+                smtp_routes[transport] = plan_smtp_route(transport)
+            if pipeline_config.network.mode != "env":
+                session = plan_profile_http(pipeline_config.network, transport)
+                stack.callback(session.close)
+            elif args.action == "check" and (
+                transport.kind == "microsoft_graph" or delegated
+            ):
+                import requests
+
+                targets = [IDENTITY_URL] + (
+                    [GRAPH_URL] if transport.kind == "microsoft_graph" else []
+                )
+                for url in targets:
+                    try:
+                        response = requests.head(
+                            url,
+                            timeout=transport.timeout_seconds,
+                            allow_redirects=False,
+                        )
+                        try:
+                            if response.status_code == 407:
+                                raise EmailSendError(
+                                    "HTTP proxy requires authentication"
+                                )
+                        finally:
+                            response.close()
+                    except requests.RequestException as exc:
+                        raise EmailSendError(
+                            f"HTTP readiness check failed ({type(exc).__name__})"
+                        ) from None
+            if args.action == "check":
+                if (
+                    transport.kind in {"smtp", "outlook_smtp", "outlook_com_smtp"}
+                    and transport.network is None
+                ):
+                    SmtpEmailTransport(
+                        transport, http_client=session
+                    ).check_connection()
+                print(json.dumps({"status": "ready", "profile": args.profile}))
+                return 0
+            message = EmailMessageSpec(
+                subject="[FRED] Test alert",
+                text_body="Test alert from FRED pipeline.",
+                html_body="<p>Test alert from FRED pipeline.</p>",
+                to=recipients,
+                from_address=profile.from_address,
+                from_name=profile.from_name,
+            )
+            single = AlertingConfig(
+                enabled=True,
+                from_address=profile.from_address,
+                from_name=profile.from_name,
+                transport=transport,
+            )
+            from dataclasses import asdict, replace
+            from fred_pipeline.governance.email_delivery import (
+                deliver_message,
+                new_delivery,
+            )
+
+            initial = replace(new_delivery(config), profile_id=args.profile)
+            result = deliver_message(
+                message,
+                single,
+                "",
+                http_client=session,
+                smtp_routes=smtp_routes,
+                result=initial,
+            )
+            print(json.dumps({**asdict(result), "to": recipients[0]}))
+            if not result.handled:
+                return 1
+        return 0
+    except (EmailSendError, NetworkPreflightError, NetworkConfigError) as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 2 if isinstance(exc, NetworkConfigError) else 1
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -1428,6 +1791,16 @@ def build_parser() -> argparse.ArgumentParser:
         "-v", "--verbose", action="store_true", help="enable debug logging"
     )
     sub = parser.add_subparsers(dest="command", required=True)
+
+    alerts = sub.add_parser("alerts", help="check, authorize, or test email alerts")
+    alerts.add_argument("action", choices=["auth", "check", "test"])
+    alerts.add_argument("--profile", required=True)
+    alerts.add_argument("--alerting-file", default=None)
+    alerts.add_argument("--config", default=None)
+    alerts.add_argument("--env", choices=[e.value for e in Environment], default="dev")
+    alerts.add_argument("--to", default=None, help="explicit test recipient")
+    alerts.add_argument("--send", action="store_true", help="send the test message")
+    alerts.set_defaults(func=_cmd_alerts)
 
     v = sub.add_parser("validate", help="validate manifests only")
     v.add_argument("--manifests", default="manifests")
@@ -1495,11 +1868,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     r.add_argument(
         "--refresh-fomc-calendar",
-        action="store_true",
+        action=argparse.BooleanOptionalAction,
+        default=True,
         help=(
             "before Gold, fetch the Fed's FOMC calendar and add newly "
-            "published meetings to config/fomc.yml (spec008). Opt-in: it adds "
-            "a federalreserve.gov dependency to the run. Any failure is "
+            "published meetings to config/fomc.yml (default on; spec008). "
+            "Use --no-refresh-fomc-calendar to skip the fetch. Any failure is "
             "logged and the calendar already on disk is used unchanged; "
             "additions are written to the file but NOT committed. The "
             "calendar health check itself always runs and needs no flag."

@@ -23,11 +23,10 @@ missing / malformed        fail       Gold would silently be empty
 expired                    fail       Gold would silently be empty
 =========================  =========  ====================================
 
-**The refresh (opt-in, ``--refresh-fomc-calendar``).** Fetches the Fed's page
-and inserts newly published meetings into the file. spec008 Decision 1 argued
-against putting the Fed fetch in the run at all (a Fed outage or redesign
-should not touch unrelated runs), and that argument stands -- which is why
-this is off by default and why *nothing it can do is allowed to stop the run*:
+**The refresh (on by default for CLI ``run``).** Fetches the Fed's page and
+inserts newly published meetings into the file. Use
+``--no-refresh-fomc-calendar`` to retain the offline check alone. Direct library
+calls remain opt-in. A refresh problem cannot stop the data run:
 
 * any fetch, parse or write failure is caught, logged, and the calendar
   already on disk is used unchanged;
@@ -96,10 +95,19 @@ class FOMCCalendarCheck:
     refreshed: bool = False
     added_dates: tuple[str, ...] = ()
     messages: list[str] = field(default_factory=list)
+    refresh_requested: bool = False
+    refresh_attempted: bool = False
+    refresh_outcome: str = "disabled"
 
     def detail(self) -> dict[str, Any]:
         """Stage-summary sub-line values (kept to simple scalars)."""
-        out: dict[str, Any] = {"path": self.path, "runway_level": self.level}
+        out: dict[str, Any] = {
+            "path": self.path,
+            "runway_level": self.level,
+            "refresh_requested": self.refresh_requested,
+            "refresh_attempted": self.refresh_attempted,
+            "refresh_outcome": self.refresh_outcome,
+        }
         if self.runway_days is not None:
             out["runway_days"] = self.runway_days
         if self.refreshed:
@@ -128,11 +136,17 @@ def check_fomc_calendar(
     refreshed = False
     added: tuple[str, ...] = ()
     refresh_problem = False
+    refresh_attempted = False
+
+    def tracked_fetch(**kwargs: Any) -> str:
+        nonlocal refresh_attempted
+        refresh_attempted = True
+        return fetch(**kwargs)
 
     if refresh:
         try:
             added, notes, refresh_problem = _try_refresh(
-                resolved, today, fetch, timeout_seconds
+                resolved, today, tracked_fetch, timeout_seconds
             )
             refreshed = bool(added)
             messages.extend(notes)
@@ -160,6 +174,17 @@ def check_fomc_calendar(
         refreshed=refreshed,
         added_dates=added,
         messages=messages,
+        refresh_requested=refresh,
+        refresh_attempted=refresh_attempted,
+        refresh_outcome=(
+            "disabled"
+            if not refresh
+            else "failed"
+            if refresh_problem
+            else "updated"
+            if refreshed
+            else "no_change"
+        ),
     )
 
 

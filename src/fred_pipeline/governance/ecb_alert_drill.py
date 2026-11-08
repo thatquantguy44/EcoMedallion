@@ -27,7 +27,6 @@ from fred_pipeline.governance.ecb_alerting import (
 from fred_pipeline.governance.email_transport import (
     EmailTransport,
     FileEmailTransport,
-    build_transport,
 )
 
 
@@ -69,19 +68,9 @@ def _live_drill_config(config: AlertingConfig, *, environment: str) -> AlertingC
         raise ValueError("live alert drill requires alerting.enabled: true")
     if not config.ecb_assets.enabled:
         raise ValueError("live alert drill requires ecb_assets.enabled: true")
-    if config.transport.kind in {"console", "file"}:
-        raise ValueError(
-            "live alert drill requires smtp, outlook_smtp, or microsoft_graph; "
-            f"configured transport is {config.transport.kind!r}"
-        )
     if config.policy == "never":
         raise ValueError("live alert drill cannot run with policy: never")
-    configured_values = {
-        "from_address": config.from_address,
-        "transport.username": config.transport.username,
-        "transport.tenant_id": config.transport.tenant_id,
-        "transport.client_id": config.transport.client_id,
-    }
+    configured_values = {}
     for verdict in ("partial", "failure"):
         if not config.should_send(verdict, environment):
             raise ValueError(
@@ -89,6 +78,17 @@ def _live_drill_config(config: AlertingConfig, *, environment: str) -> AlertingC
                 f"environment {environment!r}"
             )
         route = config.route_for(verdict)
+        profile = config.profile_for(verdict)
+        if profile.transport.kind in {"console", "file"}:
+            raise ValueError(
+                "live alert drill requires smtp, outlook_smtp, or microsoft_graph; "
+                f"configured transport is {profile.transport.kind!r}"
+            )
+        configured_values[f"{verdict}.from_address"] = profile.from_address
+        for field in ("username", "tenant_id", "client_id"):
+            configured_values[f"{verdict}.transport.{field}"] = getattr(
+                profile.transport, field
+            )
         for index, address in enumerate((*route.to, *route.cc, *route.bcc)):
             configured_values[f"routes.{verdict}[{index}]"] = address
     placeholders = [
@@ -111,6 +111,8 @@ def run_ecb_alert_drill(
     live_delivery: bool = False,
     environment: str = "prod",
     transport: EmailTransport | None = None,
+    http_client: Any = None,
+    smtp_routes: Any = None,
 ) -> dict[str, Any]:
     """Deliver four synthetic alerts and return an evidence manifest.
 
@@ -126,7 +128,7 @@ def run_ecb_alert_drill(
     run_dir.mkdir(parents=True, exist_ok=False)
     if live_delivery:
         drill_config = _live_drill_config(config, environment=environment)
-        delivery_transport = transport or build_transport(drill_config)
+        delivery_transport = transport
         delivery_environment = environment
     else:
         drill_config = _drill_config(config, run_dir)
@@ -207,6 +209,8 @@ def run_ecb_alert_drill(
             environment=delivery_environment,
             config=drill_config,
             transport=delivery_transport,
+            http_client=http_client,
+            smtp_routes=smtp_routes,
             now=_FIXTURE_NOW,
         )
         after = {path.name for path in run_dir.iterdir()}
@@ -248,7 +252,7 @@ def run_ecb_alert_drill(
         "warehouse_opened": False,
         "network_used": live_delivery,
         "output_directory": str(run_dir),
-        "configured_transport_kind": config.transport.kind,
+        "configured_transport_kind": config.profile_for().transport.kind,
         "configured_alerting_enabled": config.enabled,
         "delivery_environment": delivery_environment,
         "scenarios": evidence,

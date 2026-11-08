@@ -24,10 +24,19 @@ from typing import Any, Optional
 
 import yaml
 
+from fred_pipeline.governance.smtp_network import SmtpNetworkConfig
+
 DEFAULT_ALERTING_PATH = "config/alerting.yml"
 
 #: Transports understood by :mod:`fred_pipeline.governance.email_transport`.
-VALID_TRANSPORTS = ("outlook_smtp", "smtp", "microsoft_graph", "console", "file")
+VALID_TRANSPORTS = (
+    "outlook_smtp",
+    "outlook_com_smtp",
+    "smtp",
+    "microsoft_graph",
+    "console",
+    "file",
+)
 
 #: When to send. Mirrors the existing ``notify_on`` vocabulary so the email and
 #: webhook channels can be reasoned about together.
@@ -72,12 +81,16 @@ class TransportConfig:
     host: str = ""
     port: int = 587
     use_starttls: bool = True
+    tls: str = ""
+    auth: str = ""
+    network: SmtpNetworkConfig | None = None
     username: str = ""
     #: Name of the env var holding the password / client secret.
     password_env: str = ""
     tenant_id: str = ""
     client_id: str = ""
     client_secret_env: str = ""
+    token_cache_path_env: str = ""
     #: For kind='file' — where to write the rendered message instead of sending.
     output_dir: str = ""
     timeout_seconds: int = 30
@@ -88,18 +101,62 @@ class TransportConfig:
                 f"unknown transport kind {self.kind!r}; expected one of "
                 f"{list(VALID_TRANSPORTS)}"
             )
-        if self.kind in ("outlook_smtp", "smtp"):
+        if self.kind in ("outlook_smtp", "outlook_com_smtp", "smtp"):
             if not self.host:
                 raise AlertingConfigError(f"transport {self.kind!r} requires 'host'")
             if not 1 <= int(self.port) <= 65535:
                 raise AlertingConfigError(f"invalid port {self.port!r}")
+            if self.smtp_tls not in ("starttls", "implicit_tls", "none"):
+                raise AlertingConfigError(
+                    "SMTP tls must be starttls, implicit_tls or none"
+                )
+            if self.smtp_auth not in ("none", "password", "oauth2"):
+                raise AlertingConfigError("SMTP auth must be none, password or oauth2")
+            if self.smtp_auth != "none" and self.smtp_tls == "none":
+                raise AlertingConfigError(
+                    "authenticated SMTP requires TLS; migrate the cleartext configuration"
+                )
+            if self.smtp_auth == "password" and (
+                not self.username or not self.password_env
+            ):
+                raise AlertingConfigError(
+                    "SMTP password auth requires username and password_env"
+                )
+            if self.smtp_auth == "none" and (self.username or self.password_env):
+                raise AlertingConfigError(
+                    "SMTP auth none cannot include username or password_env"
+                )
+            if self.smtp_auth == "oauth2" and (not self.username or self.password_env):
+                raise AlertingConfigError(
+                    "SMTP OAuth requires username and cannot use password_env"
+                )
+            if self.kind == "outlook_com_smtp" and (
+                self.host != "smtp-mail.outlook.com"
+                or self.port != 587
+                or self.smtp_tls != "starttls"
+                or self.smtp_auth != "oauth2"
+            ):
+                raise AlertingConfigError(
+                    "outlook_com_smtp requires smtp-mail.outlook.com:587, STARTTLS and OAuth2"
+                )
+        if self.timeout_seconds <= 0:
+            raise AlertingConfigError("transport timeout_seconds must be positive")
         if self.kind == "microsoft_graph":
+            if self.auth not in ("", "client_credentials", "delegated"):
+                raise AlertingConfigError(
+                    "Microsoft Graph auth must be client_credentials or delegated"
+                )
             missing = [
                 name
                 for name, value in (
                     ("tenant_id", self.tenant_id),
                     ("client_id", self.client_id),
-                    ("client_secret_env", self.client_secret_env),
+                    (
+                        "client_secret_env",
+                        self.client_secret_env
+                        if self.auth != "delegated"
+                        else "not required",
+                    ),
                 )
                 if not value
             ]
@@ -107,8 +164,44 @@ class TransportConfig:
                 raise AlertingConfigError(
                     f"transport 'microsoft_graph' requires {missing}"
                 )
+            if self.auth == "delegated" and self.client_secret_env:
+                raise AlertingConfigError(
+                    "delegated Graph cannot use client_secret_env"
+                )
+            if (
+                not re.fullmatch(r"[A-Za-z0-9._-]+", self.tenant_id)
+                or ".." in self.tenant_id
+            ):
+                raise AlertingConfigError("invalid Graph tenant_id")
+        if (self.kind == "microsoft_graph" and self.auth == "delegated") or (
+            self.kind in ("outlook_com_smtp", "smtp", "outlook_smtp")
+            and self.smtp_auth == "oauth2"
+        ):
+            if (
+                not self.client_id
+                or not self.tenant_id
+                or not self.token_cache_path_env
+            ):
+                raise AlertingConfigError(
+                    "delegated OAuth requires client_id, tenant_id and token_cache_path_env"
+                )
+            if (
+                not re.fullmatch(r"[A-Za-z0-9._-]+", self.tenant_id)
+                or ".." in self.tenant_id
+            ):
+                raise AlertingConfigError("invalid OAuth tenant_id")
         if self.kind == "file" and not self.output_dir:
             raise AlertingConfigError("transport 'file' requires 'output_dir'")
+
+    @property
+    def smtp_tls(self) -> str:
+        return self.tls or ("starttls" if self.use_starttls else "none")
+
+    @property
+    def smtp_auth(self) -> str:
+        return self.auth or (
+            "password" if self.username or self.password_env else "none"
+        )
 
     def resolve_secret(self) -> str:
         """Read the credential from the environment at send time.
@@ -128,10 +221,18 @@ class RouteConfig:
     to: tuple[str, ...] = ()
     cc: tuple[str, ...] = ()
     bcc: tuple[str, ...] = ()
+    profile: str = ""
 
     @property
     def has_recipients(self) -> bool:
         return bool(self.to or self.cc or self.bcc)
+
+
+@dataclass(frozen=True)
+class EmailProfile:
+    from_address: str
+    from_name: str = "FRED pipeline"
+    transport: TransportConfig = field(default_factory=TransportConfig)
 
 
 @dataclass(frozen=True)
@@ -178,6 +279,8 @@ class AlertingConfig:
     #: Only alert for these environments; empty = all.
     environments: tuple[str, ...] = ()
     transport: TransportConfig = field(default_factory=TransportConfig)
+    profiles: dict[str, EmailProfile] = field(default_factory=dict)
+    default_profile: str = ""
     routes: dict[str, RouteConfig] = field(default_factory=dict)
     #: Attach the full stage detail as a JSON attachment.
     attach_run_json: bool = False
@@ -190,12 +293,51 @@ class AlertingConfig:
             raise AlertingConfigError(
                 f"policy {self.policy!r} must be one of {list(VALID_POLICIES)}"
             )
-        if self.enabled and not self.from_address:
+        if self.profiles:
+            if (
+                not isinstance(self.default_profile, str)
+                or self.default_profile not in self.profiles
+            ):
+                raise AlertingConfigError(
+                    "default_profile must name a configured profile"
+                )
+            for name, route in self.routes.items():
+                if route.profile and route.profile not in self.profiles:
+                    raise AlertingConfigError(
+                        f"routes.{name} references an unknown profile"
+                    )
+        elif self.default_profile or any(
+            route.profile for route in self.routes.values()
+        ):
+            raise AlertingConfigError("profile references require profiles")
+        if self.enabled and not self.profiles and not self.from_address:
             raise AlertingConfigError("alerting is enabled but 'from_address' is empty")
+        profiles = (
+            self.profiles.values()
+            if self.profiles
+            else (EmailProfile(self.from_address, self.from_name, self.transport),)
+        )
+        for profile in profiles:
+            transport = profile.transport
+            if (
+                transport.kind in ("smtp", "outlook_smtp", "outlook_com_smtp")
+                and transport.smtp_auth == "oauth2"
+                and profile.from_address.casefold() != transport.username.casefold()
+            ):
+                raise AlertingConfigError(
+                    "SMTP OAuth sender must match the authenticated username"
+                )
 
     def route_for(self, verdict: str) -> RouteConfig:
         """Recipients for a verdict, falling back to the 'default' route."""
         return self.routes.get(verdict) or self.routes.get("default") or RouteConfig()
+
+    def profile_for(self, verdict: str = "") -> EmailProfile:
+        if self.profiles:
+            return self.profiles[
+                self.route_for(verdict).profile or self.default_profile
+            ]
+        return EmailProfile(self.from_address, self.from_name, self.transport)
 
     def should_send(self, verdict: str, environment: str = "") -> bool:
         """Whether an email should go out for this verdict in this environment."""
@@ -212,6 +354,12 @@ def _reject_inline_secrets(raw: dict[str, Any], *, where: str) -> None:
     for key, value in raw.items():
         lowered = key.lower()
         if lowered.endswith("_env"):
+            if not isinstance(value, str) or (
+                value and not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", value)
+            ):
+                raise AlertingConfigError(
+                    f"{where}.{key} must name an environment variable"
+                )
             continue
         if any(hint in lowered for hint in _SECRET_HINTS):
             raise AlertingConfigError(
@@ -237,11 +385,15 @@ def _parse_transport(raw: Any) -> TransportConfig:
         "host",
         "port",
         "use_starttls",
+        "tls",
+        "auth",
+        "network",
         "username",
         "password_env",
         "tenant_id",
         "client_id",
         "client_secret_env",
+        "token_cache_path_env",
         "output_dir",
         "timeout_seconds",
     }
@@ -251,16 +403,37 @@ def _parse_transport(raw: Any) -> TransportConfig:
             f"transport has unknown field(s): {sorted(unknown)}. "
             f"Allowed: {sorted(known)}"
         )
+    if "tls" in raw and "use_starttls" in raw:
+        raise AlertingConfigError("transport cannot specify both tls and use_starttls")
+    if "use_starttls" in raw and not isinstance(raw["use_starttls"], bool):
+        raise AlertingConfigError("transport use_starttls must be a boolean")
+    kind = raw.get("kind", "console")
+    try:
+        network = (
+            SmtpNetworkConfig.from_mapping(raw["network"]) if "network" in raw else None
+        )
+    except ValueError as exc:
+        raise AlertingConfigError(str(exc)) from None
+    if network is not None and kind not in ("smtp", "outlook_smtp", "outlook_com_smtp"):
+        raise AlertingConfigError("transport network is only supported for SMTP")
     return TransportConfig(
-        kind=raw.get("kind", "console"),
-        host=raw.get("host", ""),
+        kind=kind,
+        host=raw.get(
+            "host", "smtp-mail.outlook.com" if kind == "outlook_com_smtp" else ""
+        ),
         port=int(raw.get("port", 587)),
         use_starttls=bool(raw.get("use_starttls", True)),
+        tls=raw.get("tls", ""),
+        auth=raw.get("auth", "oauth2" if kind == "outlook_com_smtp" else ""),
+        network=network,
         username=raw.get("username", ""),
         password_env=raw.get("password_env", ""),
-        tenant_id=raw.get("tenant_id", ""),
+        tenant_id=raw.get(
+            "tenant_id", "consumers" if kind == "outlook_com_smtp" else ""
+        ),
         client_id=raw.get("client_id", ""),
         client_secret_env=raw.get("client_secret_env", ""),
+        token_cache_path_env=raw.get("token_cache_path_env", ""),
         output_dir=raw.get("output_dir", ""),
         timeout_seconds=int(raw.get("timeout_seconds", 30)),
     )
@@ -286,7 +459,13 @@ def _parse_routes(raw: Any) -> dict[str, RouteConfig]:
             entry = {"to": entry}
         if not isinstance(entry, dict):
             raise AlertingConfigError(f"routes.{verdict} must be a mapping or a list")
-        unknown_fields = set(entry) - {"to", "cc", "bcc"}
+        if "profile" in entry and (
+            not isinstance(entry["profile"], str) or not entry["profile"]
+        ):
+            raise AlertingConfigError(
+                f"routes.{verdict}.profile must be a nonempty string"
+            )
+        unknown_fields = set(entry) - {"to", "cc", "bcc", "profile"}
         if unknown_fields:
             raise AlertingConfigError(
                 f"routes.{verdict} has unknown field(s): {sorted(unknown_fields)}"
@@ -295,8 +474,36 @@ def _parse_routes(raw: Any) -> dict[str, RouteConfig]:
             to=_validate_emails(entry.get("to"), where=f"routes.{verdict}.to"),
             cc=_validate_emails(entry.get("cc"), where=f"routes.{verdict}.cc"),
             bcc=_validate_emails(entry.get("bcc"), where=f"routes.{verdict}.bcc"),
+            profile=entry.get("profile", ""),
         )
     return routes
+
+
+def _parse_profiles(raw: Any) -> dict[str, EmailProfile]:
+    if not isinstance(raw, dict) or not raw:
+        raise AlertingConfigError("profiles must be a nonempty mapping")
+    profiles = {}
+    for name, entry in raw.items():
+        if not isinstance(name, str) or not name or not isinstance(entry, dict):
+            raise AlertingConfigError("each profile requires a name and mapping")
+        unknown = set(entry) - {"from_address", "from_name", "transport"}
+        if unknown:
+            raise AlertingConfigError(
+                f"profiles.{name} has unknown fields: {sorted(unknown)}"
+            )
+        _reject_inline_secrets(entry, where=f"profiles.{name}")
+        address = entry.get("from_address", "")
+        if not address:
+            raise AlertingConfigError(f"profiles.{name} requires from_address")
+        _validate_emails([address], where=f"profiles.{name}.from_address")
+        if "transport" not in entry:
+            raise AlertingConfigError(f"profiles.{name} requires transport")
+        profiles[name] = EmailProfile(
+            address,
+            entry.get("from_name", "FRED pipeline"),
+            _parse_transport(entry["transport"]),
+        )
+    return profiles
 
 
 def _parse_ecb_assets(raw: Any) -> ECBAssetsAlertConfig:
@@ -342,8 +549,11 @@ def load_alerting_config(path: Optional[str] = None) -> AlertingConfig:
     resolved = path or os.environ.get("FRED_ALERTING_FILE") or DEFAULT_ALERTING_PATH
     if not resolved or not os.path.isfile(resolved):
         return AlertingConfig()
-    with open(resolved, "r", encoding="utf-8") as fh:
-        data = yaml.safe_load(fh) or {}
+    try:
+        with open(resolved, "r", encoding="utf-8") as fh:
+            data = yaml.safe_load(fh) or {}
+    except yaml.YAMLError:
+        raise AlertingConfigError("alerting configuration is not valid YAML") from None
     if not isinstance(data, dict):
         raise AlertingConfigError(f"{resolved} must be a mapping at the top level")
 
@@ -355,6 +565,8 @@ def load_alerting_config(path: Optional[str] = None) -> AlertingConfig:
         "subject_prefix",
         "environments",
         "transport",
+        "profiles",
+        "default_profile",
         "routes",
         "attach_run_json",
         "max_failures_listed",
@@ -371,6 +583,14 @@ def load_alerting_config(path: Optional[str] = None) -> AlertingConfig:
         where=resolved,
     )
 
+    profile_mode = "profiles" in data
+    if profile_mode and any(
+        key in data for key in ("transport", "from_address", "from_name")
+    ):
+        raise AlertingConfigError(
+            "profiles cannot be mixed with root transport or sender fields"
+        )
+    profiles = _parse_profiles(data["profiles"]) if profile_mode else {}
     from_address = data.get("from_address", "")
     if from_address:
         _validate_emails([from_address], where="from_address")
@@ -387,6 +607,8 @@ def load_alerting_config(path: Optional[str] = None) -> AlertingConfig:
         subject_prefix=data.get("subject_prefix", "[FRED]"),
         environments=tuple(str(e) for e in environments),
         transport=_parse_transport(data.get("transport")),
+        profiles=profiles,
+        default_profile=data.get("default_profile", ""),
         routes=_parse_routes(data.get("routes")),
         attach_run_json=bool(data.get("attach_run_json", False)),
         max_failures_listed=int(data.get("max_failures_listed", 25)),
