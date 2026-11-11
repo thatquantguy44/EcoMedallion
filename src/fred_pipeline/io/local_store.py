@@ -39,12 +39,14 @@ from fred_pipeline.manifest import Manifest
 from fred_pipeline.meta import build_meta_rows
 from fred_pipeline.quality import QualityReport
 from fred_pipeline.timing import timed
+from fred_pipeline.performance import span, submit_with_context
 from fred_pipeline.warehouse import dq_rows
 
 log = logging.getLogger(__name__)
 
-# spec003 Phase 2 re-baseline: per-stage timing for _build_gold_inner(),
-# gated by an env var so routine runs pay zero overhead. The prior
+# spec003 Phase 2 re-baseline: per-stage timing for _build_gold_inner().
+# Spec017 collects these spans during a measured run regardless of log verbosity.
+# The prior
 # re-baseline attempt (see specs/spec003 "Phase 2 attempt on 2026-09-12")
 # only had one wall-clock number for the whole rebuild, which isn't enough
 # to tell whether Phase 1 (already shipped) closed the gap or whether the
@@ -68,11 +70,8 @@ _MAX_WORKERS_OVERRIDE = os.environ.get("FRED_GOLD_MAX_WORKERS")
 
 
 def _stage_timed(label: str):
-    """`timed(label)` when stage timing is on, else a plain pass-through
-    decorator -- so instrumentation costs nothing when the env var is unset."""
-    if _STAGE_TIMING_ENABLED:
-        return timed(f"gold.{label}", logger=log)
-    return lambda fn: fn
+    """Collect stage spans; retain the existing opt-in timing log output."""
+    return timed(f"gold.{label}", logger=log, log_completion=_STAGE_TIMING_ENABLED)
 
 
 def _index_by_series(rows: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
@@ -165,7 +164,7 @@ def _compute_parallel(tasks: dict[str, Callable[[], Any]]) -> dict[str, Any]:
         max_workers = min(len(tasks), os.cpu_count() or 1)
     out: dict[str, Any] = {}
     with ThreadPoolExecutor(max_workers=max_workers) as pool:
-        futures = {pool.submit(fn): name for name, fn in tasks.items()}
+        futures = {submit_with_context(pool, fn): name for name, fn in tasks.items()}
         for fut in as_completed(futures):
             out[futures[fut]] = fut.result()
     return out
@@ -1042,6 +1041,12 @@ class LocalWarehouse:
 
     # ---- low-level helpers ---------------------------------------------
 
+    @timed(
+        "warehouse.write",
+        log_completion=False,
+        attributes=lambda self, table, *_a, **_k: {"table": table},
+        count_result="rows_written",
+    )
     def _insert(
         self,
         table: str,
@@ -1077,6 +1082,12 @@ class LocalWarehouse:
             self.conn.commit()
         return len(rows)
 
+    @timed(
+        "warehouse.write_frame",
+        log_completion=False,
+        attributes=lambda self, table, *_a, **_k: {"table": table},
+        count_result="rows_written",
+    )
     def _insert_frame(
         self,
         table: str,
@@ -1110,10 +1121,17 @@ class LocalWarehouse:
             self.conn.commit()
         return n
 
+    @timed(
+        "warehouse.read",
+        log_completion=False,
+        attributes=lambda self, table: {"table": table},
+        count_result="rows",
+    )
     def _read(self, table: str) -> list[dict[str, Any]]:
         cur = self.conn.execute(f"SELECT * FROM {table}")
         return [dict(row) for row in cur.fetchall()]
 
+    @timed("gold.read_latest_subset", log_completion=False, count_result="rows")
     def _read_gold_latest_subset(
         self, *, series_ids: Sequence[str]
     ) -> list[dict[str, Any]]:
@@ -1158,6 +1176,7 @@ class LocalWarehouse:
             int(summary["row_count"]),
         )
 
+    @timed("gold.read_silver_subset", log_completion=False, count_result="rows")
     def _read_gold_silver_subset(
         self,
         *,
@@ -2120,6 +2139,7 @@ class LocalWarehouse:
         row = cur.fetchone()
         return row[0] if row else None
 
+    @timed("bronze.write", log_completion=False, count_result="rows_written")
     def write_bronze(self, rows: list[dict[str, Any]]) -> int:
         return self._insert("bronze_fred_api_response", rows)
 
@@ -2136,6 +2156,7 @@ class LocalWarehouse:
         sql += " ORDER BY ingested_at"
         return self.query(sql, params)
 
+    @timed("silver.merge", log_completion=False, count_result="rows_written")
     def merge_silver(self, rows: list[dict[str, Any]]) -> int:
         """Merge compact current state and append changed observed states.
 
@@ -2201,7 +2222,8 @@ class LocalWarehouse:
             self.conn.rollback()
             raise
         else:
-            self.conn.commit()
+            with span("warehouse.commit"):
+                self.conn.commit()
             return result
         finally:
             self._defer_commits = False
@@ -3225,6 +3247,7 @@ class LocalWarehouse:
     def persist_dq(self, run_id: str, report: QualityReport) -> None:
         self.persist_dq_reports(run_id, [report])
 
+    @timed("audit.quality", log_completion=False)
     def persist_dq_reports(self, run_id: str, reports: list[QualityReport]) -> None:
         self._insert(
             "audit_data_quality_result",

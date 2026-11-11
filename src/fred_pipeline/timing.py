@@ -12,10 +12,11 @@ import functools
 import inspect
 import logging
 import time
+from contextlib import contextmanager, nullcontext
 from collections.abc import Callable
 from typing import Any, TypeVar
 
-from fred_pipeline.performance import span
+from fred_pipeline.performance import Measurement, span
 
 F = TypeVar("F", bound=Callable[..., Any])
 
@@ -26,6 +27,9 @@ def timed(
     logger: logging.Logger | None = None,
     progress_callback: Callable[[str, float], None] | None = None,
     log_completion: bool = True,
+    attributes: Callable[..., dict[str, Any]] | None = None,
+    count_result: str | None = None,
+    collect: bool = True,
 ) -> Callable[[F], F]:
     """Log the wrapped callable's elapsed wall-clock time on return or raise.
 
@@ -41,6 +45,29 @@ def timed(
         label = name or func.__qualname__
         log = logger or logging.getLogger(func.__module__)
 
+        @contextmanager
+        def measure(args: Any, kwargs: Any):
+            tags = {}
+            if attributes is not None:
+                try:
+                    tags = attributes(*args, **kwargs)
+                except Exception:
+                    log.warning("Timing attributes unavailable for %s", label)
+            start = time.perf_counter()
+            try:
+                with (
+                    span(label, **tags)
+                    if collect
+                    else nullcontext(Measurement(name=label))
+                ) as measurement:
+                    yield measurement
+            except BaseException:
+                if log_completion:
+                    log.error(
+                        "%s failed after %.2fs", label, time.perf_counter() - start
+                    )
+                raise
+
         def completed(start: float) -> None:
             elapsed = time.perf_counter() - start
             if log_completion:
@@ -54,8 +81,12 @@ def timed(
         @functools.wraps(func)
         def wrapper(*args: Any, **kwargs: Any) -> Any:
             start = time.perf_counter()
-            with span(label):
+            with measure(args, kwargs) as measurement:
                 result = func(*args, **kwargs)
+                if count_result and isinstance(result, (int, list, tuple)):
+                    measurement.count(
+                        count_result, result if isinstance(result, int) else len(result)
+                    )
             completed(start)
             return result
 
@@ -64,8 +95,13 @@ def timed(
             @functools.wraps(func)
             async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
                 start = time.perf_counter()
-                with span(label):
+                with measure(args, kwargs) as measurement:
                     result = await func(*args, **kwargs)
+                    if count_result and isinstance(result, (int, list, tuple)):
+                        measurement.count(
+                            count_result,
+                            result if isinstance(result, int) else len(result),
+                        )
                 completed(start)
                 return result
 

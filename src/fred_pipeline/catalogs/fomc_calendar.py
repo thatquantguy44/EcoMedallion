@@ -36,6 +36,8 @@ Two fetch backends, because they fail in different ways:
 
 from __future__ import annotations
 
+from fred_pipeline.timing import timed
+
 import re
 import sys
 from collections.abc import Iterable
@@ -302,6 +304,7 @@ def _year_segments(html: str) -> list[tuple[int, str]]:
     return segments
 
 
+@timed("fomc.parse", log_completion=False)
 def parse_fomc_calendar(html: str, *, warn: bool = True) -> list[FOMCMeeting]:
     """Parse the Fed's FOMC calendar page into scheduled meetings.
 
@@ -463,6 +466,7 @@ class CalendarDiff:
         return not self.missing_from_config and not self.absent_upstream
 
 
+@timed("fomc.validate", log_completion=False)
 def diff_against_config(
     scraped: Iterable[FOMCMeeting],
     configured: Iterable[date],
@@ -710,6 +714,7 @@ def _bump_provenance_lines(
                 break
 
 
+@timed("fomc.update_config", log_completion=False)
 def apply_calendar_refresh(
     config_text: str,
     new_meetings: Iterable[FOMCMeeting],
@@ -780,6 +785,7 @@ DEFAULT_USER_AGENT = (
 )
 
 
+@timed("fomc.fetch", log_completion=False)
 def fetch_calendar_html(
     url: str = FOMC_CALENDAR_URL,
     *,

@@ -13,6 +13,7 @@ import json
 import logging
 import math
 import os
+import subprocess
 import threading
 import time
 import uuid
@@ -24,8 +25,28 @@ from pathlib import Path
 from typing import Any, Callable, Iterator
 
 log = logging.getLogger(__name__)
+
+
+@functools.lru_cache(maxsize=1)
+def code_revision() -> str:
+    override = os.getenv("FRED_CODE_REVISION")
+    if override:
+        return override[:80]
+    try:
+        return subprocess.check_output(
+            ["git", "rev-parse", "HEAD"],
+            cwd=Path(__file__).resolve().parents[2],
+            stderr=subprocess.DEVNULL,
+            timeout=2,
+            text=True,
+        ).strip()
+    except Exception:
+        return "unknown"
+
+
 _collector = contextvars.ContextVar("performance_collector", default=None)
 _parent = contextvars.ContextVar("performance_parent", default=None)
+_tags = contextvars.ContextVar("performance_tags", default=None)
 _ATTRIBUTES = frozenset(
     {
         "source",
@@ -43,6 +64,7 @@ _ATTRIBUTES = frozenset(
         "artifact_kind",
         "release_id",
         "cache_hit",
+        "kind",
     }
 )
 
@@ -107,11 +129,17 @@ class PerformanceCollector:
             output_dir or os.getenv("FRED_PERFORMANCE_DIR", "data/performance")
         )
         self._lock = threading.Lock()
+        self._owner_thread = threading.get_ident()
+        self.flush_batch_size = 256
+        self.flush_interval_seconds = 5.0
+        self._last_flush_ns = self.started_ns
         self._records: deque[dict[str, Any]] = deque(maxlen=self.max_spans)
         self._pending: deque[dict[str, Any]] = deque(maxlen=self.max_spans)
         self._stages: list[dict[str, Any]] = []
+        self._active: dict[str, tuple[Measurement, dict[str, Any]]] = {}
         self._slowest: list[dict[str, Any]] = []
         self._aggregates: dict[tuple[str, str], dict[str, Any]] = {}
+        self._retained_count = 0
         self._sink: Callable[[list[dict[str, Any]]], None] | None = None
         self.dropped_events = 0
         self.telemetry_errors: set[str] = set()
@@ -121,10 +149,12 @@ class PerformanceCollector:
     def activate(self) -> Iterator[PerformanceCollector]:
         token = _collector.set(self)
         parent_token = _parent.set(None)
+        tags_token = _tags.set(None)
         try:
             yield self
         finally:
             _parent.reset(parent_token)
+            _tags.reset(tags_token)
             _collector.reset(token)
 
     @contextmanager
@@ -134,8 +164,13 @@ class PerformanceCollector:
         *,
         detailed: bool = False,
         _started_ns: int | None = None,
+        _started_at: str | None = None,
         **attributes: Any,
     ) -> Iterator[Measurement]:
+        attributes = {**(_tags.get() or {}), **attributes}
+        if isinstance(attributes.get("source"), str):
+            source = attributes["source"].strip().lower()
+            attributes["source"] = "ecb_assets" if source == "ecb mid" else source
         measurement = Measurement(
             name=name,
             attributes={
@@ -145,9 +180,37 @@ class PerformanceCollector:
             },
         )
         started = self.clock() if _started_ns is None else _started_ns
-        started_at = _utc()
+        started_at = _started_at or _utc()
         parent_id = _parent.get()
+        start_record = {
+            **asdict(measurement),
+            "run_id": self.run_id,
+            "parent_span_id": parent_id,
+            "started_at": started_at,
+            "ended_at": None,
+            "status": "running",
+            "offset_seconds": max(0, started - self.started_ns) / 1e9,
+            "duration_seconds": 0.0,
+            "error_type": "",
+            "event": "span_started",
+        }
+        retain = not detailed or self.detailed
+        with self._lock:
+            self._active[measurement.span_id] = (measurement, start_record)
+            if retain:
+                if len(self._pending) == self.max_spans:
+                    self.dropped_events += 1
+                self._pending.append(start_record)
+        if measurement.attributes.get("kind") == "stage":
+            self.flush()
         token = _parent.set(measurement.span_id)
+        tags_token = _tags.set(
+            {
+                key: value
+                for key, value in measurement.attributes.items()
+                if key in {"source", "series_id", "release_id"}
+            }
+        )
         error_type = ""
         try:
             yield measurement
@@ -164,6 +227,7 @@ class PerformanceCollector:
         finally:
             ended = self.clock()
             _parent.reset(token)
+            _tags.reset(tags_token)
             record = {
                 **asdict(measurement),
                 "run_id": self.run_id,
@@ -173,9 +237,14 @@ class PerformanceCollector:
                 "offset_seconds": max(0, started - self.started_ns) / 1e9,
                 "duration_seconds": max(0, ended - started) / 1e9,
                 "error_type": error_type,
+                "event": "span_finished",
             }
             try:
-                self._record(record, retain=not detailed or self.detailed)
+                with self._lock:
+                    self._active.pop(measurement.span_id, None)
+                self._record(record, retain=retain)
+                if measurement.attributes.get("kind") == "stage":
+                    self.flush()
             except Exception:
                 self.telemetry_errors.add("collection")
                 log.warning("Performance collection failed (%s)", self.run_id)
@@ -183,6 +252,9 @@ class PerformanceCollector:
     def _record(self, record: dict[str, Any], *, retain: bool) -> None:
         with self._lock:
             key = (record["name"], record["attributes"].get("source", ""))
+            if key not in self._aggregates and len(self._aggregates) >= 512:
+                self.telemetry_errors.add("aggregate_limit")
+                return
             aggregate = self._aggregates.setdefault(
                 key,
                 {
@@ -200,6 +272,14 @@ class PerformanceCollector:
             aggregate["worker_seconds"] += duration
             aggregate["failed"] += record["status"] in {"failed", "cancelled"}
             aggregate["samples"].append(duration)
+            aggregate["first_offset_seconds"] = min(
+                aggregate.get("first_offset_seconds", record["offset_seconds"]),
+                record["offset_seconds"],
+            )
+            aggregate["last_end_seconds"] = max(
+                aggregate.get("last_end_seconds", 0),
+                record["offset_seconds"] + duration,
+            )
             for name, value in record["attributes"].items():
                 if name in {"rows", "rows_written", "bytes", "retries"} and isinstance(
                     value, (int, float)
@@ -207,26 +287,58 @@ class PerformanceCollector:
                     aggregate["counters"][name] = (
                         aggregate["counters"].get(name, 0) + value
                     )
-            self._slowest.append(record)
-            self._slowest.sort(key=lambda r: r["duration_seconds"], reverse=True)
-            del self._slowest[10:]
+            if (
+                record["attributes"].get("kind") != "stage"
+                and not record["name"].startswith("report.")
+                and record["name"]
+                not in {
+                    "extract.materialize",
+                    "persist.series",
+                    "gold.compute_parallel_total",
+                }
+            ):
+                self._slowest.append(record)
+                self._slowest.sort(key=lambda r: r["duration_seconds"], reverse=True)
+                del self._slowest[10:]
             if not retain:
                 return
-            if record["parent_span_id"] is None and len(self._stages) < 128:
+            self._retained_count += 1
+            if (
+                record["parent_span_id"] is None
+                or record["attributes"].get("kind") == "stage"
+            ) and len(self._stages) < 128:
                 self._stages.append(record)
             self._records.append(record)
             if len(self._pending) == self.max_spans:
                 self.dropped_events += 1
             self._pending.append(record)
 
+    def mark_status(self, span_id: str, status: str) -> None:
+        with self._lock:
+            if span_id in self._active:
+                self._active[span_id][0].outcome(status)
+            for record in (*self._records, *self._stages):
+                if record["span_id"] == span_id:
+                    record["status"] = status
+
     def attach_sink(self, sink: Callable[[list[dict[str, Any]]], None]) -> None:
         self._sink = sink
 
-    def flush(self) -> None:
+    def flush(self, *, force: bool = True) -> None:
         """Best effort; caller owns the warehouse connection and flush cadence."""
+        if threading.get_ident() != self._owner_thread:
+            return
         with self._lock:
+            now = self.clock()
+            if (
+                not force
+                and len(self._pending) < self.flush_batch_size
+                and now - self._last_flush_ns < self.flush_interval_seconds * 1e9
+            ):
+                return
             records = list(self._pending)
             self._pending.clear()
+            self._last_flush_ns = now
         if not records:
             return
         try:
@@ -243,6 +355,9 @@ class PerformanceCollector:
                 self._sink(records)
             except Exception:
                 self.telemetry_errors.add("storage")
+                self._sink = (
+                    None  # Continue journaling without repeated database failures.
+                )
                 log.warning("Performance database flush failed (%s)", self.run_id)
 
     def snapshot(self) -> dict[str, Any]:
@@ -268,6 +383,7 @@ class PerformanceCollector:
                         "sampled": value["count"] > len(samples),
                     }
                 )
+                aggregates[-1]["counters"] = dict(value["counters"])
             return {
                 "schema_version": 1,
                 "run_id": self.run_id,
@@ -283,6 +399,11 @@ class PerformanceCollector:
                 "dropped_events": self.dropped_events,
                 "telemetry_errors": sorted(self.telemetry_errors),
                 "baseline": self.baseline,
+                "detailed": self.detailed,
+                "span_sample_count": len(self._records),
+                "retained_span_count": self._retained_count,
+                "span_samples_truncated": self._retained_count > len(self._records),
+                "unfinished_spans": [dict(value[1]) for value in self._active.values()],
             }
 
     def finish(self, status: str | None = None) -> dict[str, Any]:
@@ -294,7 +415,7 @@ class PerformanceCollector:
         self.flush()
         report = self.snapshot()
         self.write_artifact("json", json.dumps(report, indent=2))
-        return report
+        return self.snapshot()
 
     def write_artifact(self, suffix: str, content: str) -> None:
         try:
@@ -305,6 +426,21 @@ class PerformanceCollector:
             temporary.replace(target)
         except Exception:
             self.telemetry_errors.add("artifact")
+
+
+@contextmanager
+def suspend_performance() -> Iterator[None]:
+    token = _collector.set(None)
+    try:
+        yield
+    finally:
+        _collector.reset(token)
+
+
+def set_span_outcome(status: str) -> None:
+    collector = current_performance()
+    if collector is not None:
+        collector.mark_status(_parent.get(), status)
 
 
 @contextmanager
@@ -330,12 +466,14 @@ def submit_with_context(
     context = contextvars.copy_context()  # Each submission needs its own context.
     collector = current_performance()
     submitted = collector.clock() if collector is not None else 0
+    submitted_at = _utc()
 
     def invoke() -> Any:
         if collector is not None and queue_name:
             with collector.span(
                 queue_name,
                 _started_ns=submitted,
+                _started_at=submitted_at,
                 detailed=True,
                 **(queue_attributes or {}),
             ):
@@ -360,12 +498,17 @@ def performance_run(function: Callable[..., Any]) -> Callable[..., Any]:
             try:
                 result = function(*args, **kwargs)
             except BaseException:
-                collector.finish("failed")
+                collector.finish("failure")
                 raise
             else:
-                collector.finish(
-                    "failed" if isinstance(result, int) and result else None
+                status = (
+                    "failure"
+                    if isinstance(result, int) and result
+                    else "success"
+                    if collector.status == "running"
+                    else None
                 )
+                collector.finish(status)
                 return result
 
     return wrapped

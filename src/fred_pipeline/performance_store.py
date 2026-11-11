@@ -8,7 +8,7 @@ import statistics
 import uuid
 from typing import Any
 
-from fred_pipeline.performance import PerformanceCollector
+from fred_pipeline.performance import PerformanceCollector, suspend_performance
 
 RUN_COLUMNS = "run_id STRING, started_at STRING, ended_at STRING, status STRING, processing_seconds DOUBLE, comparison_key STRING, metadata_json STRING, summary_json STRING, delivery_json STRING"
 SPAN_COLUMNS = "span_id STRING, run_id STRING, parent_span_id STRING, name STRING, source STRING, series_id STRING, table_name STRING, status STRING, started_at STRING, ended_at STRING, offset_seconds DOUBLE, duration_seconds DOUBLE, attributes_json STRING, error_type STRING"
@@ -41,7 +41,8 @@ class PerformanceStore:
         if not rows:
             return
         if self.spark is None:
-            self.warehouse._insert(f"audit_{table}", rows, upsert_keys=[key])
+            with suspend_performance():
+                self.warehouse._insert(f"audit_{table}", rows, upsert_keys=[key])
             return
         temporary = f"performance_{uuid.uuid4().hex}"
         schema = RUN_COLUMNS if table == "run_performance" else SPAN_COLUMNS
@@ -57,7 +58,10 @@ class PerformanceStore:
 
     def write_spans(self, spans: list[dict[str, Any]]) -> None:
         rows = []
-        for record in spans:
+        # A flush can contain both start and finish events. Delta MERGE needs
+        # one source row per key; the final event supersedes the running state.
+        latest = {record["span_id"]: record for record in spans}
+        for record in latest.values():
             attributes = record["attributes"]
             rows.append(
                 {
