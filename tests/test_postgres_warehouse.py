@@ -1144,3 +1144,82 @@ def test_postgres_retains_changed_observed_states(postgres_dsn):
         assert history == [{"value": 1.25}, {"value": 1.30}, {"value": 1.25}]
     finally:
         wh.close()
+
+
+def test_postgres_legacy_history_backfill_bounds_memory(postgres_dsn, monkeypatch):
+    from datetime import date, timedelta
+
+    from fred_pipeline.data.observation_history import observation_event
+
+    wh = PostgresWarehouse(_config(), dsn=postgres_dsn)
+    rows = [
+        _silver_row(
+            "LEGACY",
+            (date(1990, 1, 1) + timedelta(days=i)).isoformat(),
+            "",
+            float(i),
+            1,
+        )
+        for i in range(10_001)
+    ]
+    try:
+        wh._insert("silver_fred_observation", rows)
+
+        def reject_unbounded_read(table):
+            raise AssertionError("history migration must stream compact Silver")
+
+        monkeypatch.setattr(wh, "_read", reject_unbounded_read)
+        original_insert = wh._insert
+        batch_sizes = []
+
+        def bounded_insert(table, batch, **kwargs):
+            batch_sizes.append(len(batch))
+            assert len(batch) <= 10_000
+            return original_insert(table, batch, **kwargs)
+
+        monkeypatch.setattr(wh, "_insert", bounded_insert)
+        wh._backfill_observation_history()
+        assert batch_sizes == [10_000, 1]
+        history = wh.query(
+            "SELECT * FROM silver.fred_observation_history ORDER BY observation_date"
+        )
+        assert len(history) == len(rows)
+        for actual, original in ((history[0], rows[0]), (history[-1], rows[-1])):
+            assert (
+                actual["observation_event_id"]
+                == observation_event(original)["observation_event_id"]
+            )
+        wh._backfill_observation_history()
+        assert wh.query(
+            "SELECT count(*) AS n FROM silver.fred_observation_history"
+        ) == [{"n": len(rows)}]
+    finally:
+        wh.close()
+
+
+def test_postgres_legacy_history_backfill_rolls_back_on_failure(
+    postgres_dsn, monkeypatch
+):
+    wh = PostgresWarehouse(_config(), dsn=postgres_dsn)
+    try:
+        wh._insert(
+            "silver_fred_observation",
+            [_silver_row("LEGACY", "2024-01-01", "", 1.0, 1)],
+        )
+        original_insert = wh._insert
+
+        def fail_after_history_insert(table, rows, **kwargs):
+            result = original_insert(table, rows, **kwargs)
+            if table == "silver_fred_observation_history":
+                raise RuntimeError("interrupted migration")
+            return result
+
+        monkeypatch.setattr(wh, "_insert", fail_after_history_insert)
+        with pytest.raises(RuntimeError, match="interrupted migration"):
+            wh._backfill_observation_history()
+        assert wh.query(
+            "SELECT count(*) AS n FROM silver.fred_observation_history"
+        ) == [{"n": 0}]
+        assert wh._defer_commits is False
+    finally:
+        wh.close()

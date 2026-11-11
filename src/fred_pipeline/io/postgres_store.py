@@ -269,19 +269,40 @@ class PostgresWarehouse:
         """Seed pre-Spec015 compact rows as their one known observed state."""
         from fred_pipeline.data.observation_history import observation_event
 
-        # This migration is intentionally one-time. Avoid a full compact-Silver
-        # scan and no-op upserts each time an established warehouse opens.
-        if self.query("SELECT 1 FROM silver.fred_observation_history LIMIT 1"):
-            return
-        rows = self._read("silver_fred_observation")
-        events = [observation_event(row) for row in rows]
-        if events:
-            self._insert(
-                "silver_fred_observation_history",
-                events,
-                upsert_keys=_UPSERT_KEYS["silver_fred_observation_history"],
-                conflict_where="FALSE",
-            )
+        # Keep this one-time migration bounded and atomic: partial history must
+        # never make the next startup mistake an interrupted seed for completion.
+        previous_defer = self._defer_commits
+        self._defer_commits = True
+        try:
+            with self._pg_conn.transaction():
+                with self._pg_conn.cursor() as cur:
+                    cur.execute(
+                        "LOCK TABLE silver.fred_observation_history "
+                        "IN SHARE ROW EXCLUSIVE MODE"
+                    )
+                    cur.execute("SELECT 1 FROM silver.fred_observation_history LIMIT 1")
+                    if cur.fetchone() is not None:
+                        return
+                total = 0
+                with self._pg_conn.cursor(name="observation_history_backfill") as cur:
+                    cur.execute("SELECT * FROM silver.fred_observation")
+                    while rows := cur.fetchmany(10_000):
+                        events = [observation_event(dict(row)) for row in rows]
+                        self._insert(
+                            "silver_fred_observation_history",
+                            events,
+                            upsert_keys=_UPSERT_KEYS["silver_fred_observation_history"],
+                            conflict_where="FALSE",
+                        )
+                        total += len(events)
+                        if total % 100_000 == 0:
+                            log.info(
+                                "Observation history migration: %s rows staged", total
+                            )
+                if total:
+                    log.info("Observation history migration: %s rows complete", total)
+        finally:
+            self._defer_commits = previous_defer
 
     def _ensure_upsert_keys(self, cur: Any) -> None:
         """Make sure every upsert target has the unique index ON CONFLICT needs.
