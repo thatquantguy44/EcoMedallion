@@ -279,20 +279,27 @@ def test_spark_due_date_watermark_tracks_changed_silver_rows(spark):
     from fred_pipeline.pipeline import _series_is_due
 
     table = "silver_due_gate_it"
-    config = SimpleNamespace(table=lambda _schema, _name: table)
+    history_table = "silver_due_gate_history_it"
+    config = SimpleNamespace(
+        table=lambda _schema, name: (
+            history_table if name == "fred_observation_history" else table
+        )
+    )
     warehouse = SparkWarehouse(config, spark)
     old_timezone = spark.conf.get("spark.sql.session.timeZone")
     spark.conf.set("spark.sql.session.timeZone", "America/New_York")
     try:
         # An absent Silver table means a first-run series must remain due.
         spark.sql(f"DROP TABLE IF EXISTS {table}")
+        spark.sql(f"DROP TABLE IF EXISTS {history_table}")
         assert warehouse.last_ingested_at_by_series() == {}
         spark.sql(
             f"""CREATE TABLE {table} (
                 source STRING, series_id STRING, observation_date DATE,
                 realtime_start DATE, realtime_end DATE, value DOUBLE,
                 raw_value STRING, is_missing BOOLEAN, row_hash STRING,
-                revision_number INT, ingested_at TIMESTAMP, run_id STRING
+                revision_number INT, ingested_at TIMESTAMP, run_id STRING,
+                observation_event_id STRING
             ) USING DELTA"""
         )
         row = {
@@ -340,6 +347,7 @@ def test_spark_due_date_watermark_tracks_changed_silver_rows(spark):
         )
     finally:
         spark.sql(f"DROP TABLE IF EXISTS {table}")
+        spark.sql(f"DROP TABLE IF EXISTS {history_table}")
         spark.conf.set("spark.sql.session.timeZone", old_timezone)
 
 
@@ -786,7 +794,7 @@ def _ddl_columns(table: str) -> list[str]:
 def terminal_build(spark, tmp_path_factory):
     """Build every terminal view once on real Delta, and hand back the config.
 
-    Inputs are deliberately small but *real*: a handful of cataloged series
+    Inputs are deliberately small and fictional: a handful of cataloged series
     (including a REGIONAL one, so dim_series' geo/metric are exercised), the
     curve tenors the spreads need, and USREC for the recession overlay. Tables
     whose inputs are absent simply come out empty -- which is the documented
@@ -888,6 +896,7 @@ def terminal_build(spark, tmp_path_factory):
                     "is_missing": False,
                 }
                 for series_id, value in mmkt_values.items()
+                if series_id != "DGS3MO"  # already present as the curve series
             )
         _silver_df(spark, observations).write.format("delta").mode("overwrite").option(
             "overwriteSchema", "true"
@@ -1059,3 +1068,32 @@ def test_benchmark_input_filters_future_before_selecting_vintage(spark):
     config = SimpleNamespace(table=lambda schema, table: "benchmark_silver_test")
     result = _collect_benchmark_as_of(config, spark, ["SOFR", "EFFR"], date(2024, 1, 5))
     assert {r["series_id"]: r["value"] for r in result} == {"SOFR": 2.2, "EFFR": 2.1}
+
+
+def test_sparse_fred_history_dataframe_retains_nullable_fields(spark):
+    """A fictional one-row FRED batch has all-null optional metadata columns."""
+    from fred_pipeline.data.observation_history import observation_event
+    from fred_pipeline.data.silver import _history_dataframe
+
+    event = observation_event(
+        {
+            "source": "fred",
+            "series_id": "DGS10",
+            "observation_date": "2024-01-01",
+            "realtime_start": "2024-01-01",
+            "realtime_end": "9999-12-31",
+            "value": 4.0,
+            "raw_value": "4.0",
+            "is_missing": False,
+            "row_hash": "h1",
+            "revision_number": 1,
+            "ingested_at": "2024-01-02T00:00:00+00:00",
+            "run_id": "r1",
+        }
+    )
+    result = _history_dataframe(spark, [event]).collect()[0].asDict()
+    assert result["series_id"] == "DGS10"
+    assert result["value"] == pytest.approx(4.0)
+    assert result["provider_valid_from"] is None
+    assert result["exact_value"] is None
+    assert result["unit_multiplier"] is None
