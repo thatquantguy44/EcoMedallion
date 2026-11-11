@@ -335,6 +335,15 @@ POWERBI_CATALOG: tuple[dict[str, Any], ...] = (
         "43-rate board: change bps, trend, spread-to-benchmark, regime tag.",
     ),
     _entry(
+        "mmkt_rate_snapshot",
+        "fact",
+        "MMKT",
+        "1 / instrument (latest)",
+        "money-market quote board with convention and freshness columns",
+        "Quoted and normalized money-market yields with quote conventions, "
+        "conversion details, observation dates, staleness and availability status.",
+    ),
+    _entry(
         "funding_tape_daily",
         "fact",
         "FUND",
