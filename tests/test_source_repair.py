@@ -123,3 +123,14 @@ def test_current_only_refresh_keeps_dates_unknown_and_cannot_enter_vintage_mode(
         repair.validate([source], "AKUR", "2024-01-01", "2026-10-31")
     with pytest.raises(ValueError):
         repair.validate([row()], "AKUR", "2024-01-01", "2026-10-31", current_only=True)
+
+
+def test_apply_validates_staged_ids_without_postgres_driver(tmp_path, monkeypatch):
+    import sys
+
+    (tmp_path / "manifest.json").write_text(
+        json.dumps({"series": {}, "start": "2024-01-01", "end": "2026-10-31"})
+    )
+    monkeypatch.setitem(sys.modules, "psycopg", None)
+    with pytest.raises(ValueError, match="series not successfully staged"):
+        repair.apply(SimpleNamespace(output=str(tmp_path), series="AKUR"))

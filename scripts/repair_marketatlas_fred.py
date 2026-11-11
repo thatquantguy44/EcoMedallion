@@ -248,13 +248,14 @@ SELECT series_id,observation_date,n,first_value,first_start,latest_value,latest_
 
 
 def apply(args):
-    from psycopg import sql
-
     root = Path(args.output).resolve()
     manifest = json.loads((root / "manifest.json").read_text())
     ids = args.series.split(",") if args.series else sorted(manifest["series"])
     if not set(ids) <= set(manifest["series"]):
         raise ValueError("series not successfully staged")
+
+    from psycopg import sql
+
     connection = connect()
     ensure_audit(connection)
     report = []
