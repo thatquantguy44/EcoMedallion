@@ -69,9 +69,12 @@ def build_message(
                 "total": summary.series_total,
                 "succeeded": summary.series_succeeded,
                 "failed": summary.series_failed,
+                "skipped_not_due": summary.series_skipped_not_due,
             },
             "stages": [record.to_dict() for record in summary.stages],
         }
+        if summary.performance is not None:
+            payload["performance"] = summary.performance
         attachments.append(
             (
                 f"run-{summary.run_id[:8]}.json",
@@ -104,6 +107,7 @@ def send_run_alert_result(
     config_path: Optional[str] = None,
     http_client: Any = None,
     smtp_routes: Any = None,
+    performance: dict[str, Any] | None = None,
 ) -> DeliveryResult:
     """Render and attempt the run summary, returning a structured outcome.
 
@@ -122,6 +126,7 @@ def send_run_alert_result(
             stages,
             series_failed=getattr(run, "series_failed", 0) or 0,
             series_total=getattr(run, "series_total", 0) or 0,
+            required_stages=tracker.required_stages,
         )
         summary = build_summary(
             run,
@@ -130,6 +135,7 @@ def send_run_alert_result(
             reason=reason,
             environment=environment,
             max_failures=config.max_failures_listed,
+            performance=performance,
         )
 
         if not config.should_send(verdict, environment):
