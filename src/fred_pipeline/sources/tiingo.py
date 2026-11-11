@@ -21,6 +21,7 @@ Tiingo-specific.
 from __future__ import annotations
 
 import logging
+import threading
 import time
 from typing import Any, Callable, Optional
 
@@ -96,19 +97,21 @@ def normalize_tiingo_observations(
             raw_value = rec.get(field)
             value = parse_value(raw_value)
             sid = f"{ticker}:{field}"
-            rows.append({
-                "source": source,
-                "series_id": sid,
-                "observation_date": obs_date,
-                "realtime_start": "",
-                "realtime_end": "",
-                "value": value,
-                "raw_value": None if raw_value is None else str(raw_value),
-                "is_missing": value is None,
-                "row_hash": _row_hash(sid, obs_date, "", raw_value),
-                "ingested_at": ingested_at,
-                "run_id": run_id,
-            })
+            rows.append(
+                {
+                    "source": source,
+                    "series_id": sid,
+                    "observation_date": obs_date,
+                    "realtime_start": "",
+                    "realtime_end": "",
+                    "value": value,
+                    "raw_value": None if raw_value is None else str(raw_value),
+                    "is_missing": value is None,
+                    "row_hash": _row_hash(sid, obs_date, "", raw_value),
+                    "ingested_at": ingested_at,
+                    "run_id": run_id,
+                }
+            )
     return rows
 
 
@@ -141,6 +144,8 @@ class TiingoClient(HTTPSource):
         # forward within one client's lifetime — no cycling back to an
         # already-exhausted key within the same run.
         self._backup_keys: list[str] = list(backup_api_keys or [])
+        self._key_lock = threading.Lock()
+        self._request_state = threading.local()
         super().__init__(
             base_url=base_url,
             session=session,
@@ -151,7 +156,11 @@ class TiingoClient(HTTPSource):
         )
 
     def _default_query(self) -> dict[str, Any]:
-        return {"token": self.api_key, "format": "json"}
+        key = self.api_key
+        # Record the actual transport key, rather than a potentially older
+        # snapshot taken before another worker rotated it.
+        self._request_state.key = key
+        return {"token": key, "format": "json"}
 
     @staticmethod
     def _is_quota_error(exc: "TiingoAPIError") -> bool:
@@ -180,25 +189,36 @@ class TiingoClient(HTTPSource):
         verbatim in Bronze and exploded per field by :func:`normalize`."""
         ticker = _ticker(series_id)
         params: dict[str, Any] = {
-            "startDate": str(observation_start)[:10] if observation_start
+            "startDate": str(observation_start)[:10]
+            if observation_start
             else FULL_HISTORY_START,
         }
         if observation_end:
             params["endDate"] = str(observation_end)[:10]
         endpoint = self.observations_endpoint(series_id)
         while True:
+            self._request_state.key = self.api_key
             try:
                 data = self._request(endpoint, params)
                 break
             except TiingoAPIError as exc:
-                if not (self._is_quota_error(exc) and self._backup_keys):
+                if not self._is_quota_error(exc):
                     raise
-                self.api_key = self._backup_keys.pop(0)
-                log.info(
-                    "Tiingo quota exhausted; rotating to backup API key "
-                    "(%d more in reserve) and retrying %s.",
-                    len(self._backup_keys), ticker,
-                )
+                with self._key_lock:
+                    if self.api_key != self._request_state.key:
+                        # Another worker already advanced the shared key while
+                        # this request was in flight. Retry that active key even
+                        # when the last reserve has now been consumed.
+                        continue
+                    if not self._backup_keys:
+                        raise
+                    self.api_key = self._backup_keys.pop(0)
+                    log.info(
+                        "Tiingo quota exhausted; rotating to backup API key "
+                        "(%d more in reserve) and retrying %s.",
+                        len(self._backup_keys),
+                        ticker,
+                    )
         if not isinstance(data, list):
             data = []
         return {"format": "tiingo", "ticker": ticker, "data": data}
