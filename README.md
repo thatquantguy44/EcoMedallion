@@ -392,7 +392,7 @@ only the flags that differ in meaning are listed per command. (Full detail:
 
 | Command | What it does | Key flags |
 |---|---|---|
-| `gold` | Rebuilds every Gold table from already-persisted Bronze/Silver | `--local --db-path` |
+| `gold` | Rebuilds every Gold table from already-persisted Bronze/Silver; see [benchmark as-of semantics](docs/handoffs/benchmark_board_as_of.md) | `--local --db-path`, `--benchmark-as-of` |
 | `replay` | Rebuilds Silver (+ Gold, unless `--no-gold`) from archived Bronze payloads — reprocesses raw data already on disk, e.g. after fixing a normalization/DQ bug | `--series`, `--no-gold`, `--local --db-path` |
 
 ### Maintenance / governance (metadata health, not observation data)

@@ -1116,7 +1116,7 @@ def test_local_build_gold_populates_terminal_views(tmp_path, monkeypatch):
                 "is_missing": 0,
                 "row_hash": f"h{i}",
                 "revision_number": 1,
-                "ingested_at": "2024-05-01T00:00:00",
+                "ingested_at": "2024-05-01T00:00:00+00:00",
                 "run_id": "r1",
             }
         )
@@ -1134,7 +1134,7 @@ def test_local_build_gold_populates_terminal_views(tmp_path, monkeypatch):
                     "is_missing": 0,
                     "row_hash": f"{sid}{d}",
                     "revision_number": 1,
-                    "ingested_at": "2024-05-01T00:00:00",
+                    "ingested_at": "2024-05-01T00:00:00+00:00",
                     "run_id": "r1",
                 }
             )
@@ -1185,7 +1185,7 @@ def test_local_build_gold_populates_terminal_views(tmp_path, monkeypatch):
 
 # ---- Phase 4: rates complex ----------------------------------------------------
 
-from fred_pipeline.rates_complex_config import (
+from fred_pipeline.rates_complex_config import (  # noqa: E402
     BenchmarkBoardConfig,
     BenchmarkRateDef,
     CreditConfig,
@@ -1199,7 +1199,7 @@ from fred_pipeline.rates_complex_config import (
     load_credit_config,
     load_funding_config,
 )
-from fred_pipeline.terminal_views import (
+from fred_pipeline.terminal_views import (  # noqa: E402
     compute_benchmark_rate_board,
     compute_credit_spread_daily,
     compute_funding_features,
@@ -1538,12 +1538,12 @@ def test_resume_credit_spread_daily_carries_last_value_across_a_resume():
 
 # ---- Phase 2: Inflation Explorer -------------------------------------------------
 
-from fred_pipeline.inflation_config import (
+from fred_pipeline.inflation_config import (  # noqa: E402
     InflationConfigError,
     InflationItemDef,
     load_inflation_items,
 )
-from fred_pipeline.terminal_views import compute_inflation_explorer
+from fred_pipeline.terminal_views import compute_inflation_explorer  # noqa: E402
 
 
 def test_inflation_items_loader_missing_and_repo_file(tmp_path):
@@ -1698,10 +1698,10 @@ def test_inflation_explorer_absent_series_and_empty_config():
 
 # ---- rolling-window stats companions ----------------------------------------------
 
-from datetime import date as _date
-from datetime import timedelta as _timedelta
+from datetime import date as _date  # noqa: E402
+from datetime import timedelta as _timedelta  # noqa: E402
 
-from fred_pipeline.terminal_views import (
+from fred_pipeline.terminal_views import (  # noqa: E402
     ROLLING_WINDOWS,
     _rolling_window_rows,
     compute_credit_spread_rolling,
@@ -1790,3 +1790,25 @@ def test_treasury_curve_rolling_per_tenor():
     assert all(r["change"] == pytest.approx(-0.05) for r in by_tenor["2Y"])
     assert all(r["change"] == pytest.approx(0.0) for r in by_tenor["10Y"])
     assert by_tenor["2Y"][0]["tenor_months"] == 24
+
+
+def test_benchmark_board_explicit_cutoff_controls_staleness_and_filters_future():
+    """Fictional fixtures, including a future observation and future revision."""
+    from datetime import date
+
+    rows = [
+        _row("SOFR", "2024-01-02", 2.0),
+        _row("SOFR", "2024-01-03", 2.2),
+        _row("EFFR", "2024-01-03", 2.1),
+        _row("IORB", "2024-01-06", 9.0),
+        {**_row("SOFR", "2024-01-04", 8.0), "realtime_start": "2024-01-06"},
+    ]
+    by_id = {
+        r["series_id"]: r
+        for r in compute_benchmark_rate_board(rows, _board(), as_of=date(2024, 1, 5))
+    }
+    assert set(by_id) == {"SOFR", "EFFR"}
+    assert by_id["SOFR"]["as_of_date"] == "2024-01-05"
+    assert by_id["SOFR"]["latest_date"] == "2024-01-03"
+    assert by_id["SOFR"]["spread_to_benchmark_bps"] == pytest.approx(10.0)
+    assert by_id["SOFR"]["staleness_days"] == 2

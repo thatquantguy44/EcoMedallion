@@ -801,6 +801,7 @@ def terminal_build(spark, tmp_path_factory):
         config = PipelineConfig(environment=Environment.DEV, fred_api_key="k")
         spark.sql("CREATE DATABASE IF NOT EXISTS spark_catalog.gold")
         spark.sql("CREATE DATABASE IF NOT EXISTS spark_catalog.meta")
+        spark.sql("CREATE DATABASE IF NOT EXISTS spark_catalog.silver")
 
         meta_rows = [
             {
@@ -892,6 +893,19 @@ def terminal_build(spark, tmp_path_factory):
             "overwriteSchema", "true"
         ).saveAsTable(config.table("gold", "fred_latest_observation"))
 
+        _silver_df(
+            spark,
+            [
+                {
+                    **row,
+                    "source": "fred",
+                    "ingested_at": row["observation_date"] + "T00:00:00+00:00",
+                }
+                for row in observations
+            ],
+        ).write.format("delta").mode("overwrite").option(
+            "overwriteSchema", "true"
+        ).saveAsTable(config.table("silver", "fred_observation"))
         _build_terminal_views(config, spark)
         yield config
     finally:
@@ -984,3 +998,64 @@ def test_dim_date_recession_flag_survives_the_delta_write(spark, terminal_build)
     values = {row["is_recession"] for row in flags}
     assert values <= {True, False, None}
     assert True in values, "the fixture marks 2026-04 as a recession month"
+
+
+def test_benchmark_input_filters_future_before_selecting_vintage(spark):
+    """Fictional rows exercise the Spark Silver query used by the board."""
+    from datetime import date
+    from fred_pipeline.writer.gold import _collect_benchmark_as_of
+
+    rows = [
+        (
+            "fred",
+            "SOFR",
+            "2024-01-03",
+            "2024-01-03",
+            2.2,
+            False,
+            "2024-01-01T00:00:00+00:00",
+        ),
+        (
+            "fred",
+            "SOFR",
+            "2024-01-03",
+            "2024-01-06",
+            9.0,
+            False,
+            "2024-01-01T00:00:00+00:00",
+        ),
+        (
+            "fred",
+            "SOFR",
+            "2024-01-07",
+            "2024-01-03",
+            9.5,
+            False,
+            "2024-01-01T00:00:00+00:00",
+        ),
+        (
+            "other",
+            "SOFR",
+            "2024-01-05",
+            "2024-01-05",
+            50.0,
+            False,
+            "2024-01-01T00:00:00+00:00",
+        ),
+        (
+            "fred",
+            "EFFR",
+            "2024-01-03",
+            "2024-01-03",
+            2.1,
+            False,
+            "2024-01-01T00:00:00+00:00",
+        ),
+    ]
+    spark.createDataFrame(
+        rows,
+        "source string, series_id string, observation_date string, realtime_start string, value double, is_missing boolean, ingested_at string",
+    ).createOrReplaceTempView("benchmark_silver_test")
+    config = SimpleNamespace(table=lambda schema, table: "benchmark_silver_test")
+    result = _collect_benchmark_as_of(config, spark, ["SOFR", "EFFR"], date(2024, 1, 5))
+    assert {r["series_id"]: r["value"] for r in result} == {"SOFR": 2.2, "EFFR": 2.1}

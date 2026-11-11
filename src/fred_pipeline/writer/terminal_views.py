@@ -1115,6 +1115,8 @@ TREND_EPSILON = 0.01
 def compute_benchmark_rate_board(
     latest_rows: Iterable[dict[str, Any]],
     board: BenchmarkBoardConfig | None = None,
+    *,
+    as_of: date | None = None,
 ) -> list[dict[str, Any]]:
     """``gold.benchmark_rate_board``: one row per configured rate
     (``config/benchmark_rates.yml``) at its latest observation — latest/prior,
@@ -1131,9 +1133,37 @@ def compute_benchmark_rate_board(
     wanted = {rd.series_id for rd in board.rates} | {
         rd.benchmark for rd in board.rates if rd.benchmark
     }
-    by_series = _group_sorted(r for r in latest_rows if r.get("series_id") in wanted)
-    as_of = max((s[-1][0] for s in by_series.values()), default=None)
-    if as_of is None:
+
+    def eligible(r: dict[str, Any]) -> bool:
+        if r.get("series_id") not in wanted:
+            return False
+        if as_of is None:
+            return True
+        observed = _parse(r.get("observation_date"))
+        start = r.get("realtime_start")
+        revision = _parse(start) if start else None
+        return bool(
+            observed
+            and observed <= as_of
+            and (not start or (revision and revision <= as_of))
+        )
+
+    eligible_rows = [r for r in latest_rows if eligible(r)]
+    by_series = _group_sorted(eligible_rows)
+    metadata = {
+        (r["series_id"], _parse(r.get("observation_date"))): r for r in eligible_rows
+    }
+    unknown_counts: dict[str, int] = {}
+    for row in eligible_rows:
+        if (
+            not row.get("is_missing")
+            and row.get("value") is not None
+            and not row.get("realtime_start")
+        ):
+            sid = row["series_id"]
+            unknown_counts[sid] = unknown_counts.get(sid, 0) + 1
+    board_date = as_of or max((s[-1][0] for s in by_series.values()), default=None)
+    if board_date is None:
         return []
 
     out: list[dict[str, Any]] = []
@@ -1144,6 +1174,7 @@ def compute_benchmark_rate_board(
         values = [v for _d, v in series]
         i = len(series) - 1
         latest_d, latest_v = series[i]
+        latest_meta = metadata[(rd.series_id, latest_d)]
         prior_v = values[i - 1] if i > 0 else None
 
         back = i - board.trend_window
@@ -1174,19 +1205,23 @@ def compute_benchmark_rate_board(
                 "rate_label": rd.label,
                 "rate_category": rd.category,
                 "benchmark_series": rd.benchmark or None,
-                "as_of_date": as_of.isoformat(),
+                "as_of_date": board_date.isoformat(),
                 "latest_date": latest_d.isoformat(),
                 "latest_value": latest_v,
                 "prior_value": prior_v,
-                "change_bps": ((latest_v - prior_v) * 100.0)
-                if prior_v is not None
-                else None,
+                "change_bps": (
+                    ((latest_v - prior_v) * 100.0) if prior_v is not None else None
+                ),
                 "trend": trend,
                 "spread_to_benchmark_bps": spread_bps,
                 "zscore": ((latest_v - means[i]) / stds[i]) if stds[i] else None,
                 "percentile": _expanding_percentile(values)[i],
                 "regime": regime,
-                "staleness_days": (as_of - latest_d).days,
+                "staleness_days": (board_date - latest_d).days,
+                "source": latest_meta.get("source"),
+                "latest_revision_start": latest_meta.get("realtime_start") or None,
+                "latest_ingested_at": latest_meta.get("ingested_at"),
+                "history_unknown_vintage_count": unknown_counts.get(rd.series_id, 0),
             }
         )
     return out

@@ -1224,3 +1224,33 @@ def test_postgres_legacy_history_backfill_rolls_back_on_failure(
         assert wh._defer_commits is False
     finally:
         wh.close()
+
+
+def test_postgres_benchmark_board_selects_eligible_silver_revision(postgres_dsn):
+    """Fictional observations test the actual Postgres Gold build."""
+    from datetime import date
+
+    wh = PostgresWarehouse(_config(), dsn=postgres_dsn)
+    try:
+        wh.merge_silver(
+            [
+                _silver_row("SOFR", "2024-01-02", "2024-01-02", 2.0, 1),
+                _silver_row("SOFR", "2024-01-03", "2024-01-03", 2.2, 1),
+                _silver_row("SOFR", "2024-01-03", "2024-01-06", 9.0, 2),
+                _silver_row("SOFR", "2024-01-07", "2024-01-03", 9.5, 1),
+                _silver_row("EFFR", "2024-01-03", "2024-01-03", 2.1, 1),
+                _silver_row("IORB", "2024-01-07", "2024-01-03", 9.5, 1),
+            ]
+        )
+        wh.build_gold(full=True, benchmark_as_of=date(2024, 1, 5))
+        board = {
+            r["series_id"]: r
+            for r in wh.query("SELECT * FROM gold_benchmark_rate_board")
+        }
+        assert set(board) == {"SOFR", "EFFR"}
+        assert board["SOFR"]["as_of_date"] == "2024-01-05"
+        assert board["SOFR"]["latest_value"] == pytest.approx(2.2)
+        assert board["SOFR"]["spread_to_benchmark_bps"] == pytest.approx(10)
+        assert board["SOFR"]["staleness_days"] == 2
+    finally:
+        wh.close()

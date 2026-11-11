@@ -24,6 +24,7 @@ if TYPE_CHECKING:
     from typing import Self
 
 from fred_pipeline.audit import EtlRun, EtlSeriesRun
+from fred_pipeline.benchmark_as_of import benchmark_as_of_date
 from fred_pipeline.config import PipelineConfig
 from fred_pipeline.io.local_store import (
     _SCHEMA as _SQLITE_SCHEMA,
@@ -184,6 +185,7 @@ def _borrowed_from_local_warehouse(cls: type) -> type:
         "_build_equity_total_return_index",
         "_rebuild_ecb_fx_reference_rates",
         "_read_gold_silver_subset",
+        "_read_benchmark_as_of",
         "_gold_latest_inventory",
     ):
         setattr(cls, name, getattr(LocalWarehouse, name))
@@ -376,6 +378,10 @@ class PostgresWarehouse:
         return cur.fetchone() is not None
 
     _ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
+        ("gold_benchmark_rate_board", "source", "TEXT"),
+        ("gold_benchmark_rate_board", "latest_revision_start", "TEXT"),
+        ("gold_benchmark_rate_board", "latest_ingested_at", "TEXT"),
+        ("gold_benchmark_rate_board", "history_unknown_vintage_count", "INTEGER"),
         ("gold_dim_series", "geo", "TEXT"),
         ("gold_dim_series", "metric", "TEXT"),
         ("gold_dim_date", "is_imm_date", "INTEGER"),
@@ -664,11 +670,14 @@ class PostgresWarehouse:
             ),
         )
 
-    def build_gold(self, full: bool = False) -> dict[str, str]:
+    def build_gold(
+        self, full: bool = False, *, benchmark_as_of: _dt.date | None = None
+    ) -> dict[str, str]:
+        cutoff = benchmark_as_of_date(benchmark_as_of)
         self.conn.execute("BEGIN")
         self._defer_commits = True
         try:
-            result = self._build_gold_inner(full=full)
+            result = self._build_gold_inner(full=full, benchmark_as_of=cutoff)
         except BaseException:
             self.conn.rollback()
             raise
@@ -795,7 +804,9 @@ class PostgresWarehouse:
             )
             return max(cur.rowcount, 0)
 
-    def _build_gold_inner(self, full: bool = False) -> dict[str, str]:
+    def _build_gold_inner(
+        self, full: bool = False, *, benchmark_as_of: _dt.date | None = None
+    ) -> dict[str, str]:
         # Reuse the SQLite backend's pure-Python Gold orchestration. The
         # low-level table operations above translate flat table names into
         # Postgres schemas. Latest-observation and revision-stat rebuilds stay
@@ -803,7 +814,9 @@ class PostgresWarehouse:
         # pushed, projected reads from the shared orchestration.
         from fred_pipeline.io.local_store import LocalWarehouse
 
-        return LocalWarehouse._build_gold_inner(self, full=full)
+        return LocalWarehouse._build_gold_inner(
+            self, full=full, benchmark_as_of=benchmark_as_of
+        )
 
     def point_in_time_features(self, as_of: str) -> list[dict[str, Any]]:
         from fred_pipeline.features import point_in_time_snapshot
