@@ -1,0 +1,35 @@
+{
+  "source": "fred",
+  "responses": [
+    {
+      "status": 429,
+      "headers": {
+        "Retry-After": "2"
+      },
+      "body": {
+        "error_message": "Synthetic rate-limit response"
+      }
+    },
+    {
+      "status": 200,
+      "headers": {},
+      "body": {
+        "count": 2,
+        "observations": [
+          {
+            "date": "2024-01-01",
+            "value": "4.25",
+            "realtime_start": "2024-01-02",
+            "realtime_end": "9999-12-31"
+          },
+          {
+            "date": "2024-01-02",
+            "value": "4.30",
+            "realtime_start": "2024-01-03",
+            "realtime_end": "9999-12-31"
+          }
+        ]
+      }
+    }
+  ]
+}

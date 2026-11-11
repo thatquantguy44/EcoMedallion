@@ -254,39 +254,42 @@ class PerformanceCollector:
             key = (record["name"], record["attributes"].get("source", ""))
             if key not in self._aggregates and len(self._aggregates) >= 512:
                 self.telemetry_errors.add("aggregate_limit")
-                return
-            aggregate = self._aggregates.setdefault(
-                key,
-                {
-                    "name": key[0],
-                    "source": key[1],
-                    "count": 0,
-                    "worker_seconds": 0.0,
-                    "failed": 0,
-                    "counters": {},
-                    "samples": deque(maxlen=2048),
-                },
-            )
-            duration = record["duration_seconds"]
-            aggregate["count"] += 1
-            aggregate["worker_seconds"] += duration
-            aggregate["failed"] += record["status"] in {"failed", "cancelled"}
-            aggregate["samples"].append(duration)
-            aggregate["first_offset_seconds"] = min(
-                aggregate.get("first_offset_seconds", record["offset_seconds"]),
-                record["offset_seconds"],
-            )
-            aggregate["last_end_seconds"] = max(
-                aggregate.get("last_end_seconds", 0),
-                record["offset_seconds"] + duration,
-            )
-            for name, value in record["attributes"].items():
-                if name in {"rows", "rows_written", "bytes", "retries"} and isinstance(
-                    value, (int, float)
-                ):
-                    aggregate["counters"][name] = (
-                        aggregate["counters"].get(name, 0) + value
-                    )
+            else:
+                aggregate = self._aggregates.setdefault(
+                    key,
+                    {
+                        "name": key[0],
+                        "source": key[1],
+                        "count": 0,
+                        "worker_seconds": 0.0,
+                        "failed": 0,
+                        "counters": {},
+                        "samples": deque(maxlen=2048),
+                    },
+                )
+                duration = record["duration_seconds"]
+                aggregate["count"] += 1
+                aggregate["worker_seconds"] += duration
+                aggregate["failed"] += record["status"] in {"failed", "cancelled"}
+                aggregate["samples"].append(duration)
+                aggregate["first_offset_seconds"] = min(
+                    aggregate.get("first_offset_seconds", record["offset_seconds"]),
+                    record["offset_seconds"],
+                )
+                aggregate["last_end_seconds"] = max(
+                    aggregate.get("last_end_seconds", 0),
+                    record["offset_seconds"] + duration,
+                )
+                for name, value in record["attributes"].items():
+                    if name in {
+                        "rows",
+                        "rows_written",
+                        "bytes",
+                        "retries",
+                    } and isinstance(value, (int, float)):
+                        aggregate["counters"][name] = (
+                            aggregate["counters"].get(name, 0) + value
+                        )
             if (
                 record["attributes"].get("kind") != "stage"
                 and not record["name"].startswith("report.")
@@ -317,9 +320,17 @@ class PerformanceCollector:
         with self._lock:
             if span_id in self._active:
                 self._active[span_id][0].outcome(status)
+            completed = None
             for record in (*self._records, *self._stages):
                 if record["span_id"] == span_id:
                     record["status"] = status
+                    completed = record
+            if completed is not None:
+                # Stage checks can warn after their context has already flushed.
+                # Queue an amendment so the durable latest outcome stays truthful.
+                if len(self._pending) == self.max_spans:
+                    self.dropped_events += 1
+                self._pending.append({**completed, "event": "span_updated"})
 
     def attach_sink(self, sink: Callable[[list[dict[str, Any]]], None]) -> None:
         self._sink = sink

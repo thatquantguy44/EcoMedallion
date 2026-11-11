@@ -1,6 +1,7 @@
 """Performance reports must remain useful without images or JavaScript."""
 
 import json
+from pathlib import Path
 
 from fred_pipeline.governance.email_report import RunSummary, render_html, render_text
 from fred_pipeline.governance.alerting import build_message
@@ -8,67 +9,8 @@ from fred_pipeline.governance.alerting_config import AlertingConfig, RouteConfig
 
 
 def report():
-    return {
-        "processing_seconds": 120,
-        "dropped_events": 0,
-        "telemetry_errors": [],
-        "stages": [
-            {
-                "name": "extract",
-                "status": "succeeded",
-                "offset_seconds": 10,
-                "duration_seconds": 80,
-            }
-        ],
-        "aggregates": [
-            {
-                "name": "http.request",
-                "source": "bea",
-                "count": 5,
-                "failed": 1,
-                "worker_seconds": 10,
-                "p50_seconds": 1,
-                "p95_seconds": 3,
-                "sample_count": 5,
-                "sampled": False,
-                "counters": {},
-            },
-            {
-                "name": "http.retry_wait",
-                "source": "bea",
-                "count": 1,
-                "worker_seconds": 2,
-                "counters": {"retries": 1},
-            },
-            {
-                "name": "http.rate_limit",
-                "source": "bea",
-                "count": 5,
-                "worker_seconds": 7,
-                "counters": {},
-            },
-            {
-                "name": "extract.normalize",
-                "source": "bea",
-                "count": 2,
-                "worker_seconds": 1,
-                "counters": {"rows": 100},
-            },
-        ],
-        "slowest": [
-            {
-                "name": "gold.engine",
-                "status": "succeeded",
-                "duration_seconds": 20,
-                "attributes": {"table": "<script>alert(1)</script>"},
-            }
-        ],
-        "baseline": {
-            "count": 3,
-            "median_seconds": 100,
-            "previous_seconds": [90, 100, 110],
-        },
-    }
+    path = Path(__file__).parent / "fixtures" / "performance" / "success.json"
+    return json.loads(path.read_text(encoding="utf-8"))["performance"]
 
 
 def summary(performance=None):

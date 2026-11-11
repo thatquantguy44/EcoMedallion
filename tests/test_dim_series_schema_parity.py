@@ -50,31 +50,35 @@ def _sqlite_columns() -> list[str]:
     ]
 
 
-def _spark_struct_fields() -> list[str]:
+def _spark_struct_fields(source: str | None = None) -> list[str]:
     """(3) Read the dim_series StructType without depending on formatting."""
-    source = (REPO_ROOT / "src" / "fred_pipeline" / "writer" / "gold.py").read_text(
-        encoding="utf-8"
-    )
-    tree = ast.parse(source)
-    for node in ast.walk(tree):
-        if (
-            isinstance(node, ast.Call)
-            and isinstance(node.func, ast.Name)
-            and node.func.id == "_write"
-            and len(node.args) >= 3
-            and isinstance(node.args[0], ast.Constant)
-            and node.args[0].value == "dim_series"
-        ):
-            return [
-                field.args[0].value
-                for field in ast.walk(node.args[2])
-                if isinstance(field, ast.Call)
-                and isinstance(field.func, ast.Name)
-                and field.func.id == "StructField"
-                and field.args
-                and isinstance(field.args[0], ast.Constant)
-            ]
-    raise AssertionError("dim_series Spark StructType not found")
+    if source is None:
+        source = (REPO_ROOT / "src" / "fred_pipeline" / "writer" / "gold.py").read_text(
+            encoding="utf-8"
+        )
+    writes = [
+        node
+        for node in ast.walk(ast.parse(source))
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "_write"
+        and node.args
+        and isinstance(node.args[0], ast.Constant)
+        and node.args[0].value == "dim_series"
+    ]
+    assert len(writes) == 1, "expected one dim_series write in the Spark writer"
+    schema = writes[0].args[2]
+    assert isinstance(schema, ast.Call) and isinstance(schema.func, ast.Name)
+    assert schema.func.id == "StructType"
+    fields = schema.args[0]
+    assert isinstance(fields, ast.List)
+    names = []
+    for field in fields.elts:
+        assert isinstance(field, ast.Call) and isinstance(field.func, ast.Name)
+        assert field.func.id == "StructField"
+        assert isinstance(field.args[0], ast.Constant)
+        names.append(field.args[0].value)
+    return names
 
 
 def _sql_ddl_columns() -> list[str]:
@@ -99,6 +103,27 @@ def test_spark_struct_matches_the_emitted_rows():
     """The one that was broken: a row key with no StructField is dropped or
     raises on the Databricks write."""
     assert set(_spark_struct_fields()) == set(_row_keys())
+
+
+def test_spark_schema_lookup_is_independent_of_formatter_and_quote_style():
+    source = """
+_write('unrelated', rows, StructType([StructField('not_a_dimension', StringType())]), ['*'])
+_write(
+    'dim_series', rows,
+    StructType([
+        StructField('series_id', StringType()),
+        StructField('geo', StringType()),
+        StructField('metric', StringType()),
+    ]),
+    ['*'],
+)
+"""
+    assert _spark_struct_fields(source) == ["series_id", "geo", "metric"]
+    assert _spark_struct_fields(ast.unparse(ast.parse(source))) == [
+        "series_id",
+        "geo",
+        "metric",
+    ]
 
 
 def test_sqlite_schema_matches_the_emitted_rows():

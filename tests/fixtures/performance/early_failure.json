@@ -1,0 +1,95 @@
+{
+  "run_id": "fixture-failure",
+  "environment": "test",
+  "verdict": "failure",
+  "reason": "required stage(s) failed: plan",
+  "series": {
+    "total": 0,
+    "succeeded": 0,
+    "failed": 0,
+    "skipped_not_due": 0
+  },
+  "stages": [
+    {
+      "name": "plan",
+      "status": "failed",
+      "duration_seconds": 4,
+      "detail": {},
+      "error_type": "RuntimeError",
+      "error_message": "Fixture warehouse unavailable"
+    },
+    {
+      "name": "extract",
+      "status": "not_run",
+      "duration_seconds": null,
+      "detail": {}
+    },
+    {
+      "name": "fomc_calendar",
+      "status": "not_run",
+      "duration_seconds": null,
+      "detail": {}
+    },
+    {
+      "name": "gold",
+      "status": "not_run",
+      "duration_seconds": null,
+      "detail": {}
+    },
+    {
+      "name": "release_calendar",
+      "status": "not_run",
+      "duration_seconds": null,
+      "detail": {}
+    },
+    {
+      "name": "persist",
+      "status": "not_run",
+      "duration_seconds": null,
+      "detail": {}
+    }
+  ],
+  "performance": {
+    "processing_seconds": 4,
+    "dropped_events": 0,
+    "telemetry_errors": [],
+    "stages": [
+      {
+        "name": "plan",
+        "status": "failed",
+        "offset_seconds": 0,
+        "duration_seconds": 4
+      }
+    ],
+    "aggregates": [],
+    "slowest": [],
+    "baseline": {
+      "count": 0
+    },
+    "schema_version": 1,
+    "run_id": "fixture-failure",
+    "status": "failure",
+    "started_at": "2026-01-05T12:00:00+00:00",
+    "ended_at": "2026-01-05T12:00:04+00:00",
+    "metadata": {
+      "backend": "LocalWarehouse",
+      "selection": "fixture-series",
+      "due_series": 2,
+      "write_mode": "per_series",
+      "revision": "fixture-revision",
+      "ecb_assets_workload": {
+        "mode": "poll",
+        "releases": 0,
+        "accepted": 0
+      }
+    },
+    "spans": [],
+    "unfinished_spans": [
+      {
+        "span_id": "unfinished-example",
+        "name": "startup.metadata",
+        "status": "running"
+      }
+    ]
+  }
+}
