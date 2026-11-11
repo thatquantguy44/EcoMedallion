@@ -9,10 +9,13 @@ Databricks job's logging setup) already configures.
 from __future__ import annotations
 
 import functools
+import inspect
 import logging
 import time
 from collections.abc import Callable
 from typing import Any, TypeVar
+
+from fred_pipeline.performance import span
 
 F = TypeVar("F", bound=Callable[..., Any])
 
@@ -22,6 +25,7 @@ def timed(
     *,
     logger: logging.Logger | None = None,
     progress_callback: Callable[[str, float], None] | None = None,
+    log_completion: bool = True,
 ) -> Callable[[F], F]:
     """Log the wrapped callable's elapsed wall-clock time on return or raise.
 
@@ -37,22 +41,35 @@ def timed(
         label = name or func.__qualname__
         log = logger or logging.getLogger(func.__module__)
 
+        def completed(start: float) -> None:
+            elapsed = time.perf_counter() - start
+            if log_completion:
+                log.info("%s finished in %.2fs", label, elapsed)
+            if progress_callback:
+                try:
+                    progress_callback(label, elapsed)
+                except Exception:
+                    log.warning("Timing progress callback failed for %s", label)
+
         @functools.wraps(func)
         def wrapper(*args: Any, **kwargs: Any) -> Any:
             start = time.perf_counter()
-            try:
+            with span(label):
                 result = func(*args, **kwargs)
-            except Exception:
-                log.exception(
-                    "%s failed after %.2fs", label, time.perf_counter() - start
-                )
-                raise
-            elapsed = time.perf_counter() - start
-            log.info("%s finished in %.2fs", label, elapsed)
-            if progress_callback:
-                progress_callback(label, elapsed)
+            completed(start)
             return result
 
+        if inspect.iscoroutinefunction(func):
+
+            @functools.wraps(func)
+            async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
+                start = time.perf_counter()
+                with span(label):
+                    result = await func(*args, **kwargs)
+                completed(start)
+                return result
+
+            return async_wrapper  # type: ignore[return-value]
         return wrapper  # type: ignore[return-value]
 
     return decorator

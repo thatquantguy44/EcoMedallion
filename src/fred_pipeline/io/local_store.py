@@ -681,6 +681,19 @@ CREATE TABLE IF NOT EXISTS audit_etl_run (
     duration_seconds REAL, series_total INTEGER, series_succeeded INTEGER,
     series_failed INTEGER, series_skipped_not_due INTEGER, error_message TEXT
 );
+CREATE TABLE IF NOT EXISTS audit_run_performance (
+    run_id TEXT PRIMARY KEY, started_at TEXT, ended_at TEXT, status TEXT,
+    processing_seconds REAL, comparison_key TEXT, metadata_json TEXT,
+    summary_json TEXT, delivery_json TEXT
+);
+CREATE TABLE IF NOT EXISTS audit_run_span (
+    span_id TEXT PRIMARY KEY, run_id TEXT, parent_span_id TEXT, name TEXT,
+    source TEXT, series_id TEXT, table_name TEXT, status TEXT,
+    started_at TEXT, ended_at TEXT, offset_seconds REAL, duration_seconds REAL,
+    attributes_json TEXT, error_type TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_performance_comparison ON audit_run_performance(comparison_key, started_at);
+CREATE INDEX IF NOT EXISTS idx_performance_run_span ON audit_run_span(run_id);
 CREATE TABLE IF NOT EXISTS audit_etl_series_run (
     run_id TEXT, series_id TEXT, status TEXT, load_type TEXT, started_at TEXT,
     ended_at TEXT, duration_seconds REAL, observations_extracted INTEGER,

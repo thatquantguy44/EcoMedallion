@@ -1,5 +1,17 @@
 # Implementation Plan: Spec 013 Dagster Orchestration
 
+## Active additional work: Spec 017 performance reporting
+
+The approved [performance design](../specs/spec017/README.md) is implemented on
+`feature/pipeline-performance-reporting`. Build order: collector → audit/file
+storage → instrumentation → complete CLI/library lifecycle → report visuals.
+Use tests with fake clocks and transports; verify SQLite and PostgreSQL against
+isolated test databases. Preserve the existing Dagster plan below.
+
+Risks: overlapping workers (unique spans and copied context), extra I/O
+(bounded queues flushed by the owner thread), failed telemetry (file fallback),
+and incomplete alerts (defer combined reporting until ECB completes).
+
 Status: T1 optional runtime verification complete; execution, writer locking,
 and Dagster integration remain pending.
 

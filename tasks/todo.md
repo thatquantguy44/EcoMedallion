@@ -1,5 +1,23 @@
 # Spec 013 Task Checklist
 
+## Spec 017 performance reporting
+
+- [ ] P1: Shared collector/decorator; verify fake-clock, nesting, concurrent,
+  cancellation, bounded-buffer and callback-failure tests (`test_performance.py`).
+- [ ] P2: Idempotent audit persistence, fallback artifacts, comparable history;
+  verify real SQLite and isolated PostgreSQL tests.
+- [ ] P3: Source/Gold/calendar/ECB instrumentation; verify source retry tests,
+  pipeline fixtures, worker parentage and explicit failed/unchanged outcomes.
+- [ ] P4: Complete command/library lifecycle and deferred consolidated alert;
+  verify CLI failure/skip/default and direct-run compatibility tests.
+- [ ] P5: Text/HTML visuals and JSON attachment; verify escaping, small samples,
+  overlap, missing baseline, rendered preview and complete suite.
+
+Checkpoint: every slice passes focused tests before the next. Final evidence
+and operator controls are recorded in the performance handoff.
+
+The existing orchestration checklist is preserved below.
+
 Status: T1 complete; shared execution, writer safety and orchestration tasks
 remain pending.
 

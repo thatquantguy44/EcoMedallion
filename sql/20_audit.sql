@@ -48,3 +48,20 @@ CREATE TABLE IF NOT EXISTS audit.data_quality_result (
 )
 USING DELTA
 COMMENT 'Data-quality check outcomes per (run, series, check)';
+
+CREATE TABLE IF NOT EXISTS audit.run_performance (
+    run_id STRING, started_at STRING, ended_at STRING, status STRING,
+    processing_seconds DOUBLE, comparison_key STRING, metadata_json STRING,
+    summary_json STRING, delivery_json STRING
+)
+USING DELTA
+COMMENT 'Processing snapshots and comparable-run performance history';
+
+CREATE TABLE IF NOT EXISTS audit.run_span (
+    span_id STRING, run_id STRING, parent_span_id STRING, name STRING,
+    source STRING, series_id STRING, table_name STRING, status STRING,
+    started_at STRING, ended_at STRING, offset_seconds DOUBLE,
+    duration_seconds DOUBLE, attributes_json STRING, error_type STRING
+)
+USING DELTA
+COMMENT 'Unique nested performance measurements; retries retain separate IDs';

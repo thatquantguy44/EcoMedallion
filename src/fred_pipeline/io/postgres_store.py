@@ -65,6 +65,8 @@ _UPSERT_KEYS: dict[str, tuple[str, ...]] = {
     ),
     "silver_fred_observation_history": ("observation_event_id",),
     "audit_etl_run": ("run_id",),
+    "audit_run_performance": ("run_id",),
+    "audit_run_span": ("span_id",),
     "bronze_ecb_eligible_asset_release": ("release_id",),
     "bronze_ecb_eligible_asset_artifact": ("release_id", "artifact_kind"),
     "silver_ecb_eligible_asset_release": ("release_id",),
