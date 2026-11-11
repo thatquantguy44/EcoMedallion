@@ -24,7 +24,8 @@ from fred_pipeline.transform import _row_hash, _utc_now_iso, parse_value
 
 log = logging.getLogger("fred_pipeline.sources.census")
 
-# Columns we always request; the value column and the time column.
+# Time is returned from its required predicate, not requested in ``get``:
+# https://api.census.gov/data/timeseries/eits/marts/variables.html
 VALUE_COL = "cell_value"
 TIME_COL = "time"
 
@@ -156,9 +157,13 @@ class CensusClient(HTTPSource):
     ) -> Any:
         """Fetch a Census time series, returning the raw 2-D array payload."""
         dataset, predicates = _parse_series_id(series_id)
-        params: dict[str, Any] = {"get": f"{VALUE_COL},{TIME_COL}", **predicates}
+        params: dict[str, Any] = {"get": VALUE_COL, **predicates}
+        bounds = []
         if observation_start:
-            params["time"] = f"from {str(observation_start)[:4]}"
+            bounds.append(f"from {str(observation_start)[:4]}")
+        if observation_end:
+            bounds.append(f"to {str(observation_end)[:4]}")
+        params["time"] = " ".join(bounds) or predicates.get("time", "from 1900")
         return self._request(dataset, params)
 
     def normalize(
@@ -170,5 +175,6 @@ class CensusClient(HTTPSource):
         track_vintage: bool = False,  # Census time series carry no vintages here
         source: str = "census",
     ) -> list[dict[str, Any]]:
-        return normalize_census_observations(series_id, payload, run_id=run_id,
-                                             source=source)
+        return normalize_census_observations(
+            series_id, payload, run_id=run_id, source=source
+        )
