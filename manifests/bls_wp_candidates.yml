@@ -1,6 +1,6 @@
 name: bls_wp_candidates
-description: 'Inactive BLS Producer Price Index (WP) candidates: PPI Final Demand
-  headline, core (less foods and energy), goods, and services.'
+description: 'BLS Producer Price Index (WP): verified final-demand services is
+  active; headline, core (less foods and energy), and goods remain inactive.'
 version: 1
 series:
 - series_id: WPSFD4
@@ -72,20 +72,20 @@ series:
 - series_id: WPSFD42
   title: PPI Commodity data for Final demand services, seasonally adjusted
   frequency: m
-  category: inflation
-  units: ''
-  active: false
+  category: prices
+  units: Index 2009=100
+  active: true
   source: bls
   load_type: incremental
   expected_update_frequency: monthly
   vintage_enabled: false
-  validation_profile: lenient
+  validation_profile: standard
   business_owner: ''
   technical_owner: ''
-  downstream_use_case: bls_candidate_review
-  priority: 3
+  downstream_use_case: producer_prices
+  priority: 2
   restate_records: null
-  min_value: null
+  min_value: 0
   max_value: null
   tags:
   - bls

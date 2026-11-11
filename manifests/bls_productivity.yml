@@ -7,12 +7,14 @@ description: >
   adjusted. Quarterly frequency maps to period Q01–Q04 in the BLS response;
   the normalizer converts these to quarter-start dates (Jan 1, Apr 1, Jul 1,
   Oct 1).
+# Verified against https://download.bls.gov/pub/time.series/pr/pr.series
+# Duration 3 selects the declared index level; sector 3000 is manufacturing.
 version: 1
 
 series:
   # ---- Nonfarm Business sector ----------------------------------------------
 
-  - series_id: PRS85006092
+  - series_id: PRS85006093
     title: BLS Nonfarm Business - Output per Hour (SA, Quarterly)
     category: labor
     frequency: q
@@ -28,7 +30,7 @@ series:
     min_value: 0
     tags: [labor, productivity, nonfarm_business, bls]
 
-  - series_id: PRS85006112
+  - series_id: PRS85006113
     title: BLS Nonfarm Business - Unit Labor Costs (SA, Quarterly)
     category: labor
     frequency: q
@@ -44,7 +46,7 @@ series:
     min_value: 0
     tags: [labor, unit_labor_costs, nonfarm_business, bls]
 
-  - series_id: PRS85006152
+  - series_id: PRS85006153
     title: BLS Nonfarm Business - Real Compensation per Hour (SA, Quarterly)
     category: labor
     frequency: q
@@ -62,7 +64,7 @@ series:
 
   # ---- Business sector ------------------------------------------------------
 
-  - series_id: PRS84006092
+  - series_id: PRS84006093
     title: BLS Business Sector - Output per Hour (SA, Quarterly)
     category: labor
     frequency: q
@@ -78,7 +80,7 @@ series:
     min_value: 0
     tags: [labor, productivity, business, bls]
 
-  - series_id: PRS84006112
+  - series_id: PRS84006113
     title: BLS Business Sector - Unit Labor Costs (SA, Quarterly)
     category: labor
     frequency: q
@@ -96,7 +98,7 @@ series:
 
   # ---- Manufacturing sector -------------------------------------------------
 
-  - series_id: PRS88003092
+  - series_id: PRS30006093
     title: BLS Manufacturing - Output per Hour (SA, Quarterly)
     category: labor
     frequency: q
@@ -112,7 +114,7 @@ series:
     min_value: 0
     tags: [labor, productivity, manufacturing, bls]
 
-  - series_id: PRS88003112
+  - series_id: PRS30006113
     title: BLS Manufacturing - Unit Labor Costs (SA, Quarterly)
     category: labor
     frequency: q

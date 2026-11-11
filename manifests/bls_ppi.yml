@@ -7,17 +7,20 @@ description: >
   and Intermediate Demand Services. The overlapping FD headline and FD Goods
   (WPSFD49207, WPSFD4131, WPSID61) are excluded because they are already
   registered via FRED; series_ids must be unique across manifests.
+# Verified provider keys:
+# https://www.bls.gov/ppi/fd-id/ppi-final-demand-intermediate-demand-aggregation-indexes-by-title-and-series-id.htm
 version: 1
 
 series:
   # ---- Final Demand sub-aggregates not in prices_extra.yml -----------------
 
+  # Retired invalid key. WPSFD42 is active in bls_wp_candidates.yml.
   - series_id: WPSFD4214
     title: PPI Final Demand - Services (BLS)
     category: prices
     frequency: m
     units: Index 2009=100
-    active: true
+    active: false
     source: bls
     load_type: incremental
     expected_update_frequency: monthly
@@ -28,7 +31,7 @@ series:
     min_value: 0
     tags: [prices, ppi, final_demand, services, bls]
 
-  - series_id: WPSFD4912
+  - series_id: WPSFD43
     title: PPI Final Demand - Construction (BLS)
     category: prices
     frequency: m

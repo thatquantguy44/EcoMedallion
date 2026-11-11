@@ -30,15 +30,22 @@ already globally unique on their own.
 |---|---:|---|
 | `manifests/bls_cpi_basket.yml` | 30 | CPI-U, NSA item hierarchy (headline, core, major groups, sub-strata) |
 | `manifests/bls_cpi_basket_sa.yml` | 29 | CPI-U, SA mirror of the same item hierarchy |
-| `manifests/bls_productivity.yml` | 7 | Productivity and costs |
+| `manifests/bls_productivity.yml` | 7 | Productivity and cost indexes (2017=100), for business, nonfarm business, and manufacturing |
 | `manifests/bls_jt_candidates.yml` | 5 | JOLTS national headline levels — job openings, hires, quits, layoffs & discharges, total separations |
-| `manifests/bls_ppi.yml` | 4 | PPI Final Demand — headline, core, goods, services |
+| `manifests/bls_ppi.yml` | 3 | Final-demand construction and intermediate-demand goods/services |
+| `manifests/bls_wp_candidates.yml` | 1 | Final-demand services (`WPSFD42`) |
 | `manifests/bls_ce_candidates.yml` | 3 | Nonfarm + total-private payrolls, average hourly earnings |
 | `manifests/bls_labor.yml` | 1 | `LNS14000000` — unemployment rate (SA), kept as a deliberate cross-source validation pair against FRED's `UNRATE` |
 
 The CPI item trees feed `config/inflation_items.yml` (weights + waterfall
 decomposition for `gold.inflation_explorer`/`gold.inflation_contribution`) —
 see that file's header comment for the weight-refresh caveat.
+
+On 2026-11-10, live provider metadata corrected the productivity definitions to
+duration `3` (index levels) and manufacturing sector `3000`. The previous
+duration `2` codes returned growth rates despite being labeled as indexes;
+sector `8800` identified nonfinancial corporations. Final-demand services and
+construction now use the verified `WPSFD42` and `WPSFD43` keys.
 
 ## Discovery Tooling
 
@@ -59,7 +66,7 @@ python -m fred_pipeline discover-bls --survey CE \
   --frequency m --dry-run
 ```
 
-## Candidate Manifests (inactive, pending review)
+## Generated Candidate Manifests
 
 First real output, live-verified through `BLSClient.get_observations` during
 generation (not just matched in the flat-file catalog):
@@ -68,8 +75,8 @@ generation (not just matched in the flat-file catalog):
   average hourly earnings (production & nonsupervisory, total private)
 - `manifests/bls_jt_candidates.yml` — JOLTS national headline levels (hires,
   job openings, layoffs & discharges, quits, total separations)
-- `manifests/bls_wp_candidates.yml` — PPI Final Demand headline, core, goods,
-  services
+- `manifests/bls_wp_candidates.yml` — final-demand services is active;
+  headline, core, and goods remain inactive.
 
 ## Caveats
 
