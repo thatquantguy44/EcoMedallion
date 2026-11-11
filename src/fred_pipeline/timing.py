@@ -50,7 +50,15 @@ def timed(
             tags = {}
             if attributes is not None:
                 try:
-                    tags = attributes(*args, **kwargs)
+                    candidate = attributes(*args, **kwargs)
+                    reserved = {"name", "detailed", "_started_ns", "_started_at"}
+                    if not isinstance(candidate, dict) or any(
+                        not isinstance(key, str) or key in reserved for key in candidate
+                    ):
+                        raise ValueError(
+                            "timing attributes must be a dictionary of safe names"
+                        )
+                    tags = candidate
                 except Exception:
                     log.warning("Timing attributes unavailable for %s", label)
             start = time.perf_counter()
