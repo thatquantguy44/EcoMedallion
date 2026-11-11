@@ -18,7 +18,9 @@ BEA-specific bits only: `UserID` auth (required), errors carried in a
 from __future__ import annotations
 
 import logging
+import threading
 import time
+from datetime import datetime, timezone
 from typing import Any, Callable, Optional
 
 from fred_pipeline.sources.base import HTTPSource, SourceError
@@ -142,6 +144,8 @@ class BEAClient(HTTPSource):
         if not api_key:
             raise BEAAPIError("A BEA API key (UserID) is required (got empty string)")
         self.api_key = api_key
+        self._table_cache: dict[tuple[str, ...], dict[str, Any]] = {}
+        self._table_lock = threading.Lock()
         super().__init__(
             base_url=base_url,
             session=session,
@@ -157,7 +161,11 @@ class BEAClient(HTTPSource):
     def _error_detail(self, resp: Any) -> str:
         try:
             body = resp.json()
-            err = (body.get("BEAAPI") or {}).get("Error") if isinstance(body, dict) else None
+            err = (
+                (body.get("BEAAPI") or {}).get("Error")
+                if isinstance(body, dict)
+                else None
+            )
             if isinstance(err, dict):
                 return str(err.get("APIErrorDescription") or err)
             return str(body)
@@ -169,6 +177,60 @@ class BEAClient(HTTPSource):
         return "data"
 
     # ---- SourceClient contract ------------------------------------------
+
+    def clear_run_cache(self) -> None:
+        """Release table snapshots before/after each pipeline extraction run."""
+        with self._table_lock:
+            self._table_cache.clear()
+
+    def _checked_request(
+        self, params: dict[str, Any], series_id: str
+    ) -> dict[str, Any]:
+        payload = self._request("data", params)
+        beaapi = payload.get("BEAAPI") or {}
+        results = beaapi.get("Results") or {}
+        err = beaapi.get("Error") or (
+            results.get("Error") if isinstance(results, dict) else None
+        )
+        if isinstance(err, dict):
+            raise BEAAPIError(
+                f"BEA error for {series_id!r}: {err.get('APIErrorDescription') or err}"
+            )
+        return payload
+
+    def _monthly_year_chunks(
+        self,
+        dataset: str,
+        table: str,
+        series_id: str,
+        observation_start: Optional[str],
+        observation_end: Optional[str],
+    ) -> list[str]:
+        """Bound large monthly tables using BEA's published year coverage."""
+        if observation_start:
+            first = int(str(observation_start)[:4])
+            last = datetime.now(timezone.utc).year
+        else:
+            metadata = self._checked_request(
+                {
+                    "method": "GetParameterValues",
+                    "datasetname": dataset,
+                    "ParameterName": "Year",
+                },
+                series_id,
+            )
+            values = metadata["BEAAPI"]["Results"].get("ParamValue", [])
+            coverage = next((v for v in values if v.get("TableName") == table), {})
+            first = int(coverage.get("FirstMonthlyYear") or 0)
+            last = int(coverage.get("LastMonthlyYear") or 0)
+        if observation_end:
+            last = min(last, int(str(observation_end)[:4]))
+        if first <= 0 or last < first:
+            raise BEAAPIError(f"No valid monthly year coverage for {series_id!r}")
+        return [
+            ",".join(str(y) for y in range(start, min(start + 10, last + 1)))
+            for start in range(first, last + 1, 10)
+        ]
 
     def get_observations(
         self,
@@ -187,15 +249,55 @@ class BEAClient(HTTPSource):
             "Frequency": freq,
             "Year": "ALL",
         }
-        payload = self._request("data", params)
-        beaapi = payload.get("BEAAPI") or {}
-        if isinstance(beaapi.get("Error"), dict):
-            err = beaapi["Error"]
-            raise BEAAPIError(
-                f"BEA error for {series_id!r}: "
-                f"{err.get('APIErrorDescription') or err}"
-            )
-        return payload
+        # GetData returns the complete table, so all selected lines share one
+        # capture. Serialize the first fetch to avoid concurrent duplicate calls.
+        key = (
+            dataset,
+            table,
+            freq,
+            str(observation_start or "")[:4],
+            str(observation_end or "")[:4],
+        )
+        with self._table_lock:
+            if key not in self._table_cache:
+                if dataset == "NIUnderlyingDetail" and freq == "M":
+                    years = self._monthly_year_chunks(
+                        dataset, table, series_id, observation_start, observation_end
+                    )
+                    records: list[dict[str, Any]] = []
+                    batches = []
+                    payload = None
+                    for year in years:
+                        log.info(
+                            "BEA monthly table %s: requesting years %s", table, year
+                        )
+                        part = self._checked_request(
+                            {**params, "Year": year}, series_id
+                        )
+                        results = part["BEAAPI"]["Results"]
+                        rows = _results_data(part)
+                        records.extend(rows)
+                        batches.append(
+                            {
+                                "Year": year,
+                                "RowCount": len(rows),
+                                "UTCProductionTime": results.get("UTCProductionTime"),
+                            }
+                        )
+                        if payload is None:
+                            payload = {
+                                **part,
+                                "BEAAPI": {
+                                    **part["BEAAPI"],
+                                    "Results": {**results, "Data": records},
+                                    "RequestBatches": batches,
+                                },
+                            }
+                    assert payload is not None  # Valid year coverage is nonempty.
+                else:
+                    payload = self._checked_request(params, series_id)
+                self._table_cache[key] = payload
+            return self._table_cache[key]
 
     def normalize(
         self,
@@ -206,5 +308,6 @@ class BEAClient(HTTPSource):
         track_vintage: bool = False,  # GetData returns the latest vintage only
         source: str = "bea",
     ) -> list[dict[str, Any]]:
-        return normalize_bea_observations(series_id, payload, run_id=run_id,
-                                          source=source)
+        return normalize_bea_observations(
+            series_id, payload, run_id=run_id, source=source
+        )

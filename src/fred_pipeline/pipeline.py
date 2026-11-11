@@ -543,6 +543,12 @@ class FredPipeline:
             self._clients[source] = client
         return client
 
+    def _clear_source_run_caches(self) -> None:
+        for client in self._clients.values():
+            clear = getattr(client, "clear_run_cache", None)
+            if callable(clear):
+                clear()
+
     @contextmanager
     def _run_network(
         self,
@@ -809,6 +815,7 @@ class FredPipeline:
         specs = list(specs)
         self._alert_sent = False
         self._last_alert_result = None
+        self._clear_source_run_caches()
         run = EtlRun(
             environment=self.config.environment.value,
             manifest_path=manifest_path,
@@ -955,6 +962,8 @@ class FredPipeline:
         except BaseException:
             self._send_run_alert(run, tracker)
             raise
+        finally:
+            self._clear_source_run_caches()
 
         run.finalize()
 
