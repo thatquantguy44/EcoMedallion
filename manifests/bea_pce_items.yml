@@ -1,31 +1,26 @@
 name: bea_pce_items
 description: >
-  BEA NIPA Table 2.4.4 — "Price Indexes for Personal Consumption Expenditures
+  BEA NIPA Underlying Detail Table 2.4.4U — "Price Indexes for Personal Consumption Expenditures
   by Type of Product" (monthly, SA). Provides item-level PCE price indexes for
   the Inflation Explorer (gold.inflation_explorer / gold.inflation_contribution).
   Uses the BEA API source (source: bea); series_id format is
-  '<dataset>:<table>:<line>:<frequency>' e.g. 'NIPA:T20404:1:M'.
+  '<dataset>:<table>:<line>:<frequency>' e.g. 'NIUnderlyingDetail:U20404:2:M'.
 
-  All table lines share the same API call to BEA GetData (BEAClient fetches the
-  full table; normalize_bea_observations selects the correct LineNumber), so the
-  16 series below cost only one network round-trip per scheduled ingest run.
+  All table lines share one captured table per run. BEAClient fetches monthly
+  history in bounded year batches; normalize_bea_observations selects each
+  LineNumber. The 21 series reuse those batches instead of refetching the table.
 
-  Shipped inactive (active: true). To enable:
-    1. Obtain a free BEA API key from https://apps.bea.gov/API/signup/
-    2. Set the BEA_API_KEY environment variable (or equivalent secret).
-    3. Verify line numbers against the live BEA table:
-       https://apps.bea.gov/iTable/?reqid=19&step=4&isuri=1&nipa_table_list=71
-       (Table 2.4.4) — line numbers can shift when BEA revises the table structure.
-    4. Set active: true on the series you wish to ingest.
-
-  ⚠️  Line numbers below are from BEA Table 2.4.4 documentation and should be
-  verified before activation. Line 1 (PCE headline) is PCEPI on FRED and is
-  already ingested via manifests/inflation.yml — skip it here.
+  Active series require BEA_API_KEY. Dataset, monthly frequency, line descriptions,
+  and provider series codes were verified against GetParameterValues/GetData on
+  2026-11-10. Standard NIPA T20404 supports annual/quarterly data only; monthly
+  U20404 has different line numbers. Line 1 (PCE headline) is PCEPI on FRED and
+  is already ingested via manifests/inflation.yml — skip it here.
+  API reference: https://apps.bea.gov/api/_pdf/bea_web_service_api_user_guide.pdf
 version: 1
 
 series:
   # --- major spending aggregates ---
-  - series_id: "NIPA:T20404:2:M"
+  - series_id: "NIUnderlyingDetail:U20404:2:M"
     title: PCE Price Index - Goods (SA)
     category: inflation
     frequency: m
@@ -41,7 +36,7 @@ series:
     min_value: 0
     tags: [pce, goods, bea, inflation]
 
-  - series_id: "NIPA:T20404:13:M"
+  - series_id: "NIUnderlyingDetail:U20404:150:M"
     title: PCE Price Index - Services (SA)
     category: inflation
     frequency: m
@@ -58,7 +53,7 @@ series:
     tags: [pce, services, bea, inflation]
 
   # --- durable goods sub-items ---
-  - series_id: "NIPA:T20404:3:M"
+  - series_id: "NIUnderlyingDetail:U20404:3:M"
     title: PCE Price Index - Durable Goods (SA)
     category: inflation
     frequency: m
@@ -74,7 +69,7 @@ series:
     min_value: 0
     tags: [pce, durable_goods, bea, inflation]
 
-  - series_id: "NIPA:T20404:4:M"
+  - series_id: "NIUnderlyingDetail:U20404:4:M"
     title: PCE Price Index - Motor Vehicles and Parts (SA)
     category: inflation
     frequency: m
@@ -90,7 +85,7 @@ series:
     min_value: 0
     tags: [pce, motor_vehicles, bea, inflation]
 
-  - series_id: "NIPA:T20404:5:M"
+  - series_id: "NIUnderlyingDetail:U20404:23:M"
     title: PCE Price Index - Furnishings and Durable Household Equipment (SA)
     category: inflation
     frequency: m
@@ -106,7 +101,7 @@ series:
     min_value: 0
     tags: [pce, furnishings, bea, inflation]
 
-  - series_id: "NIPA:T20404:6:M"
+  - series_id: "NIUnderlyingDetail:U20404:38:M"
     title: PCE Price Index - Recreational Goods and Vehicles (SA)
     category: inflation
     frequency: m
@@ -122,7 +117,7 @@ series:
     min_value: 0
     tags: [pce, recreational_goods, bea, inflation]
 
-  - series_id: "NIPA:T20404:7:M"
+  - series_id: "NIUnderlyingDetail:U20404:62:M"
     title: PCE Price Index - Other Durable Goods (SA)
     category: inflation
     frequency: m
@@ -139,7 +134,7 @@ series:
     tags: [pce, other_durable, bea, inflation]
 
   # --- nondurable goods sub-items ---
-  - series_id: "NIPA:T20404:8:M"
+  - series_id: "NIUnderlyingDetail:U20404:72:M"
     title: PCE Price Index - Nondurable Goods (SA)
     category: inflation
     frequency: m
@@ -155,7 +150,7 @@ series:
     min_value: 0
     tags: [pce, nondurable_goods, bea, inflation]
 
-  - series_id: "NIPA:T20404:9:M"
+  - series_id: "NIUnderlyingDetail:U20404:73:M"
     title: PCE Price Index - Food and Beverages Purchased for Off-Premises Consumption (SA)
     category: inflation
     frequency: m
@@ -171,7 +166,7 @@ series:
     min_value: 0
     tags: [pce, food, bea, inflation]
 
-  - series_id: "NIPA:T20404:10:M"
+  - series_id: "NIUnderlyingDetail:U20404:104:M"
     title: PCE Price Index - Clothing and Footwear (SA)
     category: inflation
     frequency: m
@@ -187,7 +182,7 @@ series:
     min_value: 0
     tags: [pce, clothing, bea, inflation]
 
-  - series_id: "NIPA:T20404:11:M"
+  - series_id: "NIUnderlyingDetail:U20404:113:M"
     title: PCE Price Index - Gasoline and Other Energy Goods (SA)
     category: inflation
     frequency: m
@@ -203,7 +198,7 @@ series:
     min_value: 0
     tags: [pce, energy, gasoline, bea, inflation]
 
-  - series_id: "NIPA:T20404:12:M"
+  - series_id: "NIUnderlyingDetail:U20404:120:M"
     title: PCE Price Index - Other Nondurable Goods (SA)
     category: inflation
     frequency: m
@@ -220,7 +215,7 @@ series:
     tags: [pce, other_nondurable, bea, inflation]
 
   # --- services sub-items ---
-  - series_id: "NIPA:T20404:14:M"
+  - series_id: "NIUnderlyingDetail:U20404:151:M"
     title: PCE Price Index - Household Consumption Expenditures for Services (SA)
     category: inflation
     frequency: m
@@ -236,7 +231,7 @@ series:
     min_value: 0
     tags: [pce, services, household, bea, inflation]
 
-  - series_id: "NIPA:T20404:15:M"
+  - series_id: "NIUnderlyingDetail:U20404:152:M"
     title: PCE Price Index - Housing and Utilities (SA)
     category: inflation
     frequency: m
@@ -252,7 +247,7 @@ series:
     min_value: 0
     tags: [pce, housing, utilities, bea, inflation]
 
-  - series_id: "NIPA:T20404:16:M"
+  - series_id: "NIUnderlyingDetail:U20404:172:M"
     title: PCE Price Index - Health Care (SA)
     category: inflation
     frequency: m
@@ -268,7 +263,7 @@ series:
     min_value: 0
     tags: [pce, health_care, bea, inflation]
 
-  - series_id: "NIPA:T20404:17:M"
+  - series_id: "NIUnderlyingDetail:U20404:190:M"
     title: PCE Price Index - Transportation Services (SA)
     category: inflation
     frequency: m
@@ -284,7 +279,7 @@ series:
     min_value: 0
     tags: [pce, transportation, bea, inflation]
 
-  - series_id: "NIPA:T20404:18:M"
+  - series_id: "NIUnderlyingDetail:U20404:209:M"
     title: PCE Price Index - Recreation Services (SA)
     category: inflation
     frequency: m
@@ -300,7 +295,7 @@ series:
     min_value: 0
     tags: [pce, recreation, bea, inflation]
 
-  - series_id: "NIPA:T20404:19:M"
+  - series_id: "NIUnderlyingDetail:U20404:234:M"
     title: PCE Price Index - Food Services and Accommodations (SA)
     category: inflation
     frequency: m
@@ -316,7 +311,7 @@ series:
     min_value: 0
     tags: [pce, food_services, bea, inflation]
 
-  - series_id: "NIPA:T20404:20:M"
+  - series_id: "NIUnderlyingDetail:U20404:252:M"
     title: PCE Price Index - Financial Services and Insurance (SA)
     category: inflation
     frequency: m
@@ -332,7 +327,7 @@ series:
     min_value: 0
     tags: [pce, financial_services, bea, inflation]
 
-  - series_id: "NIPA:T20404:21:M"
+  - series_id: "NIUnderlyingDetail:U20404:280:M"
     title: PCE Price Index - Other Services (SA)
     category: inflation
     frequency: m
@@ -348,7 +343,7 @@ series:
     min_value: 0
     tags: [pce, other_services, bea, inflation]
 
-  - series_id: "NIPA:T20404:22:M"
+  - series_id: "NIUnderlyingDetail:U20404:342:M"
     title: PCE Price Index - Final Consumption Expenditures of NPISHs (SA)
     category: inflation
     frequency: m

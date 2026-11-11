@@ -27,12 +27,19 @@ Errors are carried in a `BEAAPI.Error` block, often on HTTP 200 rather than a
 | Manifest | Active series | What |
 |---|---:|---|
 | `manifests/bea_national_accounts.yml` | 2 | NIPA Table T10101 lines (headline GDP components) |
-| `manifests/bea_pce_items.yml` | 21 | NIPA Table T20404 lines — PCE price index item-level detail feeding `config/inflation_items.yml`'s PCE waterfall (goods/services/durables/nondurables sub-items) |
+| `manifests/bea_pce_items.yml` | 21 | Monthly NIUnderlyingDetail Table U20404 lines — PCE price index item-level detail feeding `config/inflation_items.yml`'s PCE waterfall (goods/services/durables/nondurables sub-items) |
 
-`config/inflation_items.yml` documents which `NIPA:T20404:*` lines map to
+`config/inflation_items.yml` documents which `NIUnderlyingDetail:U20404:*` lines map to
 which PCE contribution-waterfall category and their approximate weights (see
 that file's own header caveat about refreshing weights from BEA Section 2
 Underlying Detail).
+
+The monthly mappings were checked against live BEA table descriptions and
+series codes on 2026-11-10. Standard NIPA T20404 provides annual/quarterly data
+only. The client shares each table capture across its selected lines within a
+run and clears that cache between runs. Monthly underlying-detail history uses
+provider-reported year bounds and batches of at most ten years, with year and
+production-time provenance retained in `BEAAPI.RequestBatches`.
 
 ## Discovery
 
