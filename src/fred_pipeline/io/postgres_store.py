@@ -36,6 +36,8 @@ from fred_pipeline.io.postgres_config import resolve_postgres_settings
 from fred_pipeline.manifest import Manifest
 from fred_pipeline.meta import build_meta_rows
 from fred_pipeline.quality import QualityReport
+from fred_pipeline.performance import span
+from fred_pipeline.timing import timed
 from fred_pipeline.warehouse import dq_rows
 
 _MEDALLION_SCHEMAS = ("meta", "audit", "bronze", "silver", "gold")
@@ -65,6 +67,8 @@ _UPSERT_KEYS: dict[str, tuple[str, ...]] = {
     ),
     "silver_fred_observation_history": ("observation_event_id",),
     "audit_etl_run": ("run_id",),
+    "audit_run_performance": ("run_id",),
+    "audit_run_span": ("span_id",),
     "bronze_ecb_eligible_asset_release": ("release_id",),
     "bronze_ecb_eligible_asset_artifact": ("release_id", "artifact_kind"),
     "silver_ecb_eligible_asset_release": ("release_id",),
@@ -265,6 +269,7 @@ class PostgresWarehouse:
         self._pg_conn.commit()
         self._backfill_observation_history()
 
+    @timed("startup.observation_history_migration", log_completion=False)
     def _backfill_observation_history(self) -> None:
         """Seed pre-Spec015 compact rows as their one known observed state."""
         from fred_pipeline.data.observation_history import observation_event
@@ -402,6 +407,12 @@ class PostgresWarehouse:
             translated = translated.replace("?", "%s")
         return translated, params
 
+    @timed(
+        "warehouse.write",
+        log_completion=False,
+        attributes=lambda self, table, *_a, **_k: {"table": table},
+        count_result="rows_written",
+    )
     def _insert(
         self,
         table: str,
@@ -443,6 +454,12 @@ class PostgresWarehouse:
             self._pg_conn.commit()
         return len(rows)
 
+    @timed(
+        "warehouse.write_frame",
+        log_completion=False,
+        attributes=lambda self, table, *_a, **_k: {"table": table},
+        count_result="rows_written",
+    )
     def _insert_frame(
         self,
         table: str,
@@ -471,11 +488,18 @@ class PostgresWarehouse:
             for row in rows:
                 copy.write_row([_encode(value) for value in row])
 
+    @timed(
+        "warehouse.read",
+        log_completion=False,
+        attributes=lambda self, table: {"table": table},
+        count_result="rows",
+    )
     def _read(self, table: str) -> list[dict[str, Any]]:
         with self._pg_conn.cursor() as cur:
             cur.execute(f"SELECT * FROM {_relation_from_flat(table)}")
             return [dict(row) for row in cur.fetchall()]
 
+    @timed("gold.read_latest_subset", log_completion=False, count_result="rows")
     def _read_gold_latest_subset(
         self, *, series_ids: Sequence[str]
     ) -> list[dict[str, Any]]:
@@ -562,6 +586,7 @@ class PostgresWarehouse:
         )
         return rows[0]["start"] if rows and rows[0]["start"] is not None else None
 
+    @timed("bronze.write", log_completion=False, count_result="rows_written")
     def write_bronze(self, rows: list[dict[str, Any]]) -> int:
         return self._insert("bronze_fred_api_response", rows)
 
@@ -578,6 +603,7 @@ class PostgresWarehouse:
         sql += " ORDER BY ingested_at"
         return self.query(sql, params)
 
+    @timed("silver.merge", log_completion=False, count_result="rows_written")
     def merge_silver(self, rows: list[dict[str, Any]]) -> int:
         from fred_pipeline.data.observation_history import (
             observation_event,
@@ -647,7 +673,8 @@ class PostgresWarehouse:
             self.conn.rollback()
             raise
         else:
-            self.conn.commit()
+            with span("warehouse.commit"):
+                self.conn.commit()
             return result
         finally:
             self._defer_commits = False
@@ -865,6 +892,7 @@ class PostgresWarehouse:
     def persist_dq(self, run_id: str, report: QualityReport) -> None:
         self.persist_dq_reports(run_id, [report])
 
+    @timed("audit.quality", log_completion=False)
     def persist_dq_reports(self, run_id: str, reports: list[QualityReport]) -> None:
         self._insert(
             "audit_data_quality_result",
@@ -1088,6 +1116,8 @@ WHERE status = 'approved' AND geo_type = 'country'
 
 
 _POSTGRES_INDEX_SQL = (
+    "CREATE INDEX IF NOT EXISTS idx_performance_comparison ON audit.run_performance(comparison_key, started_at)",
+    "CREATE INDEX IF NOT EXISTS idx_performance_run_span ON audit.run_span(run_id)",
     """
     CREATE INDEX IF NOT EXISTS ix_silver_obs_sid_rt
         ON silver.fred_observation(series_id, realtime_start DESC)

@@ -265,7 +265,7 @@ def test_main_run_selects_ecb_route_before_metadata_and_reuses_it_for_hook(
         )
 
 
-def test_main_poll_sends_one_alert_from_the_shared_service(
+def test_main_poll_defers_one_health_alert_until_processing_finishes(
     tmp_path, monkeypatch, capsys, observations_payload
 ):
     import fred_pipeline.ecb_execution as execution
@@ -281,8 +281,9 @@ def test_main_poll_sends_one_alert_from_the_shared_service(
 
     def checked(*args, **kwargs):
         report = original(*args, **kwargs)
-        assert len(alerts) == 1
-        assert alerts[0]["results"][0]["status"] == "accepted"
+        # The callback queues delivery; processing is frozen before sending.
+        assert alerts == []
+        assert report.outcome == "accepted"
         return report
 
     monkeypatch.setattr(execution, "execute_ecb_poll", checked)
@@ -306,6 +307,7 @@ def test_main_poll_sends_one_alert_from_the_shared_service(
     )
     capsys.readouterr()
     assert len(alerts) == 1
+    assert alerts[0]["results"][0]["status"] == "accepted"
 
 
 def test_standalone_preflight_failure_sends_alert_and_downloads_nothing(

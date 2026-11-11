@@ -24,6 +24,8 @@ from dataclasses import dataclass, field
 from email.utils import parsedate_to_datetime
 from typing import Any, Callable, Optional, Protocol, runtime_checkable
 
+from fred_pipeline.performance import span
+
 try:  # requests is a light, ubiquitous dependency; import guarded for clarity.
     import requests
 except ImportError:  # pragma: no cover
@@ -127,9 +129,7 @@ class HTTPSource:
         elif requests is not None:
             self._session = requests.Session()
         else:  # pragma: no cover
-            raise self.error_cls(
-                "`requests` is not installed and no session provided"
-            )
+            raise self.error_cls("`requests` is not installed and no session provided")
 
     # ---- source-specific hooks ------------------------------------------
 
@@ -176,12 +176,26 @@ class HTTPSource:
 
         last_exc: Optional[Exception] = None
         for attempt in range(self.max_retries + 1):
-            self._rate_limiter.acquire()
+            with span("http.rate_limit", source=self.source_name, detailed=True):
+                self._rate_limiter.acquire()
             try:
-                resp = self._send(url, query, method)
+                with span(
+                    "http.request",
+                    source=self.source_name,
+                    attempt=attempt + 1,
+                    detailed=True,
+                ) as measurement:
+                    resp = self._send(url, query, method)
+                    measurement.count("http_status", getattr(resp, "status_code", 200))
+                    if getattr(resp, "status_code", 200) != 200:
+                        measurement.outcome("failed")
             except Exception as exc:  # network error, DNS, timeout, etc.
                 last_exc = exc
-                self._backoff(attempt)
+                with span(
+                    "http.retry_wait", source=self.source_name, detailed=True
+                ) as measurement:
+                    measurement.count("retries", int(attempt < self.max_retries))
+                    self._backoff(attempt)
                 continue
 
             status = getattr(resp, "status_code", 200)
@@ -190,16 +204,17 @@ class HTTPSource:
                     return resp.content
                 return resp.text if as_text else resp.json()
             if status in self.retryable_status and attempt < self.max_retries:
-                last_exc = self.error_cls(
-                    f"HTTP {status} from {endpoint}", status
-                )
-                self._backoff(attempt, resp)
+                last_exc = self.error_cls(f"HTTP {status} from {endpoint}", status)
+                with span(
+                    "http.retry_wait", source=self.source_name, detailed=True
+                ) as measurement:
+                    measurement.count("retries", 1)
+                    self._backoff(attempt, resp)
                 continue
             # Non-retryable (e.g. 400 bad id, 403 bad key) or retries exhausted.
             detail = self._error_detail(resp)
             raise self.error_cls(
-                f"{self.source_name} API error on {endpoint} "
-                f"(HTTP {status}): {detail}",
+                f"{self.source_name} API error on {endpoint} (HTTP {status}): {detail}",
                 status,
             )
 
@@ -224,7 +239,7 @@ class HTTPSource:
             self._sleep(min(retry_after, 300.0))
             return
         # Exponential backoff with full jitter, capped at 30s.
-        delay = min(2 ** attempt, 30) + random.uniform(0, 0.5)
+        delay = min(2**attempt, 30) + random.uniform(0, 0.5)
         self._sleep(delay)
 
     def _retry_after_seconds(self, resp: Any = None) -> Optional[float]:

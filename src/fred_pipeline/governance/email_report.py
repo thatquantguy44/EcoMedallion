@@ -22,6 +22,10 @@ from datetime import datetime
 from typing import Any, Iterable, Optional, Sequence
 
 from fred_pipeline.governance.stages import StageRecord, StageStatus
+from fred_pipeline.governance.performance_report import (
+    render_performance_html,
+    render_performance_text,
+)
 
 _VERDICT_LABEL = {
     "success": "SUCCESS",
@@ -58,6 +62,7 @@ class RunSummary:
     series_total: int = 0
     series_succeeded: int = 0
     series_failed: int = 0
+    series_skipped_not_due: int = 0
     duration_seconds: Optional[float] = None
     started_at: Optional[datetime] = None
     ended_at: Optional[datetime] = None
@@ -65,6 +70,7 @@ class RunSummary:
     manifest_path: str = ""
     failures: Sequence[tuple[str, str]] = ()  # (series_id, error)
     dq_failures: Sequence[tuple[str, str]] = ()  # (series_id, check)
+    performance: Optional[dict[str, Any]] = None
 
 
 def _fmt_duration(seconds: Optional[float]) -> str:
@@ -134,12 +140,14 @@ def render_text(summary: RunSummary, *, max_failures: int = 25) -> str:
             "SERIES",
             "------",
             f" total {summary.series_total} | ok {summary.series_succeeded} "
-            f"| failed {summary.series_failed}",
+            f"| failed {summary.series_failed} | skipped {summary.series_skipped_not_due}",
         ]
     if summary.failures:
         lines.append("")
-        lines.append(f"FAILED SERIES (showing {min(len(summary.failures), max_failures)}"
-                     f" of {len(summary.failures)})")
+        lines.append(
+            f"FAILED SERIES (showing {min(len(summary.failures), max_failures)}"
+            f" of {len(summary.failures)})"
+        )
         lines.append("-" * 20)
         for series_id, error in list(summary.failures)[:max_failures]:
             lines.append(f" • {series_id}: {error or 'unknown error'}")
@@ -151,7 +159,7 @@ def render_text(summary: RunSummary, *, max_failures: int = 25) -> str:
         lines.append("-" * 20)
         for series_id, check in list(summary.dq_failures)[:max_failures]:
             lines.append(f" • {series_id}: {check}")
-    return "\n".join(lines)
+    return "\n".join(lines) + render_performance_text(summary.performance)
 
 
 def _row_html(record: StageRecord) -> str:
@@ -236,19 +244,20 @@ def render_html(summary: RunSummary, *, max_failures: int = 25) -> str:
         f"<p style='font-family:Segoe UI,Arial,sans-serif;font-size:13px'>"
         f"<strong>{summary.series_succeeded}</strong> of "
         f"<strong>{summary.series_total}</strong> series succeeded, "
-        f"<strong>{summary.series_failed}</strong> failed.</p>"
+        f"<strong>{summary.series_failed}</strong> failed, "
+        f"<strong>{summary.series_skipped_not_due}</strong> skipped as not due.</p>"
         if summary.series_total
         else ""
     )
 
     return f"""<!doctype html>
-<html><body style="margin:0;padding:16px;background:#F9FAFB">
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Pipeline performance report</title></head><body style="margin:0;padding:16px;background:#F9FAFB">
 <div style="max-width:760px;margin:0 auto;background:#FFFFFF;padding:20px;
             border:1px solid #E5E7EB;font-family:Segoe UI,Arial,sans-serif">
   <div style="border-left:5px solid {colour};padding:8px 14px;margin-bottom:16px">
-    <div style="font-size:20px;font-weight:700;color:{colour}">
+    <h1 style="font-size:20px;font-weight:700;color:{colour};margin:0">
       {emoji} {label}
-    </div>
+    </h1>
     <div style="font-size:14px;color:#374151">{html.escape(summary.reason)}</div>
   </div>
 
@@ -256,7 +265,7 @@ def render_html(summary: RunSummary, *, max_failures: int = 25) -> str:
     {meta_rows}
   </table>
 
-  <h3 style="font-size:14px;margin:0 0 6px">Stages</h3>
+  <h2 style="font-size:14px;margin:0 0 6px">Stages</h2>
   <table style="width:100%;border-collapse:collapse;font-size:13px">
     <thead>
       <tr style="background:#F3F4F6;text-align:left">
@@ -271,6 +280,7 @@ def render_html(summary: RunSummary, *, max_failures: int = 25) -> str:
 
   {series_line}
   {failures_html}
+  {render_performance_html(summary.performance)}
 
   <p style="color:#6B7280;font-size:11px;margin-top:20px;
             border-top:1px solid #E5E7EB;padding-top:10px">
@@ -289,6 +299,7 @@ def build_summary(
     reason: str,
     environment: str = "",
     max_failures: int = 25,
+    performance: Optional[dict[str, Any]] = None,
 ) -> RunSummary:
     """Adapt an :class:`~fred_pipeline.audit.EtlRun` into a :class:`RunSummary`.
 
@@ -315,11 +326,19 @@ def build_summary(
         series_total=getattr(run, "series_total", 0) or 0,
         series_succeeded=getattr(run, "series_succeeded", 0) or 0,
         series_failed=getattr(run, "series_failed", 0) or 0,
-        duration_seconds=getattr(run, "duration_seconds", None),
-        started_at=getattr(run, "started_at", None),
-        ended_at=getattr(run, "ended_at", None),
+        series_skipped_not_due=getattr(run, "series_skipped_not_due", 0) or 0,
+        duration_seconds=performance["processing_seconds"]
+        if performance
+        else getattr(run, "duration_seconds", None),
+        started_at=datetime.fromisoformat(performance["started_at"])
+        if performance and performance.get("started_at")
+        else getattr(run, "started_at", None),
+        ended_at=datetime.fromisoformat(performance["ended_at"])
+        if performance and performance.get("ended_at")
+        else getattr(run, "ended_at", None),
         triggered_by=getattr(run, "triggered_by", ""),
         manifest_path=getattr(run, "manifest_path", ""),
         failures=failures[: max_failures * 2],
         dq_failures=dq_failures[: max_failures * 2],
+        performance=performance,
     )

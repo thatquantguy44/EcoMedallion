@@ -367,6 +367,11 @@ unless you pass `--append`. Full procedure in
 
 ## Operations reference
 
+Run alerts include a performance timeline, source latency/retry statistics,
+slowest operations and comparable-run history. Use `run --performance-detail`
+to retain individual request/wait events and `--performance-dir data/performance`
+to choose the report directory. See the [performance reporting guide](docs/handoffs/pipeline_performance_reporting.md).
+
 Every `python -m fred_pipeline <command>` the CLI supports, grouped by what
 it does. All commands accept `--env dev|test|prod` and `--config <path>`;
 only the flags that differ in meaning are listed per command. (Full detail:

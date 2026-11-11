@@ -8,6 +8,9 @@ and publication time is the point-in-time boundary.
 
 from __future__ import annotations
 
+from fred_pipeline.performance import span
+from fred_pipeline.timing import timed
+
 import base64
 import binascii
 import csv
@@ -300,6 +303,7 @@ def _artifact_kind(file_name: str) -> str:
     raise ECBReleaseValidationError(f"unknown MID attachment type: {file_name}")
 
 
+@timed("ecb_assets.parse_rss", log_completion=False)
 def parse_rss(xml_bytes: bytes) -> list[RSSRelease]:
     """Return eligible-assets items from the finite, mixed-purpose MID feed."""
     try:
@@ -333,6 +337,7 @@ def parse_rss(xml_bytes: bytes) -> list[RSSRelease]:
     return sorted(releases, key=lambda item: item.published_at)
 
 
+@timed("ecb_assets.parse_release", log_completion=False)
 def parse_release_message(
     xml_bytes: bytes, *, url: str, rss_pub_at: str | None = None
 ) -> ReleaseMessage:
@@ -548,6 +553,7 @@ def _canonical_hash(row: Mapping[str, Any], *, is_eligible: bool = True) -> str:
     )
 
 
+@timed("ecb_assets.parse_xml", log_completion=False)
 def parse_assets_xml(xml_bytes: bytes, *, strict_schema: bool = True) -> ParsedAssets:
     """Stream a full/update XML attachment into canonical keyed rows."""
     raw = _decode_payload(xml_bytes)
@@ -609,6 +615,7 @@ def parse_assets_xml(xml_bytes: bytes, *, strict_schema: bool = True) -> ParsedA
     )
 
 
+@timed("ecb_assets.parse_dictionary", log_completion=False, count_result="rows")
 def parse_dictionary_xml(xml_bytes: bytes) -> list[dict[str, Any]]:
     raw = _decode_payload(xml_bytes)
     try:
@@ -653,6 +660,7 @@ def _csv_encoding(data: bytes) -> str:
     return "utf-8-sig"
 
 
+@timed("ecb_assets.parse_csv", log_completion=False)
 def parse_assets_csv(csv_bytes: bytes, *, update: bool = False) -> ParsedAssets:
     """Parse current-format archive CSV; retained for bootstrap inventories."""
     raw = _decode_payload(csv_bytes)
@@ -724,6 +732,7 @@ def _xml_escape(value: str) -> str:
     )
 
 
+@timed("ecb_assets.diff", log_completion=False)
 def diff_assets(
     prior: Mapping[str, Mapping[str, Any]],
     current: Mapping[str, Mapping[str, Any]],
@@ -739,6 +748,7 @@ def diff_assets(
     return changes
 
 
+@timed("ecb_assets.reconcile", log_completion=False)
 def reconcile_update(
     computed: Mapping[str, str],
     update_rows: Mapping[str, Mapping[str, Any]],
@@ -839,12 +849,15 @@ class ECBMIDClient(HTTPSource):
     def _request_headers(self) -> dict[str, str]:
         return {"Accept": "application/xml, application/rss+xml, */*"}
 
+    @timed("ecb_assets.discovery", log_completion=False)
     def fetch_rss(self) -> bytes:
         return self._request("rss/mid.xml", {}, as_bytes=True)
 
+    @timed("ecb_assets.download_release", log_completion=False)
     def fetch_release(self, url: str) -> bytes:
         return self._request(url, {}, as_bytes=True)
 
+    @timed("ecb_assets.download_artifact", log_completion=False)
     def fetch_artifact(self, url: str) -> bytes:
         return self._request(url, {}, as_bytes=True)
 
@@ -931,6 +944,7 @@ class ECBEligibleAssetRepository:
         )
         self.warehouse.conn.commit()
 
+    @timed("ecb_assets.publish", log_completion=False)
     def publish(
         self,
         release: ReleaseMessage,
@@ -1217,7 +1231,14 @@ class ECBEligibleAssetsPipeline:
                 )
             for attachment in release.attachments:
                 payload = self.client.fetch_artifact(attachment.url)
-                verification = self.signature_verifier(payload, attachment.signature)
+                with span(
+                    "ecb_assets.verify_signature", artifact_kind=attachment.kind
+                ) as measurement:
+                    verification = self.signature_verifier(
+                        payload, attachment.signature
+                    )
+                    if not verification.valid:
+                        measurement.outcome("failed")
                 decoded = _decode_payload(payload)
                 self.repository.record_artifact(
                     {

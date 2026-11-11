@@ -19,6 +19,8 @@ from __future__ import annotations
 from typing import Any
 
 from fred_pipeline.config import PipelineConfig
+from fred_pipeline.performance import span
+from fred_pipeline.timing import timed
 from fred_pipeline.spark_io import get_spark
 
 
@@ -251,6 +253,7 @@ def point_in_time_features_sql(config: PipelineConfig, as_of: str) -> str:
     """
 
 
+@timed("gold.ecb_fx_reference_rates", log_completion=False)
 def _build_ecb_fx_reference_rates(config: PipelineConfig, spark: Any) -> None:
     """Write exact, non-forward-filled ECB native/inverse/cross FX rates."""
     from pyspark.sql.types import StringType, StructField, StructType
@@ -301,6 +304,7 @@ def _build_ecb_fx_reference_rates(config: PipelineConfig, spark: Any) -> None:
     )
 
 
+@timed("gold.cross_series", log_completion=False)
 def _build_cross_series(config: PipelineConfig, spark: Any) -> None:
     """Build ``gold.fred_cross_series_feature`` on Spark by reusing the pure-Python
     reference (:func:`fred_pipeline.features.compute_cross_series_features`).
@@ -355,6 +359,7 @@ def _build_cross_series(config: PipelineConfig, spark: Any) -> None:
     ).saveAsTable(gold)
 
 
+@timed("gold.cross_series_pit", log_completion=False)
 def _build_cross_series_pit(config: PipelineConfig, spark: Any) -> None:
     """Build ``gold.fred_cross_series_feature_pit`` — the point-in-time
     (as-first-reported) cross-series features — by reusing the pure-Python
@@ -410,6 +415,7 @@ def _build_cross_series_pit(config: PipelineConfig, spark: Any) -> None:
     ).saveAsTable(gold)
 
 
+@timed("gold.company_financials", log_completion=False)
 def _build_company_financials(config: PipelineConfig, spark: Any) -> None:
     """Build ``gold.fred_company_fundamentals`` + ``gold.fred_company_ratios`` by
     reusing the pure-Python standardizer (:mod:`fred_pipeline.sec_standardization`).
@@ -474,6 +480,7 @@ def _build_company_financials(config: PipelineConfig, spark: Any) -> None:
     ).saveAsTable(config.table("gold", "fred_company_ratios"))
 
 
+@timed("gold.source_reconciliation", log_completion=False)
 def _build_source_reconciliation(config: PipelineConfig, spark: Any) -> None:
     """Build ``gold.fred_source_reconciliation`` on Spark by reusing the pure-Python
     reference (:func:`fred_pipeline.features.compute_source_reconciliation`) — same
@@ -552,6 +559,7 @@ def _collect_latest(
     return [r.asDict() for r in df.collect()]
 
 
+@timed("gold.terminal_views", log_completion=False)
 def _build_terminal_views(config: PipelineConfig, spark: Any) -> None:
     """Build the market-terminal analytical views (dimensions + ECON macro
     dashboard + Treasury Curve Lab; see ``docs/market_terminal_gold_views.md``)
@@ -1451,6 +1459,7 @@ def _build_terminal_views(config: PipelineConfig, spark: Any) -> None:
     )
 
 
+@timed("gold.regime_stats", log_completion=False)
 def _build_regime_stats(config: PipelineConfig, spark: Any) -> None:
     """Build the Phase-5 regime playbook + statistical lab tables
     (``gold.macro_regime_daily``, ``series_correlation``, ``series_lead_lag``,
@@ -1694,6 +1703,7 @@ def _build_regime_stats(config: PipelineConfig, spark: Any) -> None:
         )
 
 
+@timed("gold.global_views", log_completion=False)
 def _build_global_views(config: PipelineConfig, spark: Any) -> None:
     """Build the Phase-6 global tables + the Power BI catalog
     (``gold.global_inflation``, ``global_policy_rates``, ``powerbi_catalog``)
@@ -1814,6 +1824,7 @@ def _build_global_views(config: PipelineConfig, spark: Any) -> None:
     )
 
 
+@timed("gold.equity_views", log_completion=False)
 def _build_equity_views(config: PipelineConfig, spark: Any) -> None:
     """Build the equity slice from the pure-Python engines in
     :mod:`fred_pipeline.equity_views`. Collected input is source-filtered so
@@ -1981,6 +1992,7 @@ def _build_equity_views(config: PipelineConfig, spark: Any) -> None:
     ).saveAsTable(config.table("gold", "realized_volatility"))
 
 
+@timed("gold.zscore_views", log_completion=False)
 def _build_zscore_views(config: PipelineConfig, spark: Any) -> None:
     """Build ``gold.fred_series_zscore_rolling`` and ``gold.zscore_heatmap``
     from the pure-Python engines in :mod:`fred_pipeline.zscore_views`.
@@ -2082,6 +2094,7 @@ def _build_zscore_views(config: PipelineConfig, spark: Any) -> None:
     )
 
 
+@timed("gold.ml_pipeline", log_completion=False)
 def _build_ml_pipeline(config: PipelineConfig, spark: Any) -> None:
     """Build ML pipeline Gold tables (ML-0/2/4/3/5) by reusing the pure-Python
     engines, same collect-and-compute pattern as the other builders.
@@ -2457,7 +2470,8 @@ def build_gold(config: PipelineConfig, *, spark: Any = None) -> dict[str, str]:
     }
     results: dict[str, str] = {}
     for name, sql in steps.items():
-        spark.sql(sql)
+        with span("gold.sql", table=name):
+            spark.sql(sql)
         results[name] = "ok"
     # Cross-series features + source reconciliation are computed in Python (reused
     # by both backends) and written after latest_observation exists.

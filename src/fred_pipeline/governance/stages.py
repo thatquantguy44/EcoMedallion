@@ -31,6 +31,8 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Iterable, Iterator, Optional
 
+from fred_pipeline.performance import current_performance, span
+
 
 def _now() -> datetime:
     return datetime.now(timezone.utc)
@@ -129,23 +131,33 @@ class RunStageTracker:
 
     def __init__(self) -> None:
         self._records: dict[str, StageRecord] = {}
+        self._span_ids: dict[str, str] = {}
+        self.required_stages: set[str] = set()
 
     @contextmanager
     def stage(self, name: str, *, swallow: bool = False) -> Iterator[StageRecord]:
         record = StageRecord(name=name, status=StageStatus.SUCCEEDED, started_at=_now())
         self._records[name] = record
         started = time.monotonic()
-        try:
-            yield record
-        except BaseException as exc:  # noqa: BLE001 - re-raised unless swallowed
-            record.status = StageStatus.FAILED
-            record.error_type = type(exc).__name__
-            record.error_message = str(exc)[:2000]
-            if not swallow:
-                raise
-        finally:
-            record.ended_at = _now()
-            record.duration_seconds = time.monotonic() - started
+        with span(name, kind="stage") as measurement:
+            self._span_ids[name] = measurement.span_id
+            try:
+                yield record
+            except BaseException as exc:  # noqa: BLE001 - preserve existing policy
+                record.status = StageStatus.FAILED
+                record.error_type = type(exc).__name__
+                record.error_message = str(exc)[:2000]
+                if not swallow:
+                    raise
+            finally:
+                record.ended_at = _now()
+                record.duration_seconds = time.monotonic() - started
+                measurement.outcome(
+                    "unchanged"
+                    if record.detail.get("unchanged")
+                    and record.status is StageStatus.SUCCEEDED
+                    else record.status.value
+                )
 
     def skip(self, name: str, reason: str = "") -> StageRecord:
         """Record a stage that was deliberately not run."""
@@ -153,6 +165,8 @@ class RunStageTracker:
         if reason:
             record.detail["reason"] = reason
         self._records[name] = record
+        with span(name, kind="stage") as measurement:
+            measurement.outcome("skipped")
         return record
 
     def warn(self, name: str, message: str) -> Optional[StageRecord]:
@@ -163,6 +177,9 @@ class RunStageTracker:
         if record.status is StageStatus.SUCCEEDED:
             record.status = StageStatus.WARNED
         record.detail.setdefault("warnings", []).append(message)
+        collector = current_performance()
+        if collector is not None and name in self._span_ids:
+            collector.mark_status(self._span_ids[name], record.status.value)
         return record
 
     def get(self, name: str) -> Optional[StageRecord]:
@@ -201,6 +218,7 @@ def overall_verdict(
     *,
     series_failed: int = 0,
     series_total: int = 0,
+    required_stages: Iterable[str] = (),
 ) -> tuple[str, str]:
     """Reduce stages (and series counts) to one verdict and a plain reason.
 
@@ -213,7 +231,9 @@ def overall_verdict(
     """
     records = list(records)
     by_name = {r.name: r for r in records}
-    required = {spec.name for spec in EXPECTED_STAGES if spec.required}
+    required = {spec.name for spec in EXPECTED_STAGES if spec.required} | set(
+        required_stages
+    )
 
     hard_failures = [
         r for r in records if r.status is StageStatus.FAILED and r.name in required

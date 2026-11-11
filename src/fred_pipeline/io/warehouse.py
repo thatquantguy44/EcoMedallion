@@ -17,6 +17,7 @@ from datetime import datetime, timezone
 from typing import Any, Iterable, Optional, Protocol, runtime_checkable
 
 from fred_pipeline.audit import EtlRun
+from fred_pipeline.timing import timed
 from fred_pipeline.config import PipelineConfig
 from fred_pipeline.manifest import Manifest
 from fred_pipeline.quality import QualityReport
@@ -127,6 +128,7 @@ class SparkWarehouse:
         val = rows[0]["start"] if rows else None
         return None if val is None else str(val)
 
+    @timed("bronze.write", log_completion=False, count_result="rows_written")
     def write_bronze(self, rows: list[dict[str, Any]]) -> int:
         from fred_pipeline.bronze import write_bronze
 
@@ -146,6 +148,7 @@ class SparkWarehouse:
         )
         return [row.asDict() for row in df.collect()]
 
+    @timed("silver.merge", log_completion=False, count_result="rows_written")
     def merge_silver(self, rows: list[dict[str, Any]]) -> int:
         from fred_pipeline.silver import merge_silver
 
@@ -254,6 +257,7 @@ class SparkWarehouse:
     def persist_dq(self, run_id: str, report: QualityReport) -> None:
         self.persist_dq_reports(run_id, [report])
 
+    @timed("audit.quality", log_completion=False)
     def persist_dq_reports(self, run_id: str, reports: list[QualityReport]) -> None:
         from fred_pipeline.spark_io import append_rows, target_partitions_for_rows
 

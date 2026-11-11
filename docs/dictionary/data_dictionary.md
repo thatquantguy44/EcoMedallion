@@ -106,7 +106,22 @@ a final answer for a real compliance decision):
 
 ## audit
 
+### `audit.run_performance`
+
+One upserted processing/report snapshot per run. Stores UTC boundaries, status,
+elapsed processing seconds, comparison key, metadata/summary JSON and delivery
+JSON. SQLite uses `audit_run_performance`. See the
+[performance reporting handoff](../handoffs/pipeline_performance_reporting.md).
+
+### `audit.run_span`
+
+One latest outcome per unique span ID, linked to a run and optional parent.
+Stores section/source/series/table identifiers, UTC boundaries, monotonic offset,
+elapsed seconds, status, allowlisted attributes and exception type. SQLite uses
+`audit_run_span`. Start/finish events upsert the same ID.
+
 ### `audit.etl_run`
+
 One row per pipeline invocation.
 
 | Column | Type | Notes |

@@ -154,7 +154,8 @@ def test_postgres_warehouse_builds_core_gold_like_local(tmp_path, postgres_dsn):
             """
         )
         assert {row["table_schema"]: row["n"] for row in object_counts} == {
-            "audit": 4,
+            # Existing audits plus the Spec017 performance summary/span tables.
+            "audit": 6,
             # FRED response plus the spec011 release/artifact tables.
             "bronze": 3,
             # Includes gold_incremental_checkpoint (spec003 Phase 3 checkpoint
