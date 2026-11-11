@@ -1,0 +1,198 @@
+{
+  "run_id": "fixture-partial",
+  "environment": "test",
+  "verdict": "partial",
+  "reason": "optional stage(s) failed: release_calendar",
+  "series": {
+    "total": 3,
+    "succeeded": 2,
+    "failed": 0,
+    "skipped_not_due": 1
+  },
+  "stages": [
+    {
+      "name": "plan",
+      "status": "succeeded",
+      "duration_seconds": 3,
+      "detail": {}
+    },
+    {
+      "name": "extract",
+      "status": "succeeded",
+      "duration_seconds": 60,
+      "detail": {}
+    },
+    {
+      "name": "fomc_calendar",
+      "status": "succeeded",
+      "duration_seconds": 2,
+      "detail": {}
+    },
+    {
+      "name": "gold",
+      "status": "succeeded",
+      "duration_seconds": 35,
+      "detail": {}
+    },
+    {
+      "name": "release_calendar",
+      "status": "failed",
+      "duration_seconds": 3,
+      "detail": {},
+      "error_type": "SourceError",
+      "error_message": "<untrusted provider text>"
+    },
+    {
+      "name": "persist",
+      "status": "succeeded",
+      "duration_seconds": 2,
+      "detail": {}
+    },
+    {
+      "name": "ecb_assets",
+      "status": "succeeded",
+      "duration_seconds": 13,
+      "detail": {}
+    }
+  ],
+  "performance": {
+    "processing_seconds": 120,
+    "dropped_events": 3,
+    "telemetry_errors": [
+      "storage"
+    ],
+    "stages": [
+      {
+        "name": "startup.warehouse",
+        "status": "succeeded",
+        "offset_seconds": 0,
+        "duration_seconds": 2
+      },
+      {
+        "name": "plan",
+        "status": "succeeded",
+        "offset_seconds": 2,
+        "duration_seconds": 3
+      },
+      {
+        "name": "extract",
+        "status": "succeeded",
+        "offset_seconds": 5,
+        "duration_seconds": 60
+      },
+      {
+        "name": "fomc_calendar",
+        "status": "succeeded",
+        "offset_seconds": 65,
+        "duration_seconds": 2
+      },
+      {
+        "name": "gold",
+        "status": "succeeded",
+        "offset_seconds": 67,
+        "duration_seconds": 35
+      },
+      {
+        "name": "release_calendar",
+        "status": "failed",
+        "offset_seconds": 102,
+        "duration_seconds": 3
+      },
+      {
+        "name": "persist",
+        "status": "succeeded",
+        "offset_seconds": 105,
+        "duration_seconds": 2
+      },
+      {
+        "name": "ecb_assets",
+        "status": "succeeded",
+        "offset_seconds": 107,
+        "duration_seconds": 13
+      }
+    ],
+    "aggregates": [
+      {
+        "name": "http.request",
+        "source": "bea",
+        "count": 5,
+        "failed": 1,
+        "worker_seconds": 9,
+        "p50_seconds": 1,
+        "p95_seconds": 3,
+        "sample_count": 5,
+        "sampled": false,
+        "counters": {}
+      },
+      {
+        "name": "http.retry_wait",
+        "source": "bea",
+        "count": 1,
+        "worker_seconds": 2,
+        "counters": {
+          "retries": 1
+        }
+      },
+      {
+        "name": "http.rate_limit",
+        "source": "bea",
+        "count": 5,
+        "worker_seconds": 7,
+        "counters": {}
+      },
+      {
+        "name": "extract.normalize",
+        "source": "bea",
+        "count": 2,
+        "worker_seconds": 1,
+        "counters": {
+          "rows": 100
+        }
+      },
+      {
+        "name": "extract.fetch",
+        "source": "bea",
+        "count": 2,
+        "worker_seconds": 95,
+        "first_offset_seconds": 5,
+        "last_end_seconds": 65,
+        "counters": {}
+      }
+    ],
+    "slowest": [
+      {
+        "name": "gold.engine",
+        "status": "succeeded",
+        "duration_seconds": 20,
+        "attributes": {
+          "table": "<script>alert(1)</script>"
+        }
+      }
+    ],
+    "baseline": {
+      "count": 1,
+      "previous_seconds": [
+        100
+      ]
+    },
+    "schema_version": 1,
+    "run_id": "fixture-partial",
+    "status": "partial",
+    "started_at": "2026-01-05T12:00:00+00:00",
+    "ended_at": "2026-01-05T12:02:00+00:00",
+    "metadata": {
+      "backend": "LocalWarehouse",
+      "selection": "fixture-series",
+      "due_series": 2,
+      "write_mode": "per_series",
+      "revision": "fixture-revision",
+      "ecb_assets_workload": {
+        "mode": "poll",
+        "releases": 0,
+        "accepted": 0
+      }
+    },
+    "spans": [],
+    "unfinished_spans": []
+  }
+}
