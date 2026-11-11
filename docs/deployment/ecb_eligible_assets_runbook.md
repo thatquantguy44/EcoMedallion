@@ -115,6 +115,26 @@ not authoritative for ECB, the combined run reports an explicit skip and the
 dedicated poller owns ingestion. Use `--no-ecb-assets` only for a deliberate
 observation-only run; `--dry-run` skips ECB because it has no durable warehouse.
 
+### Recover releases missing from RSS
+
+The RSS feed is finite. After an outage, first compare its eligible-assets
+publication date with the latest accepted warehouse release. Use the ECB's
+[MID integration guide, section 5.2](https://www.ecb.europa.eu/press/shared/pdf/MID-Catalogue-and-Integration-Guide.en.pdf)
+and official API specifications to query `https://mid.ecb.europa.eu/searchReleases`
+for `releaseTitle=List of eligible marketable assets` over the missing
+publication-date range, sorted by `publicationDate` ascending. Respect its
+one-query-per-second limit.
+
+Check the returned dates against TARGET operating days, then pass each
+`linkToPublication` to `ecb-assets ingest-release --release-url ... --env dev`
+oldest-first. The existing command verifies signatures and full/update
+reconciliation. Stop on a failure and investigate the quarantine before
+advancing; a missed RSS window alone does not require `--allow-gap`.
+
+The development PostgreSQL refresh on 2026-11-10 recovered all 12 signed
+releases from 2026-10-26 through 2026-11-10 this way. Every release was accepted
+with complete coverage; the final current view contained 31,443 securities.
+
 ### Managed networking
 
 The main-run ECB hook and standalone `ecb-assets poll` support the managed
