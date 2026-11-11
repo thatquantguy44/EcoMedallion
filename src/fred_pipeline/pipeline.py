@@ -58,6 +58,13 @@ from fred_pipeline.sources.tiingo import TiingoClient
 from fred_pipeline.sources.treasury import TreasuryClient
 from fred_pipeline.sources.worldbank import WorldBankClient
 from fred_pipeline.timing import timed
+from fred_pipeline.performance import (
+    current_performance,
+    performance_run,
+    set_span_outcome,
+    span,
+    submit_with_context,
+)
 from fred_pipeline.transform import assign_revision_numbers, normalize_observations
 from fred_pipeline.warehouse import SparkWarehouse, Warehouse
 
@@ -461,12 +468,22 @@ def _with_run_network(func):
     @wraps(func)
     def wrapped(self, specs, *args, **kwargs):
         specs = list(specs)
+        self._last_run = None
         with self._run_network(
             specs,
             include_calendar=kwargs.get("build_gold_layer", True),
             refresh_fomc=kwargs.get("refresh_fomc_calendar", False),
         ):
-            return func(self, specs, *args, **kwargs)
+            try:
+                return func(self, specs, *args, **kwargs)
+            except BaseException as exc:
+                if self._last_run is not None:
+                    self._last_run.status = RunStatus.FAILED
+                    self._last_run.error_message = type(exc).__name__
+                    self._last_run.ended_at = datetime.now(timezone.utc)
+                    if not self._defer_run_alerts:
+                        self.finish_run_reporting(self._last_run)
+                raise
 
     return wrapped
 
@@ -505,6 +522,12 @@ class FredPipeline:
         self._stage_tracker: Any = None
         self._alert_sent = False
         self._last_alert_result = None
+        self._defer_run_alerts = False
+        self._last_run: EtlRun | None = None
+        self._performance_store: Any = None
+        self._last_performance_report: Any = None
+        self._reporting_finished = False
+        self._audit_persisted = False
         # Resolve the storage backend: explicit warehouse > Spark > None (dry run).
         if warehouse is not None:
             self.warehouse: Warehouse | None = warehouse
@@ -565,7 +588,8 @@ class FredPipeline:
         from fred_pipeline.governance.email_network import plan_alert_smtp
 
         if self.config.network.mode == "env":
-            self._smtp_routes = plan_alert_smtp(self.config.environment.value)
+            with span("startup.network", kind="stage"):
+                self._smtp_routes = plan_alert_smtp(self.config.environment.value)
             self._network_active = True
             try:
                 yield
@@ -677,10 +701,16 @@ class FredPipeline:
                 )
                 return None
 
-        with ThreadPoolExecutor(
-            max_workers=self.config.network.max_parallel_targets
-        ) as pool:
-            choices = list(pool.map(choose, targets.values()))
+        with (
+            span("startup.network", kind="stage"),
+            ThreadPoolExecutor(
+                max_workers=self.config.network.max_parallel_targets
+            ) as pool,
+        ):
+            futures = [
+                submit_with_context(pool, choose, target) for target in targets.values()
+            ]
+            choices = [future.result() for future in futures]
         routes = {
             origin: route
             for origin, route in zip(targets, choices)
@@ -743,6 +773,7 @@ class FredPipeline:
 
     # ---- run entrypoints ------------------------------------------------
 
+    @performance_run
     def run_from_manifest(
         self,
         manifest_path: str,
@@ -799,7 +830,8 @@ class FredPipeline:
                 refresh_fomc_calendar=refresh_fomc_calendar,
             )
 
-    @timed("FredPipeline.run")
+    @performance_run
+    @timed("FredPipeline.run", collect=False)
     @_with_run_network
     def run(
         self,
@@ -815,8 +847,13 @@ class FredPipeline:
         specs = list(specs)
         self._alert_sent = False
         self._last_alert_result = None
+        self._reporting_finished = False
+        self._last_performance_report = None
+        self._audit_persisted = False
         self._clear_source_run_caches()
+        performance = current_performance()
         run = EtlRun(
+            **({"run_id": performance.run_id} if performance is not None else {}),
             environment=self.config.environment.value,
             manifest_path=manifest_path,
             triggered_by=triggered_by,
@@ -831,6 +868,14 @@ class FredPipeline:
 
         tracker = RunStageTracker()
         self._stage_tracker = tracker
+        self._last_run = run
+        self._configure_performance(
+            specs,
+            force_full=force_full,
+            skip_not_due=skip_not_due,
+            build_gold_layer=build_gold_layer,
+            refresh_fomc=refresh_fomc_calendar,
+        )
 
         # Phase 1 (sequential): decide each series' load window. This reads the
         # warehouse (one SQLite/Delta connection), so it must not run
@@ -847,6 +892,12 @@ class FredPipeline:
             work_items = list(zip(specs, plans, series_runs))
             stage.detail["series_planned"] = len(work_items)
             stage.detail["series_skipped_not_due"] = skipped_count
+            if performance is not None:
+                performance.metadata["due_series"] = len(work_items)
+                performance.metadata["load_mix"] = {
+                    name: sum(load_type == name for _, load_type in plans)
+                    for name in sorted({load_type for _, load_type in plans})
+                }
 
         # Phase 2/3 (source-aware extraction): network-bound fetches run in
         # per-source pools. Legacy mode writes each completion immediately;
@@ -891,7 +942,19 @@ class FredPipeline:
                             _rate_limit_for_source(self.config, source),
                         )
                         for idx, spec, plan in items:
-                            futures[pool.submit(self._safe_extract, spec, plan)] = idx
+                            futures[
+                                submit_with_context(
+                                    pool,
+                                    self._safe_extract,
+                                    spec,
+                                    plan,
+                                    queue_name="extract.queue_wait",
+                                    queue_attributes={
+                                        "source": source,
+                                        "series_id": spec.series_id,
+                                    },
+                                )
+                            ] = idx
 
                     for fut in as_completed(futures):
                         idx = futures[fut]
@@ -922,6 +985,9 @@ class FredPipeline:
                                 run, spec, load_type, outcome, series_run=sr
                             )
                         completed += 1
+                        performance = current_performance()
+                        if performance is not None:
+                            performance.flush(force=False)
                         self._update_run_progress(run, total=len(specs))
                         if not batched:
                             self._persist_incremental_audit(run, sr)
@@ -960,7 +1026,6 @@ class FredPipeline:
                 extract_stage.detail["series_failed"] = run.series_failed
                 extract_stage.detail["sources"] = ", ".join(sorted(grouped))
         except BaseException:
-            self._send_run_alert(run, tracker)
             raise
         finally:
             self._clear_source_run_caches()
@@ -1017,12 +1082,13 @@ class FredPipeline:
         else:
             tracker.skip("release_calendar", "gold layer not built")
 
+        run.finalize()  # End of processing, including Gold and both calendars.
         with tracker.stage("persist", swallow=True) as stage:
             self._persist_run(run)
             stage.detail["series_rows"] = len(run.series_runs)
 
-        self._notify(run)
-        self._send_run_alert(run, tracker)
+        if not self._defer_run_alerts:
+            self.finish_run_reporting(run)
         log.info(
             "Run %s finished: %s (%d ok / %d failed)",
             run.run_id,
@@ -1073,6 +1139,166 @@ class FredPipeline:
         if result is not None and result.status == WARN:
             tracker.warn("fomc_calendar", " | ".join(result.messages))
 
+    def _configure_performance(self, specs: list[SeriesSpec], **settings: Any) -> None:
+        performance = current_performance()
+        self._performance_store = None
+        if performance is None:
+            return
+        import hashlib
+        import json
+        from fred_pipeline.performance import code_revision
+
+        sources = sorted({spec.source for spec in specs})
+        import os
+        from fred_pipeline.io.local_store import _MAX_WORKERS_OVERRIDE
+
+        performance.metadata.setdefault("entrypoint", "library")
+        performance.metadata.update(
+            {
+                "backend": type(self.warehouse).__name__
+                if self.warehouse is not None
+                else "memory",
+                "selection": hashlib.sha256(
+                    json.dumps(
+                        sorted(
+                            (s.source, s.series_id, s.frequency, s.vintage_enabled)
+                            for s in specs
+                        )
+                    ).encode()
+                ).hexdigest(),
+                "sources": sources,
+                "series_selected": len(specs),
+                "workers": {
+                    s: _extract_workers_for_source(self.config, s) for s in sources
+                },
+                "rate_limits": {
+                    s: _rate_limit_for_source(self.config, s) for s in sources
+                },
+                "write_mode": self.config.persistence_write_mode,
+                "gold_workers": _MAX_WORKERS_OVERRIDE or os.cpu_count(),
+                "restate_last_n": self.config.restate_last_n,
+                "revision": code_revision(),
+                **settings,
+            }
+        )
+        if (
+            self.persist_audit
+            and self.warehouse is not None
+            and (
+                hasattr(self.warehouse, "_insert")
+                or getattr(self.warehouse, "spark", None) is not None
+            )
+        ):
+            try:
+                from fred_pipeline.performance_store import PerformanceStore
+
+                self._performance_store = PerformanceStore(self.warehouse)
+                if self._performance_store.spark is not None:
+                    performance.flush_batch_size = 512
+                    performance.flush_interval_seconds = 30
+                performance.attach_sink(self._performance_store.write_spans)
+                self._performance_store.save(performance)
+            except Exception:
+                performance.telemetry_errors.add("storage")
+
+    def finish_run_reporting(self, run: EtlRun) -> None:
+        """Freeze processing once, then render/deliver and audit delivery separately."""
+        if self._reporting_finished:
+            return
+        self._reporting_finished = True
+        performance = current_performance()
+        tracker = self._stage_tracker
+        run.ended_at = datetime.now(timezone.utc)
+        if not self._audit_persisted or self._defer_run_alerts:
+            with tracker.stage("persist", swallow=True):
+                self._persist_run(run)
+        from fred_pipeline.governance.stages import overall_verdict
+
+        verdict, reason = overall_verdict(
+            tracker.records(),
+            series_total=run.series_total,
+            series_failed=run.series_failed,
+            required_stages=tracker.required_stages,
+        )
+        if performance is not None:
+            import math
+
+            performance.metadata["row_volume_band"] = int(
+                math.log2(
+                    max(1, sum(s.observations_extracted for s in run.series_runs))
+                )
+            )
+            gold_stage = tracker.get("gold")
+            performance.metadata["gold_tables"] = (
+                gold_stage.detail.get("tables_built", 0)
+                if gold_stage is not None
+                else 0
+            )
+            try:
+                if self._performance_store is not None:
+                    performance.baseline = self._performance_store.baseline(performance)
+            except Exception:
+                performance.telemetry_errors.add("baseline")
+            self._last_performance_report = performance.finish(verdict)
+            try:
+                from fred_pipeline.governance.email_report import (
+                    build_summary,
+                    render_html,
+                )
+
+                with span("report.render"):
+                    summary = build_summary(
+                        run,
+                        tracker.records(),
+                        verdict=verdict,
+                        reason=reason,
+                        environment=self.config.environment.value,
+                        performance=self._last_performance_report,
+                    )
+                    performance.write_artifact("html", render_html(summary))
+            except Exception:
+                performance.telemetry_errors.add("rendering")
+        with span("report.delivery"):
+            pending_ecb_alert = getattr(self, "_pending_ecb_alert", None)
+            if callable(pending_ecb_alert):
+                with span("report.ecb_delivery"):
+                    try:
+                        pending_ecb_alert()
+                    except Exception:
+                        log.warning("Deferred ECB health delivery failed")
+                self._pending_ecb_alert = None
+            self._notify(run)
+            self._send_run_alert(run, tracker)
+        if performance is not None:
+            delivery = {
+                key: getattr(self._last_alert_result, key, None)
+                for key in ("status", "category", "correlation_id")
+            }
+            performance.flush()
+            try:
+                if self._performance_store is not None:
+                    self._performance_store.save(performance, delivery=delivery)
+            except Exception:
+                performance.telemetry_errors.add("storage")
+            self._last_performance_report = performance.finish()
+            try:
+                from fred_pipeline.governance.email_report import (
+                    build_summary,
+                    render_html,
+                )
+
+                summary = build_summary(
+                    run,
+                    tracker.records(),
+                    verdict=verdict,
+                    reason=reason,
+                    environment=self.config.environment.value,
+                    performance=self._last_performance_report,
+                )
+                performance.write_artifact("html", render_html(summary))
+            except Exception:
+                performance.telemetry_errors.add("rendering")
+
     def _send_run_alert(self, run: EtlRun, tracker: Any) -> None:
         """Email the stage summary (config/alerting.yml).
 
@@ -1098,6 +1324,7 @@ class FredPipeline:
                 transport=self._alert_transport,
                 http_client=self._alert_sessions,
                 smtp_routes=self._smtp_routes,
+                performance=self._last_performance_report,
             )
         except Exception:  # never let alerting fail a run
             log.exception("Run alert step failed for run %s", run.run_id)
@@ -1160,6 +1387,11 @@ class FredPipeline:
                         )
                     )
                 except Exception:
+                    if self._stage_tracker is not None:
+                        self._stage_tracker.warn(
+                            "release_calendar",
+                            f"release {entry.release_id} fetch failed",
+                        )
                     log.exception(
                         "Release dates fetch failed for release_id %s (run %s)",
                         entry.release_id,
@@ -1173,7 +1405,16 @@ class FredPipeline:
                 run.run_id,
                 len(rows),
             )
-        except Exception:
+        except Exception as exc:
+            if self._stage_tracker is not None:
+                record = self._stage_tracker.get("release_calendar")
+                if record is not None:
+                    from fred_pipeline.governance.stages import StageStatus
+
+                    record.status = StageStatus.FAILED
+                    record.error_type = type(exc).__name__
+                    record.error_message = "Release calendar refresh failed"
+            set_span_outcome("failed")
             log.exception("Release calendar refresh failed for run %s", run.run_id)
 
     # ---- per-series -----------------------------------------------------
@@ -1189,6 +1430,14 @@ class FredPipeline:
         except Exception as exc:  # noqa: BLE001 - isolate per-series failures
             return exc
 
+    @timed(
+        "persist.series",
+        log_completion=False,
+        attributes=lambda self, run, spec, *_a, **_k: {
+            "source": spec.source,
+            "series_id": spec.series_id,
+        },
+    )
     def _finish_series(
         self,
         run: EtlRun,
@@ -1221,9 +1470,18 @@ class FredPipeline:
                 silver_merged=silver_merged,
             )
         except Exception as exc:  # isolate per-series failures in legacy mode
+            set_span_outcome("failed")
             sr.complete(RunStatus.FAILED, error_message=str(exc))
             log.exception("Series %s failed", spec.series_id)
 
+    @timed(
+        "extract.materialize",
+        log_completion=False,
+        attributes=lambda self, run, spec, *_a, **_k: {
+            "source": spec.source,
+            "series_id": spec.series_id,
+        },
+    )
     def _materialize_series(
         self,
         run: EtlRun,
@@ -1254,23 +1512,29 @@ class FredPipeline:
             # Count from normalized rows so the metric is source-agnostic (BLS
             # nests observations under Results.series[].data, not a top-level key).
             observations_extracted = len(silver_rows)
-            bronze_row = build_bronze_row(
-                spec.series_id,
-                self._observations_endpoint(spec),
-                payload,
-                run_id=run.run_id,
-                source=source,
-                observation_count=observations_extracted,
-                ingested_at=captured_at,
-            )
-            report = run_quality_checks(
-                spec.series_id,
-                silver_rows,
-                profile=spec.validation_profile,
-                frequency=spec.frequency,
-                min_value=spec.min_value,
-                max_value=spec.max_value,
-            )
+            with span("extract.serialize", source=source, series_id=spec.series_id):
+                bronze_row = build_bronze_row(
+                    spec.series_id,
+                    self._observations_endpoint(spec),
+                    payload,
+                    run_id=run.run_id,
+                    source=source,
+                    observation_count=observations_extracted,
+                    ingested_at=captured_at,
+                )
+            with span(
+                "extract.quality", source=source, series_id=spec.series_id
+            ) as measurement:
+                report = run_quality_checks(
+                    spec.series_id,
+                    silver_rows,
+                    profile=spec.validation_profile,
+                    frequency=spec.frequency,
+                    min_value=spec.min_value,
+                    max_value=spec.max_value,
+                )
+                if not report.passed:
+                    measurement.outcome("failed")
             return BufferedSeriesOutcome(
                 series_run=sr,
                 bronze_row=bronze_row,
@@ -1279,6 +1543,7 @@ class FredPipeline:
                 observations_extracted=observations_extracted,
             )
         except Exception as exc:  # isolate per-series failures
+            set_span_outcome("failed")
             sr.complete(RunStatus.FAILED, error_message=str(exc))
             log.exception("Series %s failed", spec.series_id)
             return None
@@ -1530,6 +1795,14 @@ class FredPipeline:
             return None, "full"  # first load: series not in the warehouse yet
         return start, f"restate_last_{n}"
 
+    @timed(
+        "extract.fetch",
+        log_completion=False,
+        attributes=lambda self, spec, **_k: {
+            "source": spec.source,
+            "series_id": spec.series_id,
+        },
+    )
     def _extract(
         self, spec: SeriesSpec, *, observation_start: str | None = None
     ) -> dict[str, Any]:
@@ -1562,6 +1835,15 @@ class FredPipeline:
         fn = getattr(client, "observations_endpoint", None)
         return fn(spec.series_id) if fn else "series/observations"
 
+    @timed(
+        "extract.normalize",
+        log_completion=False,
+        attributes=lambda self, spec, *_a, **_k: {
+            "source": spec.source,
+            "series_id": spec.series_id,
+        },
+        count_result="rows",
+    )
     def _normalize(
         self,
         spec: SeriesSpec,
@@ -1608,11 +1890,21 @@ class FredPipeline:
             return
         try:
             self.warehouse.persist_run(run)
+            self._audit_persisted = True
         except Exception:
+            set_span_outcome("failed")
+            if self._stage_tracker is not None:
+                record = self._stage_tracker.get("persist")
+                if record is not None:
+                    from fred_pipeline.governance.stages import StageStatus
+
+                    record.status = StageStatus.FAILED
+                    record.error_type = "AuditPersistenceError"
             log.exception("Failed to persist audit records for run %s", run.run_id)
 
 
-@timed("run_pipeline")
+@performance_run
+@timed("run_pipeline", collect=False)
 def run_pipeline(
     environment: str = "dev",
     manifest_path: str = "manifests",

@@ -375,12 +375,19 @@ list.
 
 Deliberately not built, in rough order of value:
 
-- **Per-source stage detail.** `extract` currently records aggregate counts; a
-  per-source breakdown would show "Tiingo quota exhausted" without opening the
-  audit tables.
+- **Per-source performance detail is implemented** in Spec 017; see the
+  [performance reporting handoff](pipeline_performance_reporting.md).
 - **Threshold alerts.** Alert when DQ pass rate drops below N%, or when stale
   series exceed N — currently only run outcomes trigger mail.
 - **Digest mode.** One daily summary instead of one email per run, for
   environments that run hourly.
 - **Teams/Slack cards.** The renderer is pure and already produces structured
   records; a card payload is another formatter, not a new subsystem.
+
+## 9. Performance reports
+
+Run summaries include a timeline, source request percentiles/waits/retries,
+slowest operations, and comparable-run history. The consolidated CLI summary
+now follows signed ECB polling. See the
+[performance reporting handoff](pipeline_performance_reporting.md) for controls,
+audit tables, offline previews, delivery timing and failure semantics.

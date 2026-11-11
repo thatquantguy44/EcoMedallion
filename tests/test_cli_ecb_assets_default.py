@@ -68,6 +68,38 @@ def test_run_parser_enables_ecb_assets_by_default_and_allows_opt_out():
     assert parser.parse_args(["run", "--no-ecb-assets"]).ecb_assets is False
 
 
+def test_combined_summary_is_deferred_until_after_ecb(monkeypatch, capsys, tmp_path):
+    _install_run_fakes(monkeypatch)
+    monkeypatch.setenv("FRED_PERFORMANCE_DIR", str(tmp_path))
+    events = []
+
+    class Pipeline:
+        def __init__(self, *_args, **_kwargs):
+            from fred_pipeline.governance.stages import RunStageTracker
+
+            self._stage_tracker = RunStageTracker()
+
+        def run_from_manifest(self, *_args, **_kwargs):
+            assert self._defer_run_alerts
+            events.append("observations")
+            return _Run()
+
+        def finish_run_reporting(self, _run):
+            events.append("summary")
+            assert self._stage_tracker.get("ecb_assets").status.value == "succeeded"
+
+    monkeypatch.setattr(cli, "FredPipeline", Pipeline)
+    monkeypatch.setattr(
+        cli,
+        "_poll_ecb_assets_for_run",
+        lambda *_a, **_k: events.append("ecb") or [{"status": "accepted"}],
+    )
+    monkeypatch.setattr(cli, "_send_ecb_assets_health_alert", lambda *_a, **_k: None)
+    assert cli._cmd_run(cli.build_parser().parse_args(["run"])) == 0
+    assert events == ["observations", "ecb", "summary"]
+    capsys.readouterr()
+
+
 @pytest.mark.parametrize(
     ("flags", "expected"),
     [([], True), (["--full"], True), (["--no-refresh-fomc-calendar"], False)],

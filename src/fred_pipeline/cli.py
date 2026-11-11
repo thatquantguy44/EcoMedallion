@@ -34,6 +34,7 @@ import json
 import logging
 import sys
 from contextlib import ExitStack
+from fred_pipeline.performance import current_performance, performance_run, span
 from pathlib import Path
 from typing import Any
 
@@ -714,19 +715,33 @@ def _cmd_validate(args: argparse.Namespace) -> int:
     return 0
 
 
+@performance_run
 def _cmd_run(args: argparse.Namespace) -> int:
+    performance = current_performance()
+    if performance is not None:
+        performance.metadata.update(
+            {
+                "entrypoint": "cli",
+                "ecb_assets_requested": getattr(args, "ecb_assets", True),
+            }
+        )
+        if getattr(args, "performance_dir", None):
+            performance.output_dir = Path(args.performance_dir)
+        if getattr(args, "performance_detail", False):
+            performance.detailed = True
     from fred_pipeline.config import _ENV_OVERRIDES
     from fred_pipeline.network import NetworkPreflightError
     from fred_pipeline.pipeline import missing_source_keys
 
-    config = PipelineConfig.resolve(
-        environment=Environment(args.env),
-        config_file=args.config,
-        extract_workers=args.extract_workers,
-        rate_limit_per_minute=args.rate_limit_per_minute,
-        source_extract_workers=args.source_workers,
-        source_rate_limits=args.source_rate_limits,
-    )
+    with span("startup.config", kind="stage"):
+        config = PipelineConfig.resolve(
+            environment=Environment(args.env),
+            config_file=args.config,
+            extract_workers=args.extract_workers,
+            rate_limit_per_minute=args.rate_limit_per_minute,
+            source_extract_workers=args.source_workers,
+            source_rate_limits=args.source_rate_limits,
+        )
 
     # Require only the API keys the *active* sources actually need — a
     # BLS/EIA-only run shouldn't demand a FRED key (and BLS runs keyless).
@@ -782,7 +797,8 @@ def _cmd_run(args: argparse.Namespace) -> int:
 
         factory = WarehouseFactory(config, warehouse_config)
         try:
-            warehouse = factory.build(force_dry_run=False)
+            with span("startup.warehouse", kind="stage"):
+                warehouse = factory.build(force_dry_run=False)
             selected_backend = factory.selected_backend_name
         except WarehouseInitError as exc:
             # Fatal on purpose: continuing would extract against live APIs and
@@ -801,6 +817,8 @@ def _cmd_run(args: argparse.Namespace) -> int:
     pipeline = FredPipeline(
         config, spark=spark, warehouse=warehouse, persist_audit=persist
     )
+    pipeline._defer_run_alerts = True
+    run = None
     ecb_assets_result: dict[str, object]
     network_stack = ExitStack()
     try:
@@ -836,115 +854,196 @@ def _cmd_run(args: argparse.Namespace) -> int:
             skip_not_due=args.skip_not_due,
             refresh_fomc_calendar=args.refresh_fomc_calendar,
         )
-        if args.dry_run:
-            ecb_assets_result = {
-                "status": "skipped",
-                "reason": "dry-run has no durable warehouse",
-            }
-        elif not getattr(args, "ecb_assets", True):
-            ecb_assets_result = {
-                "status": "skipped",
-                "reason": "disabled by --no-ecb-assets",
-            }
-        elif warehouse_config is None:
-            ecb_assets_result = {
-                "status": "skipped",
-                "reason": "warehouse configuration was not resolved",
-            }
-        elif warehouse_config.ecb_assets_authoritative_backend == "disabled":
-            ecb_assets_result = {
-                "status": "skipped",
-                "reason": "disabled by ecb_assets_authoritative_backend",
-            }
-        elif selected_backend != warehouse_config.ecb_assets_authoritative_backend:
-            ecb_assets_result = {
-                "status": "skipped",
-                "reason": (
-                    "selected warehouse backend "
-                    f"{selected_backend!r} is not the authoritative ECB assets "
-                    "backend "
-                    f"{warehouse_config.ecb_assets_authoritative_backend!r}; "
-                    "run the dedicated ECB poller against that destination"
-                ),
-            }
-        elif not (hasattr(warehouse, "conn") and hasattr(warehouse, "_insert")):
-            ecb_assets_result = {
-                "status": "skipped",
-                "reason": (
-                    f"{warehouse.__class__.__name__} has no ECB eligible-assets "
-                    "writer; SQLite and PostgreSQL are currently supported"
-                ),
-            }
-        else:
-            alert_attempted = False
-            alert_result = None
+        tracker = getattr(pipeline, "_stage_tracker", None)
+        context = (
+            tracker.stage("ecb_assets")
+            if tracker is not None
+            else span("ecb_assets", kind="stage")
+        )
+        with context as ecb_stage:
+            if args.dry_run:
+                ecb_assets_result = {
+                    "status": "skipped",
+                    "reason": "dry-run has no durable warehouse",
+                }
+            elif not getattr(args, "ecb_assets", True):
+                ecb_assets_result = {
+                    "status": "skipped",
+                    "reason": "disabled by --no-ecb-assets",
+                }
+            elif warehouse_config is None:
+                ecb_assets_result = {
+                    "status": "skipped",
+                    "reason": "warehouse configuration was not resolved",
+                }
+            elif warehouse_config.ecb_assets_authoritative_backend == "disabled":
+                ecb_assets_result = {
+                    "status": "skipped",
+                    "reason": "disabled by ecb_assets_authoritative_backend",
+                }
+            elif selected_backend != warehouse_config.ecb_assets_authoritative_backend:
+                ecb_assets_result = {
+                    "status": "skipped",
+                    "reason": (
+                        "selected warehouse backend "
+                        f"{selected_backend!r} is not the authoritative ECB assets "
+                        "backend "
+                        f"{warehouse_config.ecb_assets_authoritative_backend!r}; "
+                        "run the dedicated ECB poller against that destination"
+                    ),
+                }
+            elif not (hasattr(warehouse, "conn") and hasattr(warehouse, "_insert")):
+                ecb_assets_result = {
+                    "status": "skipped",
+                    "reason": (
+                        f"{warehouse.__class__.__name__} has no ECB eligible-assets "
+                        "writer; SQLite and PostgreSQL are currently supported"
+                    ),
+                }
+            else:
+                alert_attempted = False
+                alert_result = None
 
-            def notify_poll(results, _status, error):
-                nonlocal alert_attempted, alert_result
-                alert_attempted = True
-                alert_result = _send_ecb_assets_health_alert(
-                    config,
-                    warehouse,
-                    action="poll",
-                    results=results,
-                    error=error,
-                    http_client=getattr(pipeline, "_alert_sessions", None),
-                    smtp_routes=getattr(pipeline, "_smtp_routes", None),
-                )
-                return alert_result
-
-            try:
-                if config.network.mode == "env":
-                    releases = _poll_ecb_assets_for_run(
-                        config,
-                        warehouse,
-                        selected_backend=selected_backend,
-                        authoritative_backend=warehouse_config.ecb_assets_authoritative_backend,
-                        notify=notify_poll,
+                def notify_poll(results, _status, error):
+                    nonlocal alert_attempted, alert_result
+                    alert_attempted = True
+                    defer_delivery = callable(
+                        getattr(pipeline, "finish_run_reporting", None)
                     )
-                else:
-                    if pipeline._ecb_sessions is None:
-                        raise NetworkPreflightError(
-                            "ECB MID route was unavailable at startup"
+
+                    def deliver_ecb_health():
+                        nonlocal alert_result
+                        alert_result = _send_ecb_assets_health_alert(
+                            config,
+                            warehouse,
+                            action="poll",
+                            results=results,
+                            error=error,
+                            http_client=getattr(pipeline, "_alert_sessions", None),
+                            smtp_routes=getattr(pipeline, "_smtp_routes", None),
                         )
-                    releases = _poll_ecb_assets_for_run(
-                        config,
-                        warehouse,
-                        session=pipeline._ecb_sessions,
-                        selected_backend=selected_backend,
-                        authoritative_backend=warehouse_config.ecb_assets_authoritative_backend,
-                        notify=notify_poll,
-                    )
-                ecb_assets_result = {
-                    "status": "succeeded",
-                    "releases": releases,
-                }
-                if not alert_attempted:
-                    notify_poll(releases, {}, "")
-            except Exception as exc:  # noqa: BLE001 - reflected in run exit/status
-                ecb_assets_result = {
-                    "status": "failed",
-                    "error": str(exc),
-                }
-                if not alert_attempted:
-                    notify_poll([], {}, str(exc))
-            from fred_pipeline.governance.email_delivery import DeliveryResult
+                        from fred_pipeline.governance.email_delivery import (
+                            DeliveryResult,
+                        )
 
-            if isinstance(alert_result, DeliveryResult):
-                from dataclasses import asdict
+                        if defer_delivery and isinstance(alert_result, DeliveryResult):
+                            from dataclasses import asdict
 
-                ecb_assets_result["alert_delivery"] = asdict(alert_result)
+                            ecb_assets_result["alert_delivery"] = asdict(alert_result)
+                        return alert_result
+
+                    if defer_delivery:
+                        pipeline._pending_ecb_alert = deliver_ecb_health
+                    else:
+                        alert_result = deliver_ecb_health()
+                    return alert_result
+
+                try:
+                    if config.network.mode == "env":
+                        releases = _poll_ecb_assets_for_run(
+                            config,
+                            warehouse,
+                            selected_backend=selected_backend,
+                            authoritative_backend=warehouse_config.ecb_assets_authoritative_backend,
+                            notify=notify_poll,
+                        )
+                    else:
+                        if pipeline._ecb_sessions is None:
+                            raise NetworkPreflightError(
+                                "ECB MID route was unavailable at startup"
+                            )
+                        releases = _poll_ecb_assets_for_run(
+                            config,
+                            warehouse,
+                            session=pipeline._ecb_sessions,
+                            selected_backend=selected_backend,
+                            authoritative_backend=warehouse_config.ecb_assets_authoritative_backend,
+                            notify=notify_poll,
+                        )
+                    ecb_assets_result = {
+                        "status": "succeeded",
+                        "releases": releases,
+                    }
+                    if not alert_attempted:
+                        notify_poll(releases, {}, "")
+                except Exception as exc:  # noqa: BLE001 - reflected in run exit/status
+                    ecb_assets_result = {
+                        "status": "failed",
+                        "error": str(exc),
+                    }
+                    if not alert_attempted:
+                        notify_poll([], {}, str(exc))
+                from fred_pipeline.governance.email_delivery import DeliveryResult
+
+                if isinstance(alert_result, DeliveryResult):
+                    from dataclasses import asdict
+
+                    ecb_assets_result["alert_delivery"] = asdict(alert_result)
+            if tracker is not None:
+                from fred_pipeline.governance.stages import StageStatus
+
+                state = ecb_assets_result["status"]
+                ecb_stage.status = (
+                    StageStatus.FAILED
+                    if state == "failed"
+                    else StageStatus.SKIPPED
+                    if state == "skipped"
+                    else StageStatus.SUCCEEDED
+                )
+                ecb_stage.detail["releases"] = len(
+                    ecb_assets_result.get("releases", [])
+                )
+                if state == "skipped":
+                    ecb_stage.detail["reason"] = ecb_assets_result.get("reason", "")
+                else:
+                    tracker.required_stages.add("ecb_assets")
+                    if state == "failed":
+                        ecb_stage.error_type = "ECBPollFailure"
+                        ecb_stage.error_message = str(
+                            ecb_assets_result.get("error", "")
+                        )[:2000]
+                    elif not ecb_assets_result.get("releases"):
+                        ecb_stage.detail["unchanged"] = True
+            if performance is not None:
+                releases = ecb_assets_result.get("releases", [])
+                performance.metadata["ecb_assets_workload"] = {
+                    "mode": "skipped"
+                    if ecb_assets_result["status"] == "skipped"
+                    else "poll",
+                    "releases": len(releases),
+                    "accepted": sum(
+                        row.get("status") == "accepted" for row in releases
+                    ),
+                }
     except NetworkPreflightError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 1
     finally:
         try:
-            network_stack.close()
+            report_run = run or getattr(pipeline, "_last_run", None)
+            finish_reporting = getattr(pipeline, "finish_run_reporting", None)
+            if report_run is not None and callable(finish_reporting):
+                finish_reporting(report_run)
         finally:
-            if warehouse is not None:
-                warehouse.close()
+            try:
+                network_stack.close()
+            finally:
+                if warehouse is not None:
+                    warehouse.close()
 
     output = run.to_row()
+    performance_report = getattr(pipeline, "_last_performance_report", None)
+    if performance_report:
+        output["performance"] = {
+            key: performance_report[key]
+            for key in (
+                "processing_seconds",
+                "baseline",
+                "dropped_events",
+                "telemetry_errors",
+            )
+        }
+
     from fred_pipeline.governance.email_delivery import DeliveryResult
 
     run_alert = getattr(pipeline, "_last_alert_result", None)
@@ -1820,6 +1919,16 @@ def build_parser() -> argparse.ArgumentParser:
     v.set_defaults(func=_cmd_validate)
 
     r = sub.add_parser("run", help="run the pipeline")
+    r.add_argument(
+        "--performance-dir",
+        default=None,
+        help="run JSON/HTML and span journal directory (default: FRED_PERFORMANCE_DIR or data/performance)",
+    )
+    r.add_argument(
+        "--performance-detail",
+        action="store_true",
+        help="retain individual HTTP attempts and queue/wait spans as well as aggregates",
+    )
     r.add_argument("--env", default="dev", choices=[e.value for e in Environment])
     r.add_argument("--manifests", default="manifests")
     r.add_argument(
