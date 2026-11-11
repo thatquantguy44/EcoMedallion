@@ -1,5 +1,5 @@
 name: ecb_est_candidates
-description: "Inactive ECB Euro Short-Term Rate (EST) candidate: the euro short-term\
+description: "ECB Euro Short-Term Rate (EST): the euro short-term\
   \ rate (\u20ACSTR), volume-weighted trimmed mean rate -- the official \u20ACSTR\
   \ calculation methodology, ECB's post-EONIA overnight benchmark rate. Live-verified:\
   \ published under FREQ=B (business-daily), not D."
@@ -10,20 +10,20 @@ series:
     rate
   frequency: d
   category: rates
-  units: ''
-  active: false
+  units: Percent
+  active: true
   source: ecb
   load_type: incremental
   expected_update_frequency: daily
   vintage_enabled: true
-  validation_profile: lenient
+  validation_profile: standard
   business_owner: ''
   technical_owner: ''
-  downstream_use_case: ecb_candidate_review
-  priority: 3
+  downstream_use_case: money_market_rates
+  priority: 2
   restate_records: null
-  min_value: null
-  max_value: null
+  min_value: -5
+  max_value: 25
   tags:
   - ecb
   - est

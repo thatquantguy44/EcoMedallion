@@ -439,7 +439,9 @@ series:
     max_value: 25
     tags: [rates, money_market, ecb, euro-area]
 
-  - series_id: "ECB:FM:M.U2.EUR.RT.MM.EURIBOR12MD_.HSTA"
+  # ECB publishes the 12-month tenor under EURIBOR1YD_ (one year).
+  # https://data.ecb.europa.eu/data/datasets/FM/FM.M.U2.EUR.RT.MM.EURIBOR1YD_.HSTA
+  - series_id: "ECB:FM:M.U2.EUR.RT.MM.EURIBOR1YD_.HSTA"
     title: ECB 12-Month EURIBOR
     category: rates
     frequency: m
@@ -458,12 +460,14 @@ series:
 
   # ---- Euro Short-Term Rate (€STR) ------------------------------------------
 
+  # Retired invalid legacy key. The same benchmark is active under
+  # ECB:EST:B.EU000A2X2A25.WT in ecb_est_candidates.yml.
   - series_id: "ECB:FM:D.U2.EUR.4F.KR.ESTR.LEV"
     title: ECB Euro Short-Term Rate (ESTR)
     category: rates
     frequency: d
     units: Percent
-    active: true
+    active: false
     source: ecb
     load_type: incremental
     expected_update_frequency: daily
@@ -477,12 +481,14 @@ series:
 
   # ---- Euro Area HICP -------------------------------------------------------
 
+  # Retired incomplete legacy key. Headline HICP is active under
+  # ECB:ICP_PUB:M.U2.N.000000.4.ANR in ecb_icp_candidates.yml.
   - series_id: "ECB:ICP:M.U2.N.000000.4"
     title: ECB Euro Area HICP - All Items (Annual Rate of Change)
     category: prices
     frequency: m
     units: Percent
-    active: true
+    active: false
     source: ecb
     load_type: incremental
     expected_update_frequency: monthly
