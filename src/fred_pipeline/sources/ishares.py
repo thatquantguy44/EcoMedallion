@@ -39,13 +39,17 @@ log = logging.getLogger("fred_pipeline.sources.ishares")
 # ETF ticker -> holdings-CSV URL. Starter set; VERIFY before activating.
 HOLDINGS_URLS: dict[str, str] = {
     # iShares Core S&P 500 ETF (IVV) — "Detailed Holdings and Analytics".
-    "IVV": ("https://www.blackrock.com/varnish-api/blk-one01-product-data/"
-            "product-data/api/v1/get-fund-document?appType=PRODUCT_PAGE"
-            "&appSubType=ISHARES&targetSite=us-ishares&locale=en_US"
-            "&portfolioId=239726&component=fundDownload&userType=individual"),
+    "IVV": (
+        "https://www.blackrock.com/varnish-api/blk-one01-product-data/"
+        "product-data/api/v1/get-fund-document?appType=PRODUCT_PAGE"
+        "&appSubType=ISHARES&targetSite=us-ishares&locale=en_US"
+        "&portfolioId=239726&component=fundDownload&userType=individual"
+    ),
     # State Street SPDR S&P 500 ETF (SPY) — SSGA holds-daily CSV.
-    "SPY": ("https://www.ssga.com/us/en/intermediary/etfs/library-content/"
-            "products/fund-data/etfs/us/holdings-daily-us-en-spy.xlsx"),
+    "SPY": (
+        "https://www.ssga.com/us/en/intermediary/etfs/library-content/"
+        "products/fund-data/etfs/us/holdings-daily-us-en-spy.xlsx"
+    ),
 }
 
 # "as of" date formats seen in iShares/SSGA preambles.
@@ -160,7 +164,7 @@ def _parse_asof_from_table(rows: list[list[str]]) -> Optional[str]:
         for i, cell in enumerate(row):
             if "as of" not in cell.lower():
                 continue
-            for value in row[i + 1:]:
+            for value in row[i + 1 :]:
                 parsed = _parse_asof_value(value)
                 if parsed:
                     return parsed
@@ -170,9 +174,18 @@ def _parse_asof_from_table(rows: list[list[str]]) -> Optional[str]:
 def _find_header_row(rows: list[list[str]]) -> int:
     for i, row in enumerate(rows):
         cols = [c.lower().strip() for c in row]
-        if "ticker" in cols and any(c.startswith("weight") for c in cols):
+        if "ticker" in cols and _weight_column_index(row) is not None:
             return i
     return -1
+
+
+def _weight_column_index(headers: list[str]) -> Optional[int]:
+    """Use market weights from current downloads, or the legacy Weight column."""
+    for prefix in ("market weight", "weight"):
+        for index, header in enumerate(headers):
+            if header.lower().strip().startswith(prefix):
+                return index
+    return None
 
 
 def _normalize_holdings_table(
@@ -190,12 +203,12 @@ def _normalize_holdings_table(
     headers = rows_in[hi]
     cols = {c.lower().strip(): idx for idx, c in enumerate(headers)}
     tk_idx = cols.get("ticker")
-    wt_idx = next((idx for low, idx in cols.items() if low.startswith("weight")), None)
+    wt_idx = _weight_column_index(headers)
     if tk_idx is None or wt_idx is None:
         return []
     rows: list[dict[str, Any]] = []
     seen: set[str] = set()
-    for rec in rows_in[hi + 1:]:
+    for rec in rows_in[hi + 1 :]:
         ticker = rec[tk_idx].strip().upper() if tk_idx < len(rec) else ""
         if ticker in _NON_EQUITY or ticker in seen:
             continue
@@ -271,7 +284,8 @@ def normalize_ishares_holdings(
     reader = csv.DictReader(io.StringIO("\n".join(lines[hi:])))
     cols = {c.lower().strip(): c for c in (reader.fieldnames or [])}
     tk_col = cols.get("ticker")
-    wt_col = next((orig for low, orig in cols.items() if low.startswith("weight")), None)
+    weight_index = _weight_column_index(reader.fieldnames or [])
+    wt_col = reader.fieldnames[weight_index] if weight_index is not None else None
     if not tk_col or not wt_col:
         return []
     rows: list[dict[str, Any]] = []

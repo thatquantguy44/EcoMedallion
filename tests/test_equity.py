@@ -33,15 +33,16 @@ from fred_pipeline.equity_reconciliation_config import (
 
 # ---- Stooq ------------------------------------------------------------------
 
+
 def test_stooq_series_id_parsing_and_symbol():
     assert _parse_series_id("AAPL") == ("AAPL", "close")
     assert _parse_series_id("aapl:volume") == ("AAPL", "volume")
     assert _stooq_symbol("AAPL") == "aapl.us"
-    assert _stooq_symbol("CBA.au") == "cba.au"   # already-suffixed left alone
+    assert _stooq_symbol("CBA.au") == "cba.au"  # already-suffixed left alone
     with pytest.raises(StooqAPIError):
         _parse_series_id(":close")
     with pytest.raises(StooqAPIError):
-        _parse_series_id("AAPL:adjclose")        # unsupported field
+        _parse_series_id("AAPL:adjclose")  # unsupported field
 
 
 _STOOQ_CSV = (
@@ -56,19 +57,27 @@ def test_stooq_normalize_selects_field():
     payload = {"format": "csv", "field": "close", "text": _STOOQ_CSV}
     rows = normalize_stooq_observations("AAPL:close", payload)
     assert [r["observation_date"] for r in rows] == [
-        "2024-01-02", "2024-01-03", "2024-01-04"]
+        "2024-01-02",
+        "2024-01-03",
+        "2024-01-04",
+    ]
     assert [r["value"] for r in rows] == pytest.approx([185.64, 184.25, 187.10])
     assert all(r["source"] == "stooq" and r["realtime_start"] == "" for r in rows)
     # volume field selects the Volume column
     vol = normalize_stooq_observations(
-        "AAPL:volume", {"format": "csv", "field": "volume", "text": _STOOQ_CSV})
+        "AAPL:volume", {"format": "csv", "field": "volume", "text": _STOOQ_CSV}
+    )
     assert [r["value"] for r in vol] == pytest.approx([50000, 60000, 72000])
 
 
 def test_stooq_normalize_tolerates_bad_body():
     for bad in ("N/D", "", "No data\n", "garbage,header\n1,2\n"):
-        assert normalize_stooq_observations(
-            "AAPL:close", {"format": "csv", "field": "close", "text": bad}) == []
+        assert (
+            normalize_stooq_observations(
+                "AAPL:close", {"format": "csv", "field": "close", "text": bad}
+            )
+            == []
+        )
     assert normalize_stooq_observations("AAPL:close", None) == []
 
 
@@ -89,6 +98,7 @@ def test_stooq_get_observations_uses_text_transport():
             return FakeResp()
 
     from fred_pipeline.sources.stooq import StooqClient
+
     sess = FakeSession()
     client = StooqClient(session=sess, sleep=lambda _s: None)
     payload = client.get_observations("AAPL:close", observation_start="2024-01-01")
@@ -117,6 +127,7 @@ def test_stooq_get_observations_includes_api_key():
             return FakeResp()
 
     from fred_pipeline.sources.stooq import StooqClient
+
     sess = FakeSession()
     client = StooqClient(api_key="stooq-key", session=sess, sleep=lambda _s: None)
     client.get_observations("SPY:close")
@@ -133,6 +144,7 @@ def test_stooq_get_observations_raises_on_key_required_page(fake_response_cls):
             )
 
     from fred_pipeline.sources.stooq import StooqClient
+
     client = StooqClient(session=FakeSession(), sleep=lambda _s: None)
     with pytest.raises(StooqAPIError, match=STOOQ_KEY_HELP):
         client.get_observations("SPY:close")
@@ -141,15 +153,15 @@ def test_stooq_get_observations_raises_on_key_required_page(fake_response_cls):
 # ---- iShares holdings -------------------------------------------------------
 
 _IVV_CSV = (
-    'iShares Core S&P 500 ETF\n'
+    "iShares Core S&P 500 ETF\n"
     '"Fund Holdings as of","Jul 31, 2024"\n'
     '"Inception Date","May 15, 2000"\n'
-    '\n'
-    'Ticker,Name,Sector,Asset Class,Weight (%),Shares\n'
-    'AAPL,APPLE INC,Information Technology,Equity,6.95,1000000\n'
-    'MSFT,MICROSOFT CORP,Information Technology,Equity,6.55,500000\n'
-    'NVDA,NVIDIA CORP,Information Technology,Equity,5.10,300000\n'
-    'USD,US DOLLAR,Cash and/or Derivatives,Cash,0.05,0\n'
+    "\n"
+    "Ticker,Name,Sector,Asset Class,Weight (%),Shares\n"
+    "AAPL,APPLE INC,Information Technology,Equity,6.95,1000000\n"
+    "MSFT,MICROSOFT CORP,Information Technology,Equity,6.55,500000\n"
+    "NVDA,NVIDIA CORP,Information Technology,Equity,5.10,300000\n"
+    "USD,US DOLLAR,Cash and/or Derivatives,Cash,0.05,0\n"
 )
 
 
@@ -204,7 +216,10 @@ def test_ishares_normalize_explodes_constituents():
     payload = {"format": "csv", "etf": "IVV", "text": _IVV_CSV}
     rows = normalize_ishares_holdings("IVV", payload)
     assert [r["series_id"] for r in rows] == [
-        "IVV:AAPL", "IVV:MSFT", "IVV:NVDA"]          # USD cash row dropped
+        "IVV:AAPL",
+        "IVV:MSFT",
+        "IVV:NVDA",
+    ]  # USD cash row dropped
     assert all(r["observation_date"] == "2024-07-31" for r in rows)
     assert rows[0]["value"] == pytest.approx(6.95)
     assert "shares" not in rows[0]
@@ -220,15 +235,76 @@ def test_ishares_normalize_explodes_xml_workbook():
     assert "shares" not in rows[0]
 
 
+@pytest.mark.parametrize(
+    "format,text",
+    [
+        (
+            "csv",
+            (
+                '"Fund Holdings as of","Jul 16, 2026"\n'
+                "Ticker,Name,Notional Weight,Market Weight\n"
+                "NVDA,NVIDIA CORP,7.74,7.75\n"
+            ),
+        ),
+        (
+            "xml",
+            """<?xml version="1.0"?>
+<ss:Workbook xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet">
+<ss:Worksheet ss:Name="Holdings"><ss:Table>
+<ss:Row>
+<ss:Cell><ss:Data ss:Type="String">Fund Holdings as of</ss:Data></ss:Cell>
+<ss:Cell><ss:Data ss:Type="String">Jul 16, 2026</ss:Data></ss:Cell>
+</ss:Row>
+<ss:Row>
+<ss:Cell><ss:Data ss:Type="String">Ticker</ss:Data></ss:Cell>
+<ss:Cell><ss:Data ss:Type="String">Name</ss:Data></ss:Cell>
+<ss:Cell><ss:Data ss:Type="String">Notional Weight</ss:Data></ss:Cell>
+<ss:Cell><ss:Data ss:Type="String">Market Weight</ss:Data></ss:Cell>
+</ss:Row>
+<ss:Row>
+<ss:Cell><ss:Data ss:Type="String">NVDA</ss:Data></ss:Cell>
+<ss:Cell><ss:Data ss:Type="String">NVIDIA CORP</ss:Data></ss:Cell>
+<ss:Cell><ss:Data ss:Type="Number">7.74</ss:Data></ss:Cell>
+<ss:Cell><ss:Data ss:Type="Number">7.75</ss:Data></ss:Cell>
+</ss:Row>
+</ss:Table></ss:Worksheet>
+</ss:Workbook>
+""",
+        ),
+    ],
+    ids=["csv", "xml"],
+)
+def test_ishares_normalize_prefers_market_weight_to_notional_weight(format, text):
+    rows = normalize_ishares_holdings(
+        "IVV", {"format": format, "etf": "IVV", "text": text}
+    )
+    assert [r["series_id"] for r in rows] == ["IVV:NVDA"]
+    assert rows[0]["observation_date"] == "2026-07-16"
+    assert rows[0]["value"] == pytest.approx(7.75)
+    assert rows[0]["raw_value"] == "7.75"
+
+
 def test_ishares_normalize_requires_asof_and_header():
     # no "as of" line -> skip (won't guess a date)
     no_date = _IVV_CSV.replace('"Fund Holdings as of","Jul 31, 2024"\n', "")
-    assert normalize_ishares_holdings(
-        "IVV", {"format": "csv", "etf": "IVV", "text": no_date}) == []
+    assert (
+        normalize_ishares_holdings(
+            "IVV", {"format": "csv", "etf": "IVV", "text": no_date}
+        )
+        == []
+    )
     # no header row -> skip
-    assert normalize_ishares_holdings(
-        "IVV", {"format": "csv", "etf": "IVV",
-                "text": '"Fund Holdings as of","Jul 31, 2024"\nfoo,bar\n1,2\n'}) == []
+    assert (
+        normalize_ishares_holdings(
+            "IVV",
+            {
+                "format": "csv",
+                "etf": "IVV",
+                "text": '"Fund Holdings as of","Jul 31, 2024"\nfoo,bar\n1,2\n',
+            },
+        )
+        == []
+    )
 
 
 def test_ishares_get_observations_uses_absolute_url(fake_response_cls):
@@ -256,23 +332,27 @@ def test_build_equity_manifest_from_holdings():
     man = build_equity_manifest(_IVV_CSV, include_etf="IVV")
     ids = [s["series_id"] for s in man["series"]]
     assert ids == ["IVV:close", "AAPL:close", "MSFT:close", "NVDA:close"]
-    assert all(s["source"] == "stooq" and s["active"] is False
-               for s in man["series"])
+    assert all(s["source"] == "stooq" and s["active"] is False for s in man["series"])
     assert man["name"] == "equity_stooq"
 
 
 # ---- Gold engines -----------------------------------------------------------
 
+
 def _close_row(ticker, date, close, is_missing=False):
-    return {"series_id": f"{ticker}:close", "observation_date": date,
-            "value": close, "is_missing": is_missing}
+    return {
+        "series_id": f"{ticker}:close",
+        "observation_date": date,
+        "value": close,
+        "is_missing": is_missing,
+    }
 
 
 def test_equity_return_daily_and_index():
     rows = [
         _close_row("AAPL", "2024-01-02", 100.0),
-        _close_row("AAPL", "2024-01-03", 101.0),   # +1%
-        _close_row("AAPL", "2024-01-04", 99.99),   # -1% -> back near 100
+        _close_row("AAPL", "2024-01-03", 101.0),  # +1%
+        _close_row("AAPL", "2024-01-04", 99.99),  # -1% -> back near 100
         _close_row("SPY", "2024-01-02", 470.0),
     ]
     out = compute_equity_return_daily(rows)
@@ -281,7 +361,9 @@ def test_equity_return_daily_and_index():
     assert aapl[1]["price_return"] == pytest.approx(0.01)
     assert aapl[1]["price_return_index"] == pytest.approx(101.0)
     assert aapl[2]["price_return"] == pytest.approx((99.99 - 101.0) / 101.0)
-    assert aapl[2]["price_return_index"] == pytest.approx(100.0 * 1.01 * (99.99 / 101.0))
+    assert aapl[2]["price_return_index"] == pytest.approx(
+        100.0 * 1.01 * (99.99 / 101.0)
+    )
     # SPY single obs -> one row, null return
     spy = [r for r in out if r["ticker"] == "SPY"]
     assert len(spy) == 1 and spy[0]["price_return"] is None
@@ -290,31 +372,51 @@ def test_equity_return_daily_and_index():
 def test_equity_return_ignores_non_close_and_missing():
     rows = [
         _close_row("AAPL", "2024-01-02", 100.0),
-        {"series_id": "AAPL:volume", "observation_date": "2024-01-02",
-         "value": 5000.0, "is_missing": False},         # not a :close series
+        {
+            "series_id": "AAPL:volume",
+            "observation_date": "2024-01-02",
+            "value": 5000.0,
+            "is_missing": False,
+        },  # not a :close series
         _close_row("AAPL", "2024-01-03", 200.0, is_missing=True),  # missing
     ]
     out = compute_equity_return_daily(rows)
-    assert [r["ticker"] for r in out] == ["AAPL"]       # one valid close row
+    assert [r["ticker"] for r in out] == ["AAPL"]  # one valid close row
     assert out[0]["close"] == pytest.approx(100.0)
 
 
 def test_select_canonical_equity_price_rows_falls_back_to_tiingo_adjclose():
     stooq_rows = [
-        {"source": "stooq", "series_id": "AAPL:close",
-         "observation_date": "2024-01-02", "value": 100.0,
-         "is_missing": False},
+        {
+            "source": "stooq",
+            "series_id": "AAPL:close",
+            "observation_date": "2024-01-02",
+            "value": 100.0,
+            "is_missing": False,
+        },
     ]
     tiingo_rows = [
-        {"source": "tiingo", "series_id": "AAPL:adjClose",
-         "observation_date": "2024-01-02", "value": 101.0,
-         "is_missing": False},
-        {"source": "tiingo", "series_id": "MSFT:adjClose",
-         "observation_date": "2024-01-02", "value": 200.0,
-         "is_missing": False},
-        {"source": "tiingo", "series_id": "MSFT:close",
-         "observation_date": "2024-01-02", "value": 201.0,
-         "is_missing": False},
+        {
+            "source": "tiingo",
+            "series_id": "AAPL:adjClose",
+            "observation_date": "2024-01-02",
+            "value": 101.0,
+            "is_missing": False,
+        },
+        {
+            "source": "tiingo",
+            "series_id": "MSFT:adjClose",
+            "observation_date": "2024-01-02",
+            "value": 200.0,
+            "is_missing": False,
+        },
+        {
+            "source": "tiingo",
+            "series_id": "MSFT:close",
+            "observation_date": "2024-01-02",
+            "value": 201.0,
+            "is_missing": False,
+        },
     ]
 
     rows = select_canonical_equity_price_rows(stooq_rows, tiingo_rows)
@@ -326,15 +428,19 @@ def test_select_canonical_equity_price_rows_falls_back_to_tiingo_adjclose():
 
 
 def _weight_row(etf, constituent, date, weight):
-    return {"series_id": f"{etf}:{constituent}", "observation_date": date,
-            "value": weight, "is_missing": False}
+    return {
+        "series_id": f"{etf}:{constituent}",
+        "observation_date": date,
+        "value": weight,
+        "is_missing": False,
+    }
 
 
 def test_index_constituents_ranks_and_latest_flag():
     rows = [
         _weight_row("IVV", "AAPL", "2024-06-30", 6.5),
         _weight_row("IVV", "MSFT", "2024-06-30", 6.9),
-        _weight_row("IVV", "AAPL", "2024-07-31", 7.0),   # newer snapshot
+        _weight_row("IVV", "AAPL", "2024-07-31", 7.0),  # newer snapshot
         _weight_row("IVV", "MSFT", "2024-07-31", 6.6),
     ]
     out = compute_index_constituents(rows)
@@ -342,9 +448,13 @@ def test_index_constituents_ranks_and_latest_flag():
     jun = [r for r in out if r["observation_date"] == "2024-06-30"]
     # ranked by weight within snapshot
     assert [(r["constituent"], r["weight_rank"]) for r in jul] == [
-        ("AAPL", 1), ("MSFT", 2)]
+        ("AAPL", 1),
+        ("MSFT", 2),
+    ]
     assert [(r["constituent"], r["weight_rank"]) for r in jun] == [
-        ("MSFT", 1), ("AAPL", 2)]
+        ("MSFT", 1),
+        ("AAPL", 2),
+    ]
     # only the newest snapshot is flagged latest
     assert all(r["is_latest_snapshot"] for r in jul)
     assert not any(r["is_latest_snapshot"] for r in jun)
@@ -352,14 +462,21 @@ def test_index_constituents_ranks_and_latest_flag():
 
 def test_index_constituents_bounds_by_etf_set():
     # a FOO:close price series must not be mistaken for a constituent
-    rows = [_weight_row("IVV", "AAPL", "2024-07-31", 7.0),
-            {"series_id": "FOO:close", "observation_date": "2024-07-31",
-             "value": 12.0, "is_missing": False}]
+    rows = [
+        _weight_row("IVV", "AAPL", "2024-07-31", 7.0),
+        {
+            "series_id": "FOO:close",
+            "observation_date": "2024-07-31",
+            "value": 12.0,
+            "is_missing": False,
+        },
+    ]
     out = compute_index_constituents(rows, etfs=("IVV",))
     assert [r["constituent"] for r in out] == ["AAPL"]
 
 
 # ---- manifests + registry ---------------------------------------------------
+
 
 def test_equity_manifests_parse_and_register():
     from fred_pipeline.manifest import load_manifests
@@ -384,21 +501,39 @@ def test_equity_local_build_gold(tmp_path):
     )
     silver = []
     for i, px in enumerate([100.0, 101.0, 99.99]):
-        silver.append({
-            "source": "stooq", "series_id": "AAPL:close",
-            "observation_date": f"2024-01-0{i + 2}", "realtime_start": "",
-            "realtime_end": "", "value": px, "raw_value": str(px),
-            "is_missing": 0, "row_hash": f"a{i}", "revision_number": 1,
-            "ingested_at": "2024-02-01T00:00:00", "run_id": "r1",
-        })
+        silver.append(
+            {
+                "source": "stooq",
+                "series_id": "AAPL:close",
+                "observation_date": f"2024-01-0{i + 2}",
+                "realtime_start": "",
+                "realtime_end": "",
+                "value": px,
+                "raw_value": str(px),
+                "is_missing": 0,
+                "row_hash": f"a{i}",
+                "revision_number": 1,
+                "ingested_at": "2024-02-01T00:00:00",
+                "run_id": "r1",
+            }
+        )
     for tk, wt in (("AAPL", 7.0), ("MSFT", 6.6)):
-        silver.append({
-            "source": "ishares", "series_id": f"IVV:{tk}",
-            "observation_date": "2024-07-31", "realtime_start": "",
-            "realtime_end": "", "value": wt, "raw_value": str(wt),
-            "is_missing": 0, "row_hash": f"h{tk}", "revision_number": 1,
-            "ingested_at": "2024-08-01T00:00:00", "run_id": "r1",
-        })
+        silver.append(
+            {
+                "source": "ishares",
+                "series_id": f"IVV:{tk}",
+                "observation_date": "2024-07-31",
+                "realtime_start": "",
+                "realtime_end": "",
+                "value": wt,
+                "raw_value": str(wt),
+                "is_missing": 0,
+                "row_hash": f"h{tk}",
+                "revision_number": 1,
+                "ingested_at": "2024-08-01T00:00:00",
+                "run_id": "r1",
+            }
+        )
     wh.merge_silver(silver)
     results = wh.build_gold()
     assert results["equity_return_daily"] == "ok"
@@ -407,8 +542,10 @@ def test_equity_local_build_gold(tmp_path):
     ret = wh.query("SELECT * FROM gold_equity_return_daily ORDER BY observation_date")
     assert [r["ticker"] for r in ret] == ["AAPL", "AAPL", "AAPL"]
     assert ret[1]["price_return"] == pytest.approx(0.01)
-    cons = wh.query("SELECT * FROM gold_index_constituents "
-                    "WHERE is_latest_snapshot = 1 ORDER BY weight_rank")
+    cons = wh.query(
+        "SELECT * FROM gold_index_constituents "
+        "WHERE is_latest_snapshot = 1 ORDER BY weight_rank"
+    )
     assert [r["constituent"] for r in cons] == ["AAPL", "MSFT"]
     wh.close()
 
@@ -430,14 +567,22 @@ def test_equity_local_build_gold_uses_tiingo_when_stooq_absent(tmp_path):
             ("divCash", 0.0),
             ("splitFactor", 1.0),
         ):
-            silver.append({
-                "source": "tiingo", "series_id": f"AAPL:{field}",
-                "observation_date": date, "realtime_start": "",
-                "realtime_end": "", "value": value, "raw_value": str(value),
-                "is_missing": 0, "row_hash": f"tg-{field}-{i}",
-                "revision_number": 1, "ingested_at": "2024-02-01T00:00:00",
-                "run_id": "r1",
-            })
+            silver.append(
+                {
+                    "source": "tiingo",
+                    "series_id": f"AAPL:{field}",
+                    "observation_date": date,
+                    "realtime_start": "",
+                    "realtime_end": "",
+                    "value": value,
+                    "raw_value": str(value),
+                    "is_missing": 0,
+                    "row_hash": f"tg-{field}-{i}",
+                    "revision_number": 1,
+                    "ingested_at": "2024-02-01T00:00:00",
+                    "run_id": "r1",
+                }
+            )
     wh.merge_silver(silver)
     results = wh.build_gold()
     assert results["equity_return_daily"] == "ok"
@@ -453,6 +598,7 @@ def test_equity_local_build_gold_uses_tiingo_when_stooq_absent(tmp_path):
 
 # ---- realized volatility ----------------------------------------------------
 
+
 def test_realized_volatility_hand_computed_window():
     import math
 
@@ -462,8 +608,8 @@ def test_realized_volatility_hand_computed_window():
 
     r = [math.log(closes[i + 1] / closes[i]) for i in range(3)]
     mean = sum(r) / 3
-    var = sum(x * x for x in r) / 3 - mean ** 2
-    expected_pct = (var ** 0.5) * math.sqrt(252) * 100.0
+    var = sum(x * x for x in r) / 3 - mean**2
+    expected_pct = (var**0.5) * math.sqrt(252) * 100.0
 
     assert len(out) == 1
     row = out[0]
@@ -476,7 +622,7 @@ def test_realized_volatility_hand_computed_window():
 def test_realized_volatility_requires_full_window():
     rows = [
         _close_row("AAPL", "2024-01-02", 100.0),
-        _close_row("AAPL", "2024-01-03", 101.0),   # only 1 log return
+        _close_row("AAPL", "2024-01-03", 101.0),  # only 1 log return
     ]
     assert compute_realized_volatility(rows, windows=(21, 63)) == []
 
@@ -487,7 +633,7 @@ def test_realized_volatility_isolates_tickers():
         _close_row("AAPL", "2024-01-03", 105.0),
         _close_row("AAPL", "2024-01-04", 98.0),
         _close_row("SPY", "2024-01-02", 470.0),
-        _close_row("SPY", "2024-01-03", 471.0),   # only 1 log return -> no window=2 row
+        _close_row("SPY", "2024-01-03", 471.0),  # only 1 log return -> no window=2 row
     ]
     out = compute_realized_volatility(rows, windows=(2,))
     assert {r["ticker"] for r in out} == {"AAPL"}
@@ -509,13 +655,22 @@ def test_equity_local_build_gold_writes_realized_volatility(tmp_path):
     for i in range(25):
         d = start + dt.timedelta(days=i)
         price *= 1.001 if i % 2 == 0 else 0.999
-        silver.append({
-            "source": "stooq", "series_id": "AAPL:close",
-            "observation_date": d.isoformat(), "realtime_start": "",
-            "realtime_end": "", "value": price, "raw_value": str(price),
-            "is_missing": 0, "row_hash": f"v{i}", "revision_number": 1,
-            "ingested_at": "2024-02-01T00:00:00", "run_id": "r1",
-        })
+        silver.append(
+            {
+                "source": "stooq",
+                "series_id": "AAPL:close",
+                "observation_date": d.isoformat(),
+                "realtime_start": "",
+                "realtime_end": "",
+                "value": price,
+                "raw_value": str(price),
+                "is_missing": 0,
+                "row_hash": f"v{i}",
+                "revision_number": 1,
+                "ingested_at": "2024-02-01T00:00:00",
+                "run_id": "r1",
+            }
+        )
     wh.merge_silver(silver)
     results = wh.build_gold()
     assert results["realized_volatility"] == "ok"
@@ -524,8 +679,8 @@ def test_equity_local_build_gold_writes_realized_volatility(tmp_path):
         "SELECT * FROM gold_realized_volatility ORDER BY observation_date, window"
     )
     windows_seen = {r["window"] for r in rows}
-    assert 21 in windows_seen        # 24 returns available -> window=21 populated
-    assert 63 not in windows_seen    # not enough history for a 63-day window
+    assert 21 in windows_seen  # 24 returns available -> window=21 populated
+    assert 63 not in windows_seen  # not enough history for a 63-day window
     assert all(r["ticker"] == "AAPL" for r in rows)
     assert all(r["realized_vol_pct"] > 0 for r in rows)
     wh.close()
@@ -533,13 +688,25 @@ def test_equity_local_build_gold_writes_realized_volatility(tmp_path):
 
 # ---- equity price reconciliation -------------------------------------------
 
+
 def _stooq_close(ticker, date, close):
-    return {"source": "stooq", "series_id": f"{ticker}:close",
-            "observation_date": date, "value": close, "is_missing": False}
+    return {
+        "source": "stooq",
+        "series_id": f"{ticker}:close",
+        "observation_date": date,
+        "value": close,
+        "is_missing": False,
+    }
+
 
 def _tiingo_adj_close(ticker, date, adj_close):
-    return {"source": "tiingo", "series_id": f"{ticker}:adjClose",
-            "observation_date": date, "value": adj_close, "is_missing": False}
+    return {
+        "source": "tiingo",
+        "series_id": f"{ticker}:adjClose",
+        "observation_date": date,
+        "value": adj_close,
+        "is_missing": False,
+    }
 
 
 def _recon_cfg(*tickers, tol=2.0):
@@ -547,10 +714,14 @@ def _recon_cfg(*tickers, tol=2.0):
 
 
 def test_equity_recon_agrees():
-    sq = [_stooq_close("AAPL", "2024-01-02", 193.0),
-          _stooq_close("AAPL", "2024-01-03", 195.0)]
-    tg = [_tiingo_adj_close("AAPL", "2024-01-02", 192.5),
-          _tiingo_adj_close("AAPL", "2024-01-03", 194.6)]
+    sq = [
+        _stooq_close("AAPL", "2024-01-02", 193.0),
+        _stooq_close("AAPL", "2024-01-03", 195.0),
+    ]
+    tg = [
+        _tiingo_adj_close("AAPL", "2024-01-02", 192.5),
+        _tiingo_adj_close("AAPL", "2024-01-03", 194.6),
+    ]
     out = compute_equity_price_reconciliation(sq, tg, _recon_cfg("AAPL"))
     assert len(out) == 2
     r = out[0]
@@ -584,18 +755,29 @@ def test_equity_recon_skips_missing_source():
 
 
 def test_equity_recon_filters_to_cfg_tickers():
-    sq = [_stooq_close("AAPL", "2024-01-02", 193.0),
-          _stooq_close("MSFT", "2024-01-02", 375.0)]
-    tg = [_tiingo_adj_close("AAPL", "2024-01-02", 192.5),
-          _tiingo_adj_close("MSFT", "2024-01-02", 374.0)]
+    sq = [
+        _stooq_close("AAPL", "2024-01-02", 193.0),
+        _stooq_close("MSFT", "2024-01-02", 375.0),
+    ]
+    tg = [
+        _tiingo_adj_close("AAPL", "2024-01-02", 192.5),
+        _tiingo_adj_close("MSFT", "2024-01-02", 374.0),
+    ]
     # Only AAPL in config -> MSFT rows silently excluded
     out = compute_equity_price_reconciliation(sq, tg, _recon_cfg("AAPL"))
     assert [r["ticker"] for r in out] == ["AAPL"]
 
 
 def test_equity_recon_skips_is_missing():
-    sq = [{"source": "stooq", "series_id": "AAPL:close",
-           "observation_date": "2024-01-02", "value": 193.0, "is_missing": True}]
+    sq = [
+        {
+            "source": "stooq",
+            "series_id": "AAPL:close",
+            "observation_date": "2024-01-02",
+            "value": 193.0,
+            "is_missing": True,
+        }
+    ]
     tg = [_tiingo_adj_close("AAPL", "2024-01-02", 192.5)]
     assert compute_equity_price_reconciliation(sq, tg, _recon_cfg("AAPL")) == []
 
@@ -637,20 +819,38 @@ def test_equity_recon_end_to_end(tmp_path):
     )
     silver = []
     for i, (sq, adj) in enumerate([(193.0, 192.5), (195.0, 194.0)]):
-        silver.append({
-            "source": "stooq", "series_id": "AAPL:close",
-            "observation_date": f"2024-01-0{i + 2}", "realtime_start": "",
-            "realtime_end": "", "value": sq, "raw_value": str(sq),
-            "is_missing": 0, "row_hash": f"sq{i}", "revision_number": 1,
-            "ingested_at": "2024-02-01T00:00:00", "run_id": "r1",
-        })
-        silver.append({
-            "source": "tiingo", "series_id": "AAPL:adjClose",
-            "observation_date": f"2024-01-0{i + 2}", "realtime_start": "",
-            "realtime_end": "", "value": adj, "raw_value": str(adj),
-            "is_missing": 0, "row_hash": f"tg{i}", "revision_number": 1,
-            "ingested_at": "2024-02-01T00:00:00", "run_id": "r1",
-        })
+        silver.append(
+            {
+                "source": "stooq",
+                "series_id": "AAPL:close",
+                "observation_date": f"2024-01-0{i + 2}",
+                "realtime_start": "",
+                "realtime_end": "",
+                "value": sq,
+                "raw_value": str(sq),
+                "is_missing": 0,
+                "row_hash": f"sq{i}",
+                "revision_number": 1,
+                "ingested_at": "2024-02-01T00:00:00",
+                "run_id": "r1",
+            }
+        )
+        silver.append(
+            {
+                "source": "tiingo",
+                "series_id": "AAPL:adjClose",
+                "observation_date": f"2024-01-0{i + 2}",
+                "realtime_start": "",
+                "realtime_end": "",
+                "value": adj,
+                "raw_value": str(adj),
+                "is_missing": 0,
+                "row_hash": f"tg{i}",
+                "revision_number": 1,
+                "ingested_at": "2024-02-01T00:00:00",
+                "run_id": "r1",
+            }
+        )
     wh.merge_silver(silver)
     results = wh.build_gold()
     assert results["equity_price_reconciliation"] == "ok"
