@@ -302,6 +302,18 @@ def test_spark_due_date_watermark_tracks_changed_silver_rows(spark):
                 observation_event_id STRING
             ) USING DELTA"""
         )
+        spark.sql(
+            f"""CREATE TABLE {history_table} (
+                observation_event_id STRING, source STRING, series_id STRING,
+                observation_date DATE, realtime_start DATE, realtime_end DATE,
+                value DOUBLE, raw_value STRING, exact_value STRING,
+                is_missing BOOLEAN, row_hash STRING, revision_number INT,
+                provider_valid_from STRING, provider_valid_to STRING,
+                base_currency STRING, quote_currency STRING, unit_multiplier INT,
+                observation_status STRING, observation_action STRING,
+                is_deleted BOOLEAN, ingested_at TIMESTAMP, run_id STRING
+            ) USING DELTA"""
+        )
         row = {
             "source": "fred",
             "series_id": "DGS10",
