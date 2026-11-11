@@ -63,8 +63,9 @@ processing; it precedes the combined summary.
 Each measured invocation produces `<run-id>.json`; runs reaching reporting also
 produce `<run-id>.html`, and measured spans append to a JSONL journal. Early
 configuration/preflight failures may have only the file snapshot. Journals
-contain start/finish events; audit storage upserts the most
-recent event per span ID. A killed process can leave `running` rows/events;
+contain start/finish events and `span_updated` amendments for stage outcomes
+changed after completion; audit storage upserts the most recent event per span
+ID. A killed process can leave `running` rows/events;
 these must not be interpreted as successful completed stages.
 
 SQLite tables are `audit_run_performance` and `audit_run_span`. PostgreSQL and
@@ -106,13 +107,18 @@ ORDER BY duration_seconds DESC LIMIT 20;
 
 ## Verification and implementation references
 
-The final development suite on 2026-11-11 passed **1,743 tests**, with **eight
-optional skips** and the same **four pre-existing failures**: the three
-`test_dim_series_schema_parity.py` source-text lookup tests and
-`test_global_views.py::test_powerbi_catalog_covers_gold_tables` (the existing
-`mmkt_rate_snapshot` catalog gap). Repository lint/format/documentation hooks
-pass. These baseline defects were established before Spec 017 and are not
-changed by this work.
+The follow-up fixture audit on 2026-11-11 passed the complete suite: **1,810
+tests**, **eight optional skips**, and **no failures**. The four former baseline
+failures are resolved: the three `test_dim_series_schema_parity.py` tests now
+locate the Spark schema through the AST, and the report catalog includes
+`mmkt_rate_snapshot`. The six timing/reporting modules have **99.28% combined
+statement/branch coverage**. See the [test coverage and reproduction commands](../../tests/performance/README.md)
+and [saved synthetic fixtures](../../tests/fixtures/performance/README.md).
+
+Failing-first regressions also verified three runtime fixes: invalid decorator
+attribute callbacks cannot interrupt work, the aggregate-group cap preserves
+completion events, and stage warnings applied after a flush reach durable audit
+storage on the next flush.
 
 Focused tests cover fake clocks, nested/repeated spans, copied thread contexts,
 worker-stage ownership, queue timestamps, cancellation/async functions, failed
