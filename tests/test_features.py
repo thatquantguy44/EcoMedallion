@@ -265,7 +265,7 @@ def test_local_backend_builds_feature_tables(tmp_path):
             "is_missing": False,
             "row_hash": "h1",
             "revision_number": 1,
-            "ingested_at": "2024-01-02",
+            "ingested_at": "2024-01-02T00:00:00+00:00",
             "run_id": "r",
         },
         {
@@ -278,7 +278,7 @@ def test_local_backend_builds_feature_tables(tmp_path):
             "is_missing": False,
             "row_hash": "h2",
             "revision_number": 1,
-            "ingested_at": "2024-01-02",
+            "ingested_at": "2024-01-02T00:00:00+00:00",
             "run_id": "r",
         },
     ]

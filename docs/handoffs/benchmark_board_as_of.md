@@ -1,0 +1,15 @@
+# Benchmark board as-of and capture semantics
+
+Last verified: 2026-11-11
+
+The benchmark board is built from configured FRED series and their configured benchmark legs. Each build resolves one New York calendar cutoff at the start; pass `--benchmark-as-of YYYY-MM-DD` to `fred-pipeline gold` for an earlier cutoff. A future cutoff is rejected. `as_of_date` is the cutoff, `latest_date` is the date of the latest usable observation, and `staleness_days` is the calendar-day difference between them.
+
+The board reads FRED Silver, selects the latest eligible revision for each observation date, and excludes observations and revision starts after the cutoff. It also excludes records captured after the end of the cutoff day in New York (or after the current instant for today's cutoff). Capture timestamps must be timezone-aware; invalid timestamps and ambiguous vintages fail the build. Missing values remain missing. A series with no eligible usable observations emits no board row, and a missing benchmark leg leaves its spread null. No synthetic values or forward-filled inputs are introduced by this selection.
+
+Each board row reports `source`, `latest_revision_start`, `latest_ingested_at`, and `history_unknown_vintage_count`. A blank stored revision start remains unknown: it is never replaced by the observation or capture date. A historical observation with an unknown revision start may be used if its captured record was available by the cutoff; the count makes that limitation visible. The reported capture is when this warehouse recorded that row, not proof of the provider's original publication or revision time. Because the compact Silver table can overwrite historical states and because vintage dates may be absent, a historical cutoff is a conservative selection from retained captures, not a complete point-in-time reconstruction.
+
+The source field identifies the configured Silver provider; it is not independent proof of provenance. Consumers requiring source qualification must match the values to retained provider receipts or audited repair evidence and report unavailable evidence explicitly. This board refresh does not invent source receipts and does not establish that the provider's live service is current.
+
+The shared `gold.fred_latest_observation` keeps its existing, latest-revised semantics for other Gold products. The benchmark cutoff and capture metadata apply to `gold.benchmark_rate_board` only. SQLite and PostgreSQL add the metadata columns on initialization; Spark writes the updated Delta schema when rebuilding the table.
+
+An isolated PostgreSQL full build on 2026-11-11 used 108,637 retained benchmark Silver rows verified against retained FRED responses or checksummed repair captures. All 16 board rows matched an independently checked as-of calculation. The future-dated IORB observation was excluded, and 94,188 usable observations across the board had unknown stored vintage starts. Other series, providers, Gold products, and full-warehouse parity were outside that validation. No shared warehouse was written.

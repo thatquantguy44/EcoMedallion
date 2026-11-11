@@ -586,7 +586,11 @@ CREATE TABLE IF NOT EXISTS gold.benchmark_rate_board (
     zscore                  DOUBLE,
     percentile              DOUBLE,
     regime                  STRING,
-    staleness_days          INT
+    staleness_days          INT,
+    source                  STRING,
+    latest_revision_start   DATE,
+    latest_ingested_at      STRING,
+    history_unknown_vintage_count INT
 )
 USING DELTA;
 

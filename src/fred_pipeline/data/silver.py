@@ -23,6 +23,7 @@ from fred_pipeline.transform import (
     normalize_observations,
 )
 from fred_pipeline.data.observation_history import (
+    HISTORY_COLUMNS,
     observation_event,
     with_observation_event,
 )
@@ -182,6 +183,46 @@ _SILVER_CASTS = {
 }
 
 
+def _history_dataframe(spark: Any, rows: list[dict[str, Any]]) -> Any:
+    """Use stable types even when optional fields are null for the whole batch."""
+    from pyspark.sql.types import (
+        BooleanType,
+        DoubleType,
+        IntegerType,
+        StringType,
+        StructField,
+        StructType,
+    )
+
+    numeric = {
+        "value": DoubleType(),
+        "revision_number": IntegerType(),
+        "unit_multiplier": IntegerType(),
+    }
+    boolean = {"is_missing", "is_deleted"}
+    schema = StructType(
+        [
+            StructField(
+                name,
+                numeric.get(name)
+                or (BooleanType() if name in boolean else StringType()),
+                True,
+            )
+            for name in HISTORY_COLUMNS
+        ]
+    )
+    prepared = []
+    for row in rows:
+        values = dict(row)
+        for name in boolean:
+            if values.get(name) is not None:
+                values[name] = bool(values[name])
+        if values.get("value") is not None:
+            values["value"] = float(values["value"])
+        prepared.append(values)
+    return spark.createDataFrame(prepared, schema=schema)
+
+
 def merge_silver(
     config: PipelineConfig,
     rows: list[dict[str, Any]],
@@ -199,7 +240,7 @@ def merge_silver(
     # retry is idempotent on observation_event_id if the later compact MERGE
     # fails after this independent Delta commit.
     history_table = config.table("silver", "fred_observation_history")
-    history_df = spark.createDataFrame(history_rows)
+    history_df = _history_dataframe(spark, history_rows)
     history_df = history_df.selectExpr(
         *[
             f"CAST(NULLIF({column}, '') AS {cast}) AS {column}"

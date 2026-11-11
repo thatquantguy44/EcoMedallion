@@ -19,6 +19,7 @@ inelegant but it is hermetic, and it is exactly the drift that bit us.
 
 from __future__ import annotations
 
+import ast
 import re
 from pathlib import Path
 
@@ -45,20 +46,35 @@ def _sqlite_columns() -> list[str]:
     )
     assert match, "gold_dim_series not found in local_store._SCHEMA"
     return [
-        part.strip().split()[0]
-        for part in match.group(1).split(",")
-        if part.strip()
+        part.strip().split()[0] for part in match.group(1).split(",") if part.strip()
     ]
 
 
 def _spark_struct_fields() -> list[str]:
-    """(3) the StructField names in the Spark writer, read from source."""
+    """(3) Read the dim_series StructType without depending on formatting."""
     source = (REPO_ROOT / "src" / "fred_pipeline" / "writer" / "gold.py").read_text(
         encoding="utf-8"
     )
-    start = source.index('_write("dim_series"')
-    end = source.index(']), ["*"])', start)
-    return re.findall(r'StructField\("(\w+)"', source[start:end])
+    tree = ast.parse(source)
+    for node in ast.walk(tree):
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "_write"
+            and len(node.args) >= 3
+            and isinstance(node.args[0], ast.Constant)
+            and node.args[0].value == "dim_series"
+        ):
+            return [
+                field.args[0].value
+                for field in ast.walk(node.args[2])
+                if isinstance(field, ast.Call)
+                and isinstance(field.func, ast.Name)
+                and field.func.id == "StructField"
+                and field.args
+                and isinstance(field.args[0], ast.Constant)
+            ]
+    raise AssertionError("dim_series Spark StructType not found")
 
 
 def _sql_ddl_columns() -> list[str]:

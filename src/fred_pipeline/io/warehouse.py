@@ -13,7 +13,7 @@ Each backend implements the same small surface used by the pipeline.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import Any, Iterable, Optional, Protocol, runtime_checkable
 
 from fred_pipeline.audit import EtlRun
@@ -154,10 +154,12 @@ class SparkWarehouse:
 
         return merge_silver(self.config, rows, spark=self.spark).get("source_rows", 0)
 
-    def build_gold(self) -> dict[str, str]:
+    def build_gold(self, *, benchmark_as_of: date | None = None) -> dict[str, str]:
         from fred_pipeline.gold import build_gold
 
-        return build_gold(self.config, spark=self.spark)
+        return build_gold(
+            self.config, spark=self.spark, benchmark_as_of=benchmark_as_of
+        )
 
     def write_lifecycle(self, rows: list[dict[str, Any]]) -> int:
         from fred_pipeline.spark_io import append_rows

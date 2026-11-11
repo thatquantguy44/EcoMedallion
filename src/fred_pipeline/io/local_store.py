@@ -34,6 +34,10 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
 
 from fred_pipeline.audit import EtlRun, EtlSeriesRun
+from fred_pipeline.benchmark_as_of import (
+    benchmark_as_of_date,
+    select_benchmark_vintages,
+)
 from fred_pipeline.config import PipelineConfig
 from fred_pipeline.manifest import Manifest
 from fred_pipeline.meta import build_meta_rows
@@ -509,7 +513,8 @@ CREATE TABLE IF NOT EXISTS gold_benchmark_rate_board (
     benchmark_series TEXT, as_of_date TEXT, latest_date TEXT,
     latest_value REAL, prior_value REAL, change_bps REAL, trend TEXT,
     spread_to_benchmark_bps REAL, zscore REAL, percentile REAL,
-    regime TEXT, staleness_days INTEGER
+    regime TEXT, staleness_days INTEGER, source TEXT, latest_revision_start TEXT,
+    latest_ingested_at TEXT, history_unknown_vintage_count INTEGER
 );
 CREATE TABLE IF NOT EXISTS gold_funding_tape_daily (
     metric_name TEXT, metric_type TEXT, observation_date TEXT,
@@ -959,6 +964,10 @@ class LocalWarehouse:
     # supports ADD COLUMN cheaply (metadata-only), so replay the additions on
     # open. Additive only: renames and drops still need a rebuild.
     _ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
+        ("gold_benchmark_rate_board", "source", "TEXT"),
+        ("gold_benchmark_rate_board", "latest_revision_start", "TEXT"),
+        ("gold_benchmark_rate_board", "latest_ingested_at", "TEXT"),
+        ("gold_benchmark_rate_board", "history_unknown_vintage_count", "INTEGER"),
         # (table, column, type) -- geo landed with the REGIONAL series catalog.
         ("gold_dim_series", "geo", "TEXT"),
         # metric disambiguates measures that share an econ_category (REGIONAL
@@ -1151,6 +1160,25 @@ class LocalWarehouse:
         for row in rows:
             row["is_missing"] = bool(row.get("is_missing"))
         return rows
+
+    def _read_benchmark_as_of(
+        self, *, series_ids: Sequence[str], as_of: _dt.date
+    ) -> list[dict[str, Any]]:
+        """Select captured FRED vintages without inventing revision dates."""
+        ids = tuple(dict.fromkeys(series_ids))
+        if not ids:
+            return []
+        placeholders = ", ".join("?" for _ in ids)
+        rows = self.query(
+            "SELECT source, series_id, observation_date, value, realtime_start, "
+            "is_missing, ingested_at FROM silver_fred_observation "
+            f"WHERE source = 'fred' AND series_id IN ({placeholders}) "
+            "ORDER BY series_id, observation_date, realtime_start",
+            ids,
+        )
+        for row in rows:
+            row["is_missing"] = bool(row.get("is_missing"))
+        return select_benchmark_vintages(rows, as_of)
 
     def _gold_latest_inventory(self) -> tuple[list[str], str | None, str | None, int]:
         """Return series IDs, usable date bounds, and the materialized row count."""
@@ -2213,11 +2241,14 @@ class LocalWarehouse:
             ),
         )
 
-    def build_gold(self, full: bool = False) -> dict[str, str]:
+    def build_gold(
+        self, full: bool = False, *, benchmark_as_of: _dt.date | None = None
+    ) -> dict[str, str]:
+        cutoff = benchmark_as_of_date(benchmark_as_of)
         self.conn.execute("BEGIN")
         self._defer_commits = True
         try:
-            result = self._build_gold_inner(full=full)
+            result = self._build_gold_inner(full=full, benchmark_as_of=cutoff)
         except BaseException:
             self.conn.rollback()
             raise
@@ -2228,7 +2259,10 @@ class LocalWarehouse:
         finally:
             self._defer_commits = False
 
-    def _build_gold_inner(self, full: bool = False) -> dict[str, str]:
+    def _build_gold_inner(
+        self, full: bool = False, *, benchmark_as_of: _dt.date | None = None
+    ) -> dict[str, str]:
+        benchmark_as_of = benchmark_as_of_date(benchmark_as_of)
         # gold_fred_point_in_time is a VIEW (see _SCHEMA / spec003 section 7)
         # -- it always reflects current Silver with no rebuild step. Only
         # gold_fred_latest_observation still needs materializing: it's read
@@ -2625,6 +2659,9 @@ class LocalWarehouse:
         board_ids = {rd.series_id for rd in board.rates} | {
             rd.benchmark for rd in board.rates if rd.benchmark
         }
+        benchmark_rows = self._read_benchmark_as_of(
+            series_ids=sorted(board_ids), as_of=benchmark_as_of
+        )
         credit_ids = {cd.series_id for cd in credit_cfg.instruments} | {
             RECESSION_SERIES
         }
@@ -2710,7 +2747,7 @@ class LocalWarehouse:
                 ),
                 "benchmark_rate_board": _stage_timed("pf.benchmark_rate_board")(
                     lambda: compute_benchmark_rate_board(
-                        _select_series(latest_by_series, board_ids), board
+                        benchmark_rows, board, as_of=benchmark_as_of
                     )
                 ),
                 "mmkt_rate_snapshot": _stage_timed("pf.mmkt_rate_snapshot")(

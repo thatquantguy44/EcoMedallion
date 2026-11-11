@@ -1174,3 +1174,47 @@ def test_compute_parallel_respects_max_workers_override(monkeypatch):
     assert local_store_module._compute_parallel(dict(tasks)) == {
         str(i): i for i in range(6)
     }
+
+
+def test_benchmark_board_gold_build_excludes_future_observations_and_revisions(
+    tmp_path,
+):
+    """Fictional fixtures: the board must select the eligible Silver vintage."""
+    import datetime as dt
+
+    wh = LocalWarehouse(_config(), db_path=str(tmp_path / "benchmark.db"))
+    wh.merge_silver(
+        [
+            _silver_row("SOFR", "2024-01-02", "", 2.0, 1),
+            _silver_row("SOFR", "2024-01-03", "2024-01-03", 2.2, 1),
+            _silver_row("SOFR", "2024-01-03", "2024-01-06", 9.0, 2),
+            _silver_row("SOFR", "2024-01-07", "2024-01-03", 9.5, 1),
+            _silver_row("EFFR", "2024-01-02", "2024-01-02", 2.0, 1),
+            _silver_row("EFFR", "2024-01-03", "2024-01-03", 2.1, 1),
+            _silver_row("IORB", "2024-01-07", "2024-01-03", 9.5, 1),
+            _silver_row("SOFR", "2024-01-04", "2024-01-04", None, 1, is_missing=True),
+            _silver_row("SOFR", "2024-01-05", "2024-01-05", 50.0, 1, source="other"),
+        ]
+    )
+    wh.build_gold(full=True, benchmark_as_of=dt.date(2024, 1, 5))
+    board = {
+        r["series_id"]: r for r in wh.query("SELECT * FROM gold_benchmark_rate_board")
+    }
+    assert set(board) == {"SOFR", "EFFR"}
+    sofr = board["SOFR"]
+    assert sofr["as_of_date"] == "2024-01-05"
+    assert sofr["latest_date"] == "2024-01-03"
+    assert sofr["latest_value"] == pytest.approx(2.2)
+    assert sofr["prior_value"] == pytest.approx(2.0)
+    assert sofr["spread_to_benchmark_bps"] == pytest.approx(10.0)
+    assert sofr["staleness_days"] == 2
+    assert sofr["source"] == "fred"
+    assert sofr["latest_revision_start"] == "2024-01-03"
+    assert sofr["latest_ingested_at"] == "2024-01-01T00:00:00+00:00"
+    assert sofr["history_unknown_vintage_count"] == 1
+    # The general latest-observation table retains its existing semantics.
+    rows = wh.query(
+        "SELECT value FROM gold_fred_latest_observation WHERE series_id='SOFR' AND observation_date='2024-01-03'"
+    )
+    assert rows[0]["value"] == pytest.approx(9.0)
+    wh.close()
