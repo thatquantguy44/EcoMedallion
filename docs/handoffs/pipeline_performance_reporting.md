@@ -107,9 +107,10 @@ ORDER BY duration_seconds DESC LIMIT 20;
 
 ## Verification and implementation references
 
-The follow-up fixture audit on 2026-11-11 passed the complete suite: **1,810
-tests**, **eight optional skips**, and **no failures**. The four former baseline
-failures are resolved: the three `test_dim_series_schema_parity.py` tests now
+The follow-up fixture audit on 2026-11-11, including the latest `main`, passed
+the complete suite: **1,818 tests**, **eight optional skips**, and **no failures**.
+The four former baseline failures are resolved: the three
+`test_dim_series_schema_parity.py` tests now
 locate the Spark schema through the AST, and the report catalog includes
 `mmkt_rate_snapshot`. The six timing/reporting modules have **99.28% combined
 statement/branch coverage**. See the [test coverage and reproduction commands](../../tests/performance/README.md)

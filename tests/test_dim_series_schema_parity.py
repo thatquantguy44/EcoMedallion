@@ -51,7 +51,7 @@ def _sqlite_columns() -> list[str]:
 
 
 def _spark_struct_fields(source: str | None = None) -> list[str]:
-    """(3) the StructField names in the Spark writer, read from source."""
+    """(3) Read the dim_series StructType without depending on formatting."""
     if source is None:
         source = (REPO_ROOT / "src" / "fred_pipeline" / "writer" / "gold.py").read_text(
             encoding="utf-8"

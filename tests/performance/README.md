@@ -36,11 +36,12 @@ uses the AST, and the money-market snapshot is represented in the report catalog
 
 ## Verified results
 
-On 2026-11-11, the complete suite passed **1,810 tests**, with **eight optional
-skips** (Spark integration and seven ECB PostgreSQL-lock checks requiring an
-explicit DSN). The new PostgreSQL replay test ran against a disposable database.
-The audit added 63 test cases, including the schema-lookup regression, and
-resolved the four former baseline failures.
+On 2026-11-11, after incorporating the latest `main`, the complete suite passed
+**1,818 tests**, with **eight optional skips** (Spark integration and seven ECB
+PostgreSQL-lock checks requiring an explicit DSN). The new PostgreSQL replay
+test ran against a disposable database.
+The audit added 63 test cases, including the schema-lookup regression. The
+combined branch includes `main`'s repairs for the four former baseline failures.
 
 Combined statement/branch coverage across the six timing/reporting modules was
 **99.28%**: the collector and stage lifecycle rounded to 99%; storage, decorators,

@@ -17,8 +17,13 @@ equivalent DDL/DML also ships in ``sql/50_gold.sql`` and ``sql/60_views.sql``.
 from __future__ import annotations
 
 from typing import Any
+from datetime import date
 
 from fred_pipeline.config import PipelineConfig
+from fred_pipeline.benchmark_as_of import (
+    benchmark_as_of_date,
+    select_benchmark_vintages,
+)
 from fred_pipeline.performance import span
 from fred_pipeline.timing import timed
 from fred_pipeline.spark_io import get_spark
@@ -559,8 +564,27 @@ def _collect_latest(
     return [r.asDict() for r in df.collect()]
 
 
+def _collect_benchmark_as_of(
+    config: PipelineConfig, spark: Any, series_ids: list[str], as_of: date
+) -> list[dict[str, Any]]:
+    """Read captured FRED vintages for the board's explicit cutoff."""
+    if not series_ids:
+        return []
+    silver = config.table("silver", "fred_observation")
+    in_list = ", ".join("'" + sid.replace("'", "''") + "'" for sid in series_ids)
+    rows = spark.sql(
+        f"SELECT source, series_id, CAST(observation_date AS STRING) AS observation_date, "
+        f"CAST(realtime_start AS STRING) AS realtime_start, value, is_missing, "
+        f"date_format(ingested_at, 'yyyy-MM-dd HH:mm:ss.SSSSSSXXX') AS ingested_at FROM {silver} "
+        f"WHERE source = 'fred' AND series_id IN ({in_list})"
+    ).collect()
+    return select_benchmark_vintages([row.asDict() for row in rows], as_of)
+
+
 @timed("gold.terminal_views", log_completion=False)
-def _build_terminal_views(config: PipelineConfig, spark: Any) -> None:
+def _build_terminal_views(
+    config: PipelineConfig, spark: Any, *, benchmark_as_of: date | None = None
+) -> None:
     """Build the market-terminal analytical views (dimensions + ECON macro
     dashboard + Treasury Curve Lab; see ``docs/market_terminal_gold_views.md``)
     by reusing the pure-Python engines in :mod:`fred_pipeline.terminal_views` —
@@ -1170,6 +1194,8 @@ def _build_terminal_views(config: PipelineConfig, spark: Any) -> None:
         ],
     )
 
+    benchmark_as_of = benchmark_as_of_date(benchmark_as_of)
+
     # Phase 4 rates complex: BMRK benchmark board, FUND funding tape + stress
     # gauge, CRDT credit spreads (configs under config/).
     board = load_benchmark_board()
@@ -1178,7 +1204,9 @@ def _build_terminal_views(config: PipelineConfig, spark: Any) -> None:
         | {rd.benchmark for rd in board.rates if rd.benchmark}
     )
     board_rows = compute_benchmark_rate_board(
-        _collect_latest(config, spark, board_ids), board
+        _collect_benchmark_as_of(config, spark, board_ids, benchmark_as_of),
+        board,
+        as_of=benchmark_as_of,
     )
     _write(
         "benchmark_rate_board",
@@ -1200,6 +1228,10 @@ def _build_terminal_views(config: PipelineConfig, spark: Any) -> None:
                 StructField("percentile", DoubleType()),
                 StructField("regime", StringType()),
                 StructField("staleness_days", IntegerType()),
+                StructField("source", StringType()),
+                StructField("latest_revision_start", StringType()),
+                StructField("latest_ingested_at", StringType()),
+                StructField("history_unknown_vintage_count", IntegerType()),
             ]
         ),
         [
@@ -1218,6 +1250,10 @@ def _build_terminal_views(config: PipelineConfig, spark: Any) -> None:
             "percentile",
             "regime",
             "staleness_days",
+            "source",
+            "CAST(latest_revision_start AS DATE) AS latest_revision_start",
+            "latest_ingested_at",
+            "history_unknown_vintage_count",
         ],
     )
 
@@ -2457,8 +2493,11 @@ def _build_ml_pipeline(config: PipelineConfig, spark: Any) -> None:
     )
 
 
-def build_gold(config: PipelineConfig, *, spark: Any = None) -> dict[str, str]:
+def build_gold(
+    config: PipelineConfig, *, spark: Any = None, benchmark_as_of: date | None = None
+) -> dict[str, str]:
     """Rebuild all Gold tables from Silver. Returns table -> 'ok' map."""
+    cutoff = benchmark_as_of_date(benchmark_as_of)
     spark = get_spark(spark)
     steps = {
         "fred_point_in_time": _point_in_time_sql(config),
@@ -2486,7 +2525,7 @@ def build_gold(config: PipelineConfig, *, spark: Any = None) -> dict[str, str]:
     _build_company_financials(config, spark)
     results["fred_company_fundamentals"] = "ok"
     results["fred_company_ratios"] = "ok"
-    _build_terminal_views(config, spark)
+    _build_terminal_views(config, spark, benchmark_as_of=cutoff)
     for name in (
         "dim_series",
         "dim_date",

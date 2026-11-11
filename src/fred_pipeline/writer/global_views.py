@@ -338,10 +338,9 @@ POWERBI_CATALOG: tuple[dict[str, Any], ...] = (
         "mmkt_rate_snapshot",
         "fact",
         "MMKT",
-        "1 / instrument (latest)",
-        "money-market quote board with convention and freshness columns",
-        "Quoted and normalized money-market yields with quote conventions, "
-        "conversion details, observation dates, staleness and availability status.",
+        "1 / configured instrument (latest)",
+        "rate table with source and freshness status",
+        "Quoted and normalized money-market rates with provenance and missing or stale status.",
     ),
     _entry(
         "funding_tape_daily",

@@ -39,6 +39,7 @@ from pathlib import Path
 from typing import Any
 
 from fred_pipeline.config import Environment, PipelineConfig
+from fred_pipeline.benchmark_as_of import benchmark_as_of_date
 from fred_pipeline.manifest import all_series, load_manifests
 from fred_pipeline.pipeline import FredPipeline
 
@@ -1124,6 +1125,7 @@ def _cmd_gold(args: argparse.Namespace) -> int:
     config = PipelineConfig.resolve(
         environment=Environment(args.env), config_file=args.config
     )
+    cutoff = benchmark_as_of_date(args.benchmark_as_of)
     warehouse = None
     if args.local:
         from fred_pipeline.local_store import LocalWarehouse
@@ -1142,9 +1144,9 @@ def _cmd_gold(args: argparse.Namespace) -> int:
         # other backends' Warehouse implementations always fully rebuild, so
         # there's nothing to thread it through to.
         result = (
-            warehouse.build_gold(full=args.full)
+            warehouse.build_gold(full=args.full, benchmark_as_of=cutoff)
             if args.local
-            else warehouse.build_gold()
+            else warehouse.build_gold(benchmark_as_of=cutoff)
         )
     finally:
         warehouse.close()
@@ -2057,6 +2059,12 @@ def build_parser() -> argparse.ArgumentParser:
         "ignoring per-entity checkpoints (spec003 Phase 3); mirrors `run "
         "--full`. Local backend only -- a no-op elsewhere, since other "
         "backends always fully rebuild.",
+    )
+    g.add_argument(
+        "--benchmark-as-of",
+        type=_dt.date.fromisoformat,
+        default=None,
+        help="benchmark board cutoff date YYYY-MM-DD (default: today in New York)",
     )
     g.set_defaults(func=_cmd_gold)
 
