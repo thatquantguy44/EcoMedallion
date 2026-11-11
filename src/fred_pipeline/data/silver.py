@@ -250,13 +250,15 @@ def merge_silver(
         ]
     )
     if table_exists(spark, table):
+        from pyspark.sql.functions import expr
+
         existing = spark.table(table).select(*SILVER_MERGE_KEYS, "row_hash")
         join_condition = " AND ".join(
             f"t.{column} <=> s.{column}" for column in SILVER_MERGE_KEYS
         )
         history_df = (
             history_df.alias("s")
-            .join(existing.alias("t"), join_condition, "left")
+            .join(existing.alias("t"), expr(join_condition), "left")
             .where("t.row_hash IS NULL OR NOT (t.row_hash <=> s.row_hash)")
             .select("s.*")
         )
