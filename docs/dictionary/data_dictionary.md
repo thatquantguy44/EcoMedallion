@@ -355,21 +355,38 @@ settles against. Weekends/holidays are kept as rows, never dropped.
 | day_type | `Holiday` \| `Weekend` \| `Business Day` |
 | is_business_day | |
 | prior_business_day / next_business_day | Nearest business day, walking outward |
-| t2_settle_date | `next_business_day` applied twice |
+| t2_settle_date | `next_business_day` applied twice on this calendar; not a verified clearing or settlement date |
 | business_day_of_month | `NULL` on a non-business day |
 | business_days_in_month | Total business days in that calendar month |
 | is_first/last_business_day_of_month/quarter/year | Period-boundary flags |
 
-**Calendar differences**: NYSE observes Columbus Day and Veterans Day;
-SIFMA/FEDWIRE don't. SIFMA and NYSE observe Good Friday; FEDWIRE doesn't
-(this is exactly why FEDWIRE is the better calendar for T+1/T+2 settlement
-math against a Fed-cleared instrument — it's never closed on a day NYSE/SIFMA
-treat as a holiday for reasons unrelated to Fedwire funds availability).
+**Calendar differences**: The NYSE calendar remains open on Columbus Day and
+Veterans Day; the SIFMA/FEDWIRE calendar rules mark them as holidays. SIFMA and
+NYSE observe Good Friday; FEDWIRE does not. Use the calendar appropriate to the
+instrument and independently verify the relevant funds-availability rules.
 One faithfully-ported quirk from the source query worth knowing: a holiday
 landing on a Saturday shifts to the preceding Friday for NYSE (except New
 Year's Day, which is dropped entirely), but SIFMA/FEDWIRE apply **no**
 Friday shift at all for a Saturday holiday — e.g. July 4, 2026 (a Saturday)
 closes NYSE on Friday July 3rd but leaves SIFMA/FEDWIRE open that Friday.
+
+**Ad-hoc NYSE closures**: The maintained, source-linked
+[`NYSE_ADHOC_CLOSURES`](../../src/fred_pipeline/catalogs/nyse_adhoc_closures.py)
+catalog includes the announced national days of mourning on 2018-12-05 and
+2025-01-09. It is partial, not a complete historical exchange schedule. Review
+NYSE notices and add each supported full-day closure with its source; no closure
+is inferred for SIFMA or FEDWIRE from an NYSE notice. The optional
+`manual_closures` argument still applies supplied dates to every requested
+calendar. A Gold rebuild is required to materialize catalog changes; already
+stored calendar rows do not change automatically.
+
+**Trading and settlement differ**: The NYSE calendar describes trading days,
+and its `t2_settle_date` is an arithmetic two-NYSE-business-day field. Do not
+use it as an actual settlement schedule without separately verified clearing
+rules. Nasdaq stated that both [2018-12-05](https://www.nasdaqtrader.com/TraderNews.aspx?id=ETA2018-99)
+and [2025-01-09](https://www.nasdaqtrader.com/TraderNews.aspx?id=ECA2024-632)
+were settlement dates despite market closures. The latter notice describes
+T+1 settlement, not the table's generic T+2 calculation.
 
 The calendar-agnostic marker dates (IMM date, option expiry, triple
 witching) live once in `gold.dim_date` instead of being repeated per

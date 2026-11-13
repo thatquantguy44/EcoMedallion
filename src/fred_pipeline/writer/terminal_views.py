@@ -47,6 +47,7 @@ from itertools import pairwise
 from typing import Any
 
 from fred_pipeline.catalog_config import CatalogEntry, load_series_catalog
+from fred_pipeline.catalogs.nyse_adhoc_closures import NYSE_ADHOC_CLOSURES
 from fred_pipeline.curve_config import TenorDef, load_curve_defs
 from fred_pipeline.features import (
     _expanding_mean_std,
@@ -335,7 +336,7 @@ def build_dim_date(
 # Ported from a standalone Power Query (M) "reusable quant date calendar":
 # holiday-aware business-day logic for three US market calendars, each with
 # its own holiday set (SIFMA observes Good Friday; FEDWIRE doesn't; NYSE
-# observes Columbus Day/Veterans Day, SIFMA/FEDWIRE don't). Unlike the source
+# remains open on Columbus Day/Veterans Day, SIFMA/FEDWIRE don't). Unlike the source
 # query -- which picks ONE calendar via a parameter -- this keeps all three,
 # long/tidy by ``calendar_name`` (the convention every other multi-cut Gold
 # table here uses: ``curve_spread_rolling`` by window, `realized_volatility`
@@ -481,7 +482,12 @@ def _holidays_for_calendar(
 ) -> dict[date, str]:
     """Observed holiday dates -> holiday name for one market calendar."""
     attr = calendar_name.lower()
-    out: dict[date, str] = {d: "Manual Closure" for d in manual_closures}
+    out: dict[date, str] = {
+        closure.date: closure.name
+        for closure in NYSE_ADHOC_CLOSURES
+        if calendar_name == "NYSE"
+    }
+    out.update({d: "Manual Closure" for d in manual_closures})
     for y in years:
         for spec in _HOLIDAY_SPECS:
             if not getattr(spec, attr):
@@ -539,12 +545,14 @@ def compute_market_calendar(
 
     ``manual_closures`` are ad hoc, non-rule-based full closures (national
     mourning, disasters) applied to every calendar, matching the source
-    query's escape hatch (empty by default here, same as there).
+    query's escape hatch (empty by default here, same as there). Reviewed NYSE
+    closures are included separately and apply only to NYSE. That catalog is
+    partial and does not establish complete historical exchange coverage.
 
-    NYSE observes Columbus Day and Veterans Day; SIFMA and FEDWIRE don't.
-    SIFMA and NYSE observe Good Friday; FEDWIRE doesn't -- FEDWIRE staying
-    open on Good Friday is exactly why it's the better calendar for T+1/T+2
-    settlement math against a Fed-cleared instrument.
+    NYSE remains open on Columbus Day and Veterans Day; SIFMA and FEDWIRE close.
+    SIFMA and NYSE observe Good Friday; FEDWIRE doesn't. The t2_settle_date
+    field applies next_business_day twice to the chosen calendar. It is not an
+    independently verified clearing or settlement schedule.
     """
     lo, hi = _parse(start), _parse(end)
     if lo is None or hi is None or lo > hi:
