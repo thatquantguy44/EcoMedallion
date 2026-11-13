@@ -11,6 +11,7 @@ from __future__ import annotations
 from typing import Any, Sequence
 
 from fred_pipeline.ecb_eligible_assets import _utc_now
+from fred_pipeline.ecb_writer_lock import live_ecb_writer
 
 
 class ECBArchivePromotionError(RuntimeError):
@@ -165,6 +166,7 @@ class ECBHistoricalPromoter:
             "invalid_intervals": invalid_intervals,
         }
 
+    @live_ecb_writer
     def promote(
         self, run_id: str, *, acknowledge_quarantines: int | None
     ) -> dict[str, Any]:

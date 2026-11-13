@@ -1,8 +1,9 @@
 """Shared, Dagster-independent ECB forward-poll execution boundary.
 
-The caller owns the warehouse and any injected HTTP session. This initial
-boundary centralizes authority checks and polling; writer exclusion and the
-complete health/notification report are separate prerequisites for Dagster.
+The caller owns the warehouse and any injected HTTP session. This boundary
+centralizes authority checks, polling and the health/notification report. Live
+PostgreSQL mutations are protected by the pipeline's shared writer scope;
+orchestrated callers also acquire ownership before initialization/source access.
 """
 
 from __future__ import annotations

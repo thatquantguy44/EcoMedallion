@@ -215,7 +215,10 @@ class PostgresWarehouse:
         self._defer_commits = False
         try:
             if initialize:
-                self._bootstrap_schema()
+                from fred_pipeline.ecb_writer_lock import ecb_writer_scope
+
+                with ecb_writer_scope(self):
+                    self._bootstrap_schema()
         except BaseException:
             # A half-constructed warehouse is never returned to anyone to close.
             self._pg_conn.close()

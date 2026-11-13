@@ -33,6 +33,7 @@ from urllib.parse import urlparse
 from zoneinfo import ZoneInfo
 
 from fred_pipeline.sources.base import HTTPSource, SourceError
+from fred_pipeline.ecb_writer_lock import live_ecb_writer
 
 RSS_URL = "https://mid.ecb.europa.eu/rss/mid.xml"
 RELEASE_TITLE = "List of eligible marketable assets"
@@ -1177,6 +1178,7 @@ class ECBEligibleAssetsPipeline:
         self.client = client or ECBMIDClient()
         self.signature_verifier = signature_verifier
 
+    @live_ecb_writer
     def poll(
         self,
         *,
@@ -1202,6 +1204,7 @@ class ECBEligibleAssetsPipeline:
                 on_result(result)
         return results
 
+    @live_ecb_writer
     def ingest_release(
         self,
         url: str,
