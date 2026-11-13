@@ -233,7 +233,21 @@ class WarehouseFactory:
             f"persistence is actually what you want."
         )
 
-    def _build_backend(self, backend_name: str) -> Warehouse | None:
+    def build_exact(self, backend_name: str, *, initialize: bool = True) -> Warehouse:
+        """Build one required backend without fallback or exception rewriting.
+
+        Orchestrated jobs use this to fail closed. PostgreSQL callers can
+        defer initialization until they have acquired writer ownership.
+        """
+        warehouse = self._build_backend(backend_name, initialize=initialize)
+        if warehouse is None:
+            raise WarehouseInitError("A durable warehouse is required")
+        self.selected_backend_name = backend_name
+        return warehouse
+
+    def _build_backend(
+        self, backend_name: str, *, initialize: bool = True
+    ) -> Warehouse | None:
         """Build a single backend by name."""
         if not backend_name or backend_name == "none":
             return None
@@ -272,7 +286,9 @@ class WarehouseFactory:
         elif backend_name == "postgres":
             from fred_pipeline.io.postgres_store import PostgresWarehouse
 
-            return PostgresWarehouse(self.config, **backend_config)
+            return PostgresWarehouse(
+                self.config, initialize=initialize, **backend_config
+            )
 
         else:
             raise ValueError(f"Unknown warehouse backend: {backend_name}")
