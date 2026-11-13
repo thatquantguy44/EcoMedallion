@@ -355,7 +355,7 @@ settles against. Weekends/holidays are kept as rows, never dropped.
 | day_type | `Holiday` \| `Weekend` \| `Business Day` |
 | is_business_day | |
 | prior_business_day / next_business_day | Nearest business day, walking outward |
-| t2_settle_date | `next_business_day` applied twice |
+| t2_settle_date | `next_business_day` applied twice on this calendar; not a verified clearing or settlement date |
 | business_day_of_month | `NULL` on a non-business day |
 | business_days_in_month | Total business days in that calendar month |
 | is_first/last_business_day_of_month/quarter/year | Period-boundary flags |
@@ -379,6 +379,14 @@ is inferred for SIFMA or FEDWIRE from an NYSE notice. The optional
 `manual_closures` argument still applies supplied dates to every requested
 calendar. A Gold rebuild is required to materialize catalog changes; already
 stored calendar rows do not change automatically.
+
+**Trading and settlement differ**: The NYSE calendar describes trading days,
+and its `t2_settle_date` is an arithmetic two-NYSE-business-day field. Do not
+use it as an actual settlement schedule without separately verified clearing
+rules. Nasdaq stated that both [2018-12-05](https://www.nasdaqtrader.com/TraderNews.aspx?id=ETA2018-99)
+and [2025-01-09](https://www.nasdaqtrader.com/TraderNews.aspx?id=ECA2024-632)
+were settlement dates despite market closures. The latter notice describes
+T+1 settlement, not the table's generic T+2 calculation.
 
 The calendar-agnostic marker dates (IMM date, option expiry, triple
 witching) live once in `gold.dim_date` instead of being repeated per

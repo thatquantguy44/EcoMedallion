@@ -26,6 +26,7 @@ def test_announced_nyse_mourning_closures_and_adjacent_sessions(
     assert closure["next_business_day"] == following
     assert by_key[("NYSE", previous)]["is_business_day"] is True
     assert by_key[("NYSE", following)]["is_business_day"] is True
+    # This tests calendar arithmetic, not an exchange clearing schedule.
     assert by_key[("NYSE", previous)]["t2_settle_date"] == after_following
     # NYSE source notices do not establish closures on other calendars.
     assert by_key[("SIFMA", closed)]["is_business_day"] is True

@@ -550,9 +550,9 @@ def compute_market_calendar(
     partial and does not establish complete historical exchange coverage.
 
     NYSE remains open on Columbus Day and Veterans Day; SIFMA and FEDWIRE close.
-    SIFMA and NYSE observe Good Friday; FEDWIRE doesn't -- FEDWIRE staying
-    open on Good Friday is exactly why it's the better calendar for T+1/T+2
-    settlement math against a Fed-cleared instrument.
+    SIFMA and NYSE observe Good Friday; FEDWIRE doesn't. The t2_settle_date
+    field applies next_business_day twice to the chosen calendar. It is not an
+    independently verified clearing or settlement schedule.
     """
     lo, hi = _parse(start), _parse(end)
     if lo is None or hi is None or lo > hi:
