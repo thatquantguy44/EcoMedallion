@@ -360,16 +360,25 @@ settles against. Weekends/holidays are kept as rows, never dropped.
 | business_days_in_month | Total business days in that calendar month |
 | is_first/last_business_day_of_month/quarter/year | Period-boundary flags |
 
-**Calendar differences**: NYSE observes Columbus Day and Veterans Day;
-SIFMA/FEDWIRE don't. SIFMA and NYSE observe Good Friday; FEDWIRE doesn't
-(this is exactly why FEDWIRE is the better calendar for T+1/T+2 settlement
-math against a Fed-cleared instrument — it's never closed on a day NYSE/SIFMA
-treat as a holiday for reasons unrelated to Fedwire funds availability).
+**Calendar differences**: The NYSE calendar remains open on Columbus Day and
+Veterans Day; the SIFMA/FEDWIRE calendar rules mark them as holidays. SIFMA and
+NYSE observe Good Friday; FEDWIRE does not. Use the calendar appropriate to the
+instrument and independently verify the relevant funds-availability rules.
 One faithfully-ported quirk from the source query worth knowing: a holiday
 landing on a Saturday shifts to the preceding Friday for NYSE (except New
 Year's Day, which is dropped entirely), but SIFMA/FEDWIRE apply **no**
 Friday shift at all for a Saturday holiday — e.g. July 4, 2026 (a Saturday)
 closes NYSE on Friday July 3rd but leaves SIFMA/FEDWIRE open that Friday.
+
+**Ad-hoc NYSE closures**: The maintained, source-linked
+[`NYSE_ADHOC_CLOSURES`](../../src/fred_pipeline/catalogs/nyse_adhoc_closures.py)
+catalog includes the announced national days of mourning on 2018-12-05 and
+2025-01-09. It is partial, not a complete historical exchange schedule. Review
+NYSE notices and add each supported full-day closure with its source; no closure
+is inferred for SIFMA or FEDWIRE from an NYSE notice. The optional
+`manual_closures` argument still applies supplied dates to every requested
+calendar. A Gold rebuild is required to materialize catalog changes; already
+stored calendar rows do not change automatically.
 
 The calendar-agnostic marker dates (IMM date, option expiry, triple
 witching) live once in `gold.dim_date` instead of being repeated per
