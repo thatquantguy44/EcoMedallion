@@ -405,10 +405,10 @@ USING DELTA;
 -- Market calendars (NYSE/SIFMA/FEDWIRE): holiday-aware business-day logic,
 -- long/tidy by calendar_name (one row per calendar_name x calendar_date, same
 -- date bounds as dim_date). Weekends/holidays are kept as rows, never
--- dropped, and described by day_type/is_business_day. NYSE observes
--- Columbus Day and Veterans Day; SIFMA/FEDWIRE don't. SIFMA and NYSE observe
--- Good Friday; FEDWIRE doesn't (why FEDWIRE is the better calendar for
--- T+1/T+2 settlement math against a Fed-cleared instrument). Computed by
+-- dropped, and described by day_type/is_business_day. NYSE remains open on
+-- Columbus Day and Veterans Day; SIFMA/FEDWIRE close. SIFMA and NYSE observe
+-- Good Friday; FEDWIRE doesn't. Calendar arithmetic is not a verified clearing
+-- or settlement schedule. Computed by
 -- fred_pipeline.terminal_views.compute_market_calendar, ported from a
 -- standalone Power Query "reusable quant date calendar".
 CREATE TABLE IF NOT EXISTS gold.market_calendar (
@@ -421,7 +421,7 @@ CREATE TABLE IF NOT EXISTS gold.market_calendar (
     is_business_day                  BOOLEAN,
     prior_business_day               DATE,
     next_business_day                DATE,
-    t2_settle_date                   DATE,       -- next_business_day applied twice
+    t2_settle_date                   DATE,       -- legacy: next_business_day twice; not verified settlement
     business_day_of_month            INT,        -- NULL on a non-business day
     business_days_in_month           INT,
     is_first_business_day_of_month   BOOLEAN,

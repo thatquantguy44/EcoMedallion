@@ -386,7 +386,9 @@ use it as an actual settlement schedule without separately verified clearing
 rules. Nasdaq stated that both [2018-12-05](https://www.nasdaqtrader.com/TraderNews.aspx?id=ETA2018-99)
 and [2025-01-09](https://www.nasdaqtrader.com/TraderNews.aspx?id=ECA2024-632)
 were settlement dates despite market closures. The latter notice describes
-T+1 settlement, not the table's generic T+2 calculation.
+T+1 settlement, not the table's generic T+2 calculation. The separate
+[settlement-evidence contract](settlement_evidence_contract.md) reports only
+explicitly sourced historical dates and returns unavailable elsewhere.
 
 The calendar-agnostic marker dates (IMM date, option expiry, triple
 witching) live once in `gold.dim_date` instead of being repeated per

@@ -213,10 +213,11 @@ POWERBI_CATALOG: tuple[dict[str, Any], ...] = (
         "date table per market (filter to calendar_name) + holiday shading",
         "Holiday-aware business-day calendar for NYSE, SIFMA, and FEDWIRE (long/tidy by "
         "calendar_name, joins to dim_date on calendar_date): is_holiday/holiday_name, "
-        "is_business_day, prior/next business day, T+2 settle date, business-day-of-month "
-        "counters, and first/last-business-day-of-period flags. NYSE observes Columbus "
-        "Day/Veterans Day; SIFMA/FEDWIRE don't. SIFMA/NYSE observe Good Friday; FEDWIRE "
-        "doesn't.",
+        "is_business_day, prior/next business day, business-day-of-month counters, "
+        "and first/last-business-day-of-period flags. The legacy t2_settle_date is "
+        "calendar arithmetic, not a verified settlement date. NYSE remains open on "
+        "Columbus Day/Veterans Day; SIFMA/FEDWIRE do not. SIFMA/NYSE observe Good "
+        "Friday; FEDWIRE does not.",
     ),
     _entry(
         "macro_indicator_dashboard",
