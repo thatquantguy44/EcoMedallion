@@ -1,4 +1,4 @@
-"""PostgreSQL session lock for the ECB eligible-assets live dataset.
+"""PostgreSQL session lock and entry-point scopes for live ECB eligible assets.
 
 This primitive does not by itself make an entry point safe: callers must use
 the same connection for writes and acquire it before setup or source access.
@@ -6,13 +6,55 @@ the same connection for writes and acquire it before setup or source access.
 
 from __future__ import annotations
 
-from threading import Lock
+from threading import Lock, local
+from contextlib import contextmanager
+from functools import wraps
 from typing import Any
 
 # ASCII "ECBASSET", represented as a signed-64-bit-compatible integer.
 ECB_WRITER_LOCK_KEY = 0x4543424153534554
 _HELD_ATTR = "_fred_ecb_writer_lock_held"
 _SESSION_GUARD = Lock()
+_SCOPES = local()
+
+
+class ECBWriterBusy(RuntimeError):
+    """Another session owns the live eligible-assets dataset."""
+
+
+@contextmanager
+def ecb_writer_scope(warehouse):
+    """Guard a PostgreSQL writing session; local development keeps SQLite semantics."""
+    connection = getattr(warehouse, "_pg_conn", None)
+    if connection is None:
+        yield
+        return
+    owned = getattr(_SCOPES, "connections", ())
+    if any(candidate is connection for candidate in owned):
+        yield
+        return
+    with ECBWriterLock(connection) as lock:
+        if not lock.acquired:
+            raise ECBWriterBusy("ECB eligible-assets writer is busy")
+        _SCOPES.connections = (*owned, connection)
+        try:
+            yield
+        finally:
+            _SCOPES.connections = owned
+
+
+def live_ecb_writer(method):
+    """Protect public poll/ingest/promotion boundaries before any source access."""
+
+    @wraps(method)
+    def guarded(self, *args, **kwargs):
+        warehouse = getattr(self, "warehouse", None)
+        if warehouse is None:
+            warehouse = self.repository.warehouse
+        with ecb_writer_scope(warehouse):
+            return method(self, *args, **kwargs)
+
+    return guarded
 
 
 class ECBWriterLock:

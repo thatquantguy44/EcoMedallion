@@ -1,0 +1,4 @@
+# Signed, security-level ECB MID eligible assets, separate from macro series.
+environment: dev
+backend: postgres
+allow_gap: false

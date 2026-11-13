@@ -1,6 +1,9 @@
 # Module: dagster-integration
 
-Status: Draft for review. Parent: [Spec 016](README.md).
+Status: Manual job/configuration slice implemented; production acceptance remains
+pending. Parent: [Spec 016](README.md). See the
+[implementation record](../../tasks/dagster_jobs.md) and
+[runbook](../../docs/deployment/dagster_runbook.md).
 Depends on: [outbound-network](SPEC-outbound-network.md),
 [alert-email](SPEC-alert-email.md).
 
@@ -62,6 +65,29 @@ backfills remain deferred. No new warehouse schema is required by this spec.
 | `warehouse_health_job` | Read-only all-source staleness, missing-data, persisted DQ and configured critical Gold relation checks; no source fetching or Gold rebuild |
 | `gold_rebuild_job` | Rebuild Gold from persisted inputs, without source extraction; fail truthfully on exceptions or table-level failure results |
 | `metadata_reconciliation_job` | Compare FRED manifest metadata with FRED's catalog and reuse all-source stored-data staleness checks; report drift without automatically changing manifests |
+| `fomc_refresh_job` | Independently run the existing additive FOMC refresh and calendar health assessment; no warehouse, commits or PRs |
+
+### Per-job launch configuration
+
+The requested manual job layer uses independent Dagster `Config` schemas,
+flat job-level config mappings and explicit `JobSpec` registration. Each job
+has a launch YAML in `resources/dagster/jobs`; main has configured-dev,
+PostgreSQL and local variants. Library execution remains outside the optional
+Dagster package and calls existing pipeline/poll/build/reconciliation services.
+Definitions imports perform no configuration resolution or external work.
+
+Launch fields contain environment, configured backend selection, filters and
+bounded tuning. Protected configuration paths stay in the worker environment:
+existing `FRED_CONFIG_FILE`, `FRED_WAREHOUSE_CONFIG`, `FRED_FOMC_CONFIG_FILE`
+and `FRED_ALERTING_FILE`, plus `FRED_DAGSTER_MANIFESTS` (default `manifests`).
+Durable runs reject fallback; production backend overrides must agree with
+server authority. Main and Gold/FOMC/metadata writers share a conservative
+global pool; ECB has its own pool and cross-entry-point PostgreSQL session lock.
+The standalone FOMC job is an explicit addition requested on 2026-11-13.
+
+This manual slice does not satisfy the full production acceptance table below.
+Native UI asset checks, complete maintenance/crash-alert ownership, stale-queue
+recovery, deployment/cutover and independent monitoring remain separate gates.
 
 The main job accepts existing environment/manifest, series/source filtering,
 full/incremental and Gold/calendar options through validated configuration.
@@ -71,8 +97,7 @@ operator explicitly uses `--no-ecb-assets` during scheduler cutover.
 
 ### Full-run FOMC refresh
 
-The CLI default and opt-out described here are implemented. The Dagster job
-and its corresponding default are still pending.
+The CLI and Dagster defaults and opt-outs described here are implemented.
 
 Set `refresh_fomc_calendar: true` by default in the full Dagster job and the
 CLI `run` entry point, including routine incremental runs. This behavior is
@@ -244,7 +269,7 @@ execution reports outside the Dagster-only package. Tests use pytest plus
 Dagster's in-process execution with injected sources, warehouse and transports.
 Follow current dataclasses, lazy optional imports and explicit resource ownership.
 
-Proposed commands after the extra and definitions exist (not implemented):
+Manual job commands:
 
 ```bash
 python -m pip install -e '.[postgres,dagster,dev]' \

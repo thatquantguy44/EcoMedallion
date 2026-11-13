@@ -18,6 +18,8 @@ coverage.xml
 
 # Databricks
 .databricks/
+.dagster/
+.tmp_dagster_home_*/
 *.dbc
 
 # Local SQLite backend output

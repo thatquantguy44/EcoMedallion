@@ -1,0 +1,4 @@
+# Stored inputs only; offline FOMC health check, no calendar/source fetching.
+environment: dev
+backend: postgres
+full: false

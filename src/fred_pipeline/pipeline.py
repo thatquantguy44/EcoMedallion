@@ -580,6 +580,7 @@ class FredPipeline:
         include_calendar: bool = False,
         refresh_fomc: bool = False,
         include_ecb: bool = False,
+        warehouse_available: bool | None = None,
     ):
         if self._network_active:
             yield
@@ -600,7 +601,13 @@ class FredPipeline:
 
         selected = {(getattr(s, "source", "fred") or "fred").lower() for s in specs}
         calendar_may_fetch = (
-            include_calendar and bool(specs) and self.warehouse is not None
+            include_calendar
+            and bool(specs)
+            and (
+                self.warehouse is not None
+                if warehouse_available is None
+                else warehouse_available
+            )
         )
         candidates = selected - self._provided_sources
         if (

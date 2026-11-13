@@ -1,5 +1,12 @@
 # Implementation Plan: Spec 013 Dagster Orchestration
 
+## Configurable manual job slice (2026-11-13)
+
+See [the manual job implementation record](dagster_jobs.md) for the requested
+seven-job catalog, per-job configuration and standalone FOMC refresh. Definitions,
+stopped schedules and live PostgreSQL entry-point exclusion are now implemented.
+The older phases below retain their remaining production acceptance gates.
+
 ## Active additional work: Spec 017 performance reporting
 
 The approved [performance design](../specs/spec017/README.md) is implemented on
@@ -18,8 +25,8 @@ isolated PostgreSQL paths are exercised; Delta is verified at its adapter
 boundary. No live provider refresh or email was used. See the
 [performance handoff](../docs/handoffs/pipeline_performance_reporting.md).
 
-Status: T1 optional runtime verification complete; execution, writer locking,
-and Dagster integration remain pending.
+Status: T1 optional runtime and the manual job/configuration slice are complete;
+production acceptance remains pending as detailed in the record above.
 
 The current combined initiative follows [Spec 016](../specs/spec016/README.md),
 which supersedes the earlier ECB-only branch and job scope.

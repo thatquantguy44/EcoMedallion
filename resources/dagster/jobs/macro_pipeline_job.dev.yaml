@@ -1,0 +1,12 @@
+# Equivalent workload to `python -m fred_pipeline run --env dev --no-ecb-assets`.
+# Backend and credentials resolve from protected server configuration.
+environment: dev
+backend: configured
+full: false
+skip_not_due: true
+build_gold: true
+refresh_fomc_calendar: true
+dry_run: false
+series: []
+sources: []
+exclude_sources: []
