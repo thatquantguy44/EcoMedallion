@@ -1,13 +1,30 @@
 # Dagster Orchestration Handoff
 
-Status: The optional Dagster runtime and clean-install verification are complete.
-Both ECB poll entry points now use an initial shared execution boundary. A
-PostgreSQL session-lock primitive has been verified in isolation, but is not
-yet connected to the warehouse or writer entry points. Complete execution
-lifecycle, writer exclusion, definitions, jobs and schedules remain pending.
+Status: Optional runtime plus seven configurable manual jobs are implemented.
+The PostgreSQL session lock now guards initialization, polling, direct release
+ingestion and live archive promotion. Imports, flat launch configuration,
+read-only monitoring and failure/event behavior have isolated tests. Three ECB
+schedules are defined and stopped. Production deployment and the remaining
+Spec 013/016 operational gates are still pending.
 
-Last verified: 2026-11-05 (runtime installation and dependency isolation; no
-production deployment, source polling or email).
+Last verified: 2026-11-13 (isolated jobs, SQLite, disposable PostgreSQL and recorded
+source fixtures; no production activation, source polling or live email).
+
+## Manual job configuration
+
+Start with the [Dagster runbook](../deployment/dagster_runbook.md) and
+[`resources/dagster/jobs`](../../resources/dagster/jobs). Main pipeline, ECB poll,
+ECB health, warehouse health, Gold rebuild, FRED metadata reconciliation and
+standalone FOMC refresh each have a validated schema and launch file. Main
+refreshes FOMC by default and delegates ECB ownership to the separate job.
+Credentials and paths remain in server configuration; durable jobs reject
+fallback. See the [implementation record](../../tasks/dagster_jobs.md).
+
+Remaining release work includes native asset-check definitions, complete
+maintenance email/crash-sensor ownership and deduplication, stale queued-run and
+missed-tick recovery, production services, independent daemon monitoring,
+metadata backup/restore and actual cutover/rollback evidence. The historical
+phase checklist below is not a claim that those gates are complete.
 
 The expanded confirmed job scope and current initiative are in
 [Spec 016](../../specs/spec016/README.md). It supersedes the earlier ECB-only
@@ -15,7 +32,7 @@ branch and workload scope; retain the safety contracts in
 [Spec 013](../../specs/spec013/README.md). See the
 [implementation plan](../../tasks/plan.md) and [checklist](../../tasks/todo.md).
 
-## Next task: T2 shared ECB execution
+## Shared ECB execution
 
 The dedicated poll command and main-run ECB hook now call the same library
 function, which checks backend authority and borrows the caller's warehouse
@@ -27,23 +44,25 @@ snapshot and health verdict and records the result of an injected notification
 attempt. Both CLI poll paths now supply their existing alert sender to that
 service; pre-service startup failures retain the CLI alert path. Health uses
 the configured ECB alert thresholds. The CLI still owns network and warehouse
-cleanup. Complete the service's owned-warehouse lifecycle, then connect and
-verify T3 writer exclusion before introducing any Dagster writer.
+cleanup. The Dagster runtime owns its warehouse, selected network sessions and
+writer scope; both entry points reuse `execute_ecb_poll`. Complete the remaining
+release gates above before activating production schedules.
 
 ## Writer-lock implementation status
 
 `ECBWriterLock` uses the writer's PostgreSQL session and a fixed dataset key.
 Independent sessions in a disposable PostgreSQL 16 container verified
 contention, commit survival, exception and aborted-transaction cleanup,
-cleanup failure, and process-death release. It does not yet protect any
-production path. PostgreSQL warehouse construction normally executes schema
+cleanup failure, and process-death release. It now guards the library entry
+points. PostgreSQL warehouse construction normally executes schema
 DDL and a data backfill before the caller can take a lock; simply wrapping the
 poll after construction is therefore insufficient. The new `initialize=False`
-option opens a connection without those writes, verified using a read-only
-transaction. It does not validate an existing schema or make later writes
-read-only. Resolve schema readiness and cover standalone polling, explicit
-ingestion, the main-run hook and live archive promotion before enabling the
-Dagster writer. See the [PostgreSQL advisory-lock documentation](https://www.postgresql.org/docs/16/explicit-locking.html#ADVISORY-LOCKS)
+option opens a connection without those writes. The Dagster ECB writer acquires
+the session lock and requires existing schema before source access. CLI schema
+initialization uses the same lock, and public poll, ingest and promotion
+boundaries hold it on the writing session across commits. Read-only jobs add
+database-enforced read-only transactions separately. See the
+[PostgreSQL advisory-lock documentation](https://www.postgresql.org/docs/16/explicit-locking.html#ADVISORY-LOCKS)
 for session lock semantics.
 
 To rerun the isolated integration tests, set `TEST_ECB_POSTGRES_DSN` to a
@@ -63,7 +82,7 @@ Dagster PostgreSQL integration 0.29.26. Clean Python 3.12 installs were verified
 in isolated Linux and local environments, including a locked reinstall,
 dependency checks, CLI smoke checks and a core-only install without Dagster.
 The [development runbook](../deployment/dagster_runbook.md) records the exact
-scope and commands. Definitions import safety remains a later T4 requirement.
+scope and commands. Definitions import safety now has a separate no-I/O test.
 
 ## Architecture reminders
 

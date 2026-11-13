@@ -230,10 +230,20 @@ root before using `python`, `pip`, or `dagster` without their `.venv/bin/` paths
 source .venv/bin/activate
 ```
 
-The Dagster jobs and schedules are not implemented yet. Installing these
-packages does not start ECB polling or activate production schedules. See the
-[Dagster handoff](docs/handoffs/dagster_orchestration.md) for the remaining
-shared-execution and writer-lock work.
+Seven independently configurable Dagster jobs are available for the main
+pipeline, ECB security-level eligible assets, ECB health, warehouse health,
+Gold rebuild, FRED metadata reconciliation and FOMC calendar refresh.
+Launch files live in [`resources/dagster/jobs`](resources/dagster/jobs).
+The main job refreshes FOMC by default and leaves ECB to its dedicated job.
+
+```bash
+.venv/bin/dagster dev -m fred_pipeline.orchestration.definitions -a defs --host 127.0.0.1
+```
+
+All schedules ship stopped. See the [Dagster runbook](docs/deployment/dagster_runbook.md)
+for instance configuration, PostgreSQL/local launch commands and concurrency
+controls, and the [handoff](docs/handoffs/dagster_orchestration.md) for remaining
+production gates.
 
 ### Run fully locally and save to a database file
 

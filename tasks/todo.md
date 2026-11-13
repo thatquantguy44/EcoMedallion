@@ -1,5 +1,10 @@
 # Spec 013 Task Checklist
 
+The requested configurable manual job catalog is tracked in
+[dagster_jobs.md](dagster_jobs.md). That implemented slice includes stopped
+schedules and PostgreSQL writer boundaries; the historical acceptance tasks
+below remain open wherever full release/production proof is still required.
+
 ## Spec 017 performance reporting
 
 - [x] P1: Shared collector/decorator; verify fake-clock, nesting, concurrent,
