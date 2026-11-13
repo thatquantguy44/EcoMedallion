@@ -45,6 +45,38 @@ jobs:
       - name: Run Spark/Delta integration tests
         run: pytest -q tests/test_spark_integration.py
 
+  dagster-integration:
+    name: Dagster jobs (Python 3.12 + PostgreSQL)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: dagster_test
+          POSTGRES_PASSWORD: dagster_test
+          POSTGRES_DB: dagster_test
+        ports:
+          - 55433:5432
+        options: >-
+          --health-cmd "pg_isready -U dagster_test -d dagster_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      TEST_ECB_POSTGRES_DSN: postgresql://dagster_test:dagster_test@localhost:55433/dagster_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -e '.[postgres,dagster,dev]' -c requirements-dagster.lock.txt
+      - name: Verify jobs, launch configs, read-only health and writer contention
+        run: >-
+          pytest -q tests/test_dagster_jobs.py tests/test_job_runtime.py
+          tests/test_dagster_postgres.py tests/test_ecb_writer_lock.py
+          tests/test_ecb_writer_boundaries.py tests/test_ecb_health.py
+
   postgres-integration:
     name: PostgreSQL integration
     runs-on: ubuntu-latest

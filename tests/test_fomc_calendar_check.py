@@ -32,7 +32,8 @@ from fred_pipeline.pipeline import FredPipeline
 from fred_pipeline.manifest import SeriesSpec, ValidationProfile
 
 REPO = Path(__file__).resolve().parents[1]
-REAL_CONFIG = REPO / "config" / "fomc.yml"
+REAL_CONFIG = REPO / "tests" / "fixtures" / "fomc_config.yml"
+# Pin the calendar paired with FED_PAGE; operator calendar edits are independent.
 FED_PAGE = (REPO / "tests" / "fixtures" / "fomccalendars.html").read_text(
     encoding="utf-8"
 )
