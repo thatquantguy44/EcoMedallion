@@ -28,7 +28,7 @@
 # inside this repo.
 calendar_provenance:
   source_url: https://www.federalreserve.gov/monetarypolicy/fomccalendars.htm
-  last_verified: 2026-09-15
+  last_verified: 2026-11-13
   verified_by: scraper
   # The Fed's own horizon, not merely our last row. Read off the advance-notice
   # sentence below the last year panel, which is the only place it appears.
@@ -46,6 +46,7 @@ meeting_dates:
   - "2027-07-28"
   - "2027-09-15"
   - "2027-10-27"
+  - "2027-11-17"
   - "2027-12-08"
   # 2028-01-25/26 (Tue/Wed). CONFIRMED 2026-09-15 against the Fed calendar
   # page itself, which announces it only in prose below the last year panel:
