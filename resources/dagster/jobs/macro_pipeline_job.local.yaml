@@ -1,0 +1,7 @@
+# Uses the local backend path in FRED_WAREHOUSE_CONFIG (no launch-time file paths).
+environment: dev
+backend: local
+full: false
+build_gold: true
+refresh_fomc_calendar: true
+dry_run: false

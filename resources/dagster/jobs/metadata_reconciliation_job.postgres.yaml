@@ -1,0 +1,6 @@
+# FRED metadata comparison plus stored staleness for every selected source.
+environment: dev
+backend: postgres
+series: []
+persist: false
+fail_on_warning: false

@@ -1,0 +1,4 @@
+# Add newly published meetings to FRED_FOMC_CONFIG_FILE; no commits or PRs.
+environment: dev
+refresh: true
+timeout_seconds: 15

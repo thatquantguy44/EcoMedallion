@@ -1,0 +1,9 @@
+environment: dev
+backend: postgres
+series: []
+max_missing_series: 0
+max_stale_series: 0
+max_capture_age_days: 7
+required_gold_relations:
+  - gold_fred_latest_observation
+min_gold_rows: 1

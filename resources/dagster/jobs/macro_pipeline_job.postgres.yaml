@@ -1,0 +1,7 @@
+environment: dev
+backend: postgres
+full: false
+build_gold: true
+refresh_fomc_calendar: true
+skip_not_due: true
+dry_run: false

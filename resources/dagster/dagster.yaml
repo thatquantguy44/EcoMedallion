@@ -1,0 +1,10 @@
+# Development instance; copy to $DAGSTER_HOME/dagster.yaml before starting.
+# Production metadata must use a separate protected PostgreSQL database/role.
+telemetry:
+  enabled: false
+concurrency:
+  runs:
+    max_concurrent_runs: 4
+  pools:
+    default_limit: 1
+    granularity: run
