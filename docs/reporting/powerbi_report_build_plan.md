@@ -356,13 +356,18 @@ SELECT observation_date, beta0, beta1, beta2, lambda, lambda_estimated,
 FROM   ${p_Catalog}.gold.yield_curve_ns_factors
 WHERE  fit_valid = true;
 
--- qMarketCalendar : FEDWIRE only (settlement math against a Fed-cleared rate)
+-- qMarketCalendar : FEDWIRE business-day dimension, not a settlement schedule
 SELECT calendar_date, is_business_day, day_type, holiday_name,
-       prior_business_day, next_business_day, t2_settle_date,
+       prior_business_day, next_business_day,
        is_last_business_day_of_month, is_last_business_day_of_quarter
 FROM   ${p_Catalog}.gold.market_calendar
 WHERE  calendar_name = 'FEDWIRE';
 ```
+
+The legacy `t2_settle_date` field is intentionally excluded: it is calendar
+arithmetic and is not a verified settlement date. See the
+[settlement-evidence contract](../dictionary/settlement_evidence_contract.md)
+for its narrow source-backed historical scope and unavailable states.
 
 **Data model**
 
