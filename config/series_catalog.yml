@@ -54,6 +54,8 @@ series:
   - {series_id: PPIACO,   econ_category: INFLATION, polarity: -1, default_transform: pc1,   notes: PPI all commodities}
   - {series_id: T5YIE,    econ_category: INFLATION, polarity: -1, default_transform: level, notes: 5y breakeven}
   - {series_id: T10YIE,   econ_category: INFLATION, polarity: -1, default_transform: level, notes: 10y breakeven}
+  - {series_id: T30YIEM, econ_category: INFLATION, polarity: -1, default_transform: level, notes: 30y breakeven (monthly)}
+  - {series_id: MICH,     econ_category: INFLATION, polarity: -1, default_transform: level, notes: Michigan survey inflation expectation}
   - {series_id: EXPINF1YR, econ_category: INFLATION, polarity: -1, default_transform: level, notes: Cleveland Fed 1y expected inflation}
   - {series_id: T5YIFR,   econ_category: INFLATION, polarity: -1, default_transform: level, notes: 5y5y forward breakeven}
   - {series_id: MEDCPIM094SFRBCLE, econ_category: INFLATION, polarity: -1, default_transform: pc1, notes: Cleveland Fed median CPI}
@@ -68,6 +70,7 @@ series:
   - {series_id: GDPC1,    econ_category: GROWTH, polarity: 1, default_transform: pc1, surprise_window: 8, notes: Real GDP}
   - {series_id: GDI,      econ_category: GROWTH, polarity: 1, default_transform: pc1, surprise_window: 8, notes: Gross domestic income}
   - {series_id: GPDIC1,   econ_category: GROWTH, polarity: 1, default_transform: pc1, surprise_window: 8, notes: Real private investment}
+  - {series_id: SAHMREALTIME, econ_category: GROWTH, polarity: -1, default_transform: level, notes: Real-time Sahm recession indicator}
   - {series_id: DGORDER,  econ_category: GROWTH, polarity: 1, default_transform: pc1, notes: Durable goods orders}
   - {series_id: NEWORDER, econ_category: GROWTH, polarity: 1, default_transform: pc1, notes: Core capital goods orders}
   - {series_id: A939RX0Q048SBEA, econ_category: GROWTH, polarity: 1, default_transform: pc1, surprise_window: 8, notes: Real GDP per capita}
@@ -140,6 +143,7 @@ series:
   - {series_id: BUSLOANS, econ_category: CREDIT, polarity: 1,  default_transform: pc1,   notes: Bank C&I loans}
   - {series_id: DRBLACBN, econ_category: CREDIT, polarity: -1, default_transform: level, notes: "Business loan delinquency rate (quarterly, NSA)"}
   - {series_id: DRCCLACBS, econ_category: CREDIT, polarity: -1, default_transform: level, notes: "Credit card loan delinquency rate (quarterly, SA)"}
+  - {series_id: DRSFRMACBS, econ_category: CREDIT, polarity: -1, default_transform: level, notes: "Mortgage delinquency rate (quarterly, SA)"}
   - {series_id: KCFSI,    econ_category: CREDIT, polarity: -1, default_transform: level, notes: Kansas City financial stress index}
   - {series_id: BAMLC0A0CM,   econ_category: CREDIT, polarity: -1, default_transform: level, notes: IG corporate OAS}
   - {series_id: BAMLH0A0HYM2, econ_category: CREDIT, polarity: -1, default_transform: level, notes: HY corporate OAS}

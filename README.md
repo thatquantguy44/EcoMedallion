@@ -532,11 +532,11 @@ in the same tables, tagged by `source` in the natural key. **Sixteen source
 clients are wired**, thirteen of which have active series today.
 
 Counts below are the currently-active series per source
-(`active: true` in `manifests/*.yml`) — **2,900 active of 3,012 declared**.
+(`active: true` in `manifests/*.yml`) — **2,904 active of 3,016 declared**.
 
 | Source | `source:` | API key | Active series | Manifests |
 |---|---|---|---|---|
-| FRED | `fred` | required | **2,576** | the domain manifests |
+| FRED | `fred` | required | **2,580** | the domain manifests |
 | Tiingo | `tiingo` | **required** | 85 | `equity_tiingo.yml` |
 | BLS | `bls` | optional (keyless) | 79 | the `bls_*.yml` manifests |
 | World Bank | `worldbank` | none | 37 | `worldbank_global.yml` |
@@ -569,7 +569,7 @@ for keys, egress, and activation decisions see the register in
 
 ## The series universe
 
-The FRED universe spans **2,576 active series** across the domain manifests
+The FRED universe spans **2,580 active series** across the domain manifests
 (rates, inflation, labor, growth, money/banking, prices, production/housing,
 international, national accounts, regional/state). It grew from the handoff's
 27-series seed via **API-driven discovery** (below). It is a deliberate,
@@ -578,7 +578,7 @@ reviewed set — not all of FRED (~800k series). Grow it three ways:
 > **Ingestion and presentation are separate layers.** A manifest entry decides
 > what gets *pulled*; [`config/series_catalog.yml`](config/series_catalog.yml)
 > decides what gets *presentation semantics* (`econ_category`, `polarity`,
-> `default_transform`, `geo`). The catalog currently covers **295** of the
+> `default_transform`, `geo`). The catalog currently covers **299** of the
 > active series — those are the ones `gold.dim_series`,
 > `gold.macro_indicator_dashboard`, and `gold.macro_category_summary` are built
 > from. Everything else is still fully queryable via
