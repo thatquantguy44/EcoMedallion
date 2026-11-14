@@ -5,7 +5,7 @@ description: >
   (docs/market_terminal_series_gap.md §1 "Market levels / commodities").
   Non-vintage: these are quoted market levels, not revised statistics.
 
-  Verified against live FRED (2026-07-17): all ids below resolve.
+  Verified against live FRED (2026-07-17); VXVCLS verified 2026-11-14.
   ("GOLDPMGBD228NLBM", the LBMA Gold PM Fix, does not exist under that id —
   omitted rather than guessing a replacement.)
 version: 1
