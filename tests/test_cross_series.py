@@ -65,6 +65,57 @@ def test_loader_missing_file_is_empty():
     assert load_cross_series_defs("does-not-exist.yml") == []
 
 
+def test_marketindicators_configured_spreads_use_active_series_ids():
+    defs = {d.name: d for d in load_cross_series_defs()}
+    assert defs["vix_term_inversion"].legs == (("VIXCLS", 1.0), ("VXVCLS", 1.0))
+    assert defs["real_yield_10y_5y"].legs == (("DFII10", 1.0), ("DFII5", 1.0))
+    rows = [_row("VIXCLS", "2024-01-02", 18.0),
+            _row("VXVCLS", "2024-01-02", 16.0),
+            _row("DFII10", "2024-01-02", 2.1),
+            _row("DFII5", "2024-01-02", 1.8)]
+    out = compute_cross_series_features(rows, list(defs.values()))
+    values = {r["feature_name"]: r["value"] for r in out if r["observation_date"] == "2024-01-02"}
+    assert values["vix_term_inversion"] == pytest.approx(2.0)
+    assert values["real_yield_10y_5y"] == pytest.approx(0.3)
+
+
+def test_monthly_inflation_spreads_use_matching_horizons_and_cadence():
+    defs = {d.name: d for d in load_cross_series_defs()}
+    survey = defs["mich_cleveland_1y_inflation_gap"]
+    curve = defs["breakeven_30y_10y_slope"]
+    assert survey.op == curve.op == "spread"
+    assert survey.frequency == curve.frequency == "m"
+    assert survey.legs == (("MICH", 1.0), ("EXPINF1YR", 1.0))
+    assert curve.legs == (("T30YIEM", 1.0), ("T10YIEM", 1.0))
+
+    rows = [
+        _row("MICH", "2024-05-01", 3.3),
+        _row("EXPINF1YR", "2024-05-01", 2.7),
+        _row("T30YIEM", "2024-05-01", 2.5),
+        _row("T10YIEM", "2024-05-01", 2.2),
+        _row("T10YIE", "2024-05-31", 2.4),
+    ]
+    out = compute_cross_series_features(rows, [survey, curve])
+    values = {row["feature_name"]: row["value"] for row in out}
+    assert values == {
+        "mich_cleveland_1y_inflation_gap": pytest.approx(0.6),
+        "breakeven_30y_10y_slope": pytest.approx(0.3),
+    }
+
+
+def test_monthly_inflation_spread_waits_for_both_release_vintages():
+    survey = {d.name: d for d in load_cross_series_defs()}[
+        "mich_cleveland_1y_inflation_gap"
+    ]
+    silver = [
+        _srow("MICH", "2024-05-01", 3.3, "2024-05-24"),
+        _srow("EXPINF1YR", "2024-05-01", 2.7, "2024-06-10"),
+    ]
+    assert compute_cross_series_features_pit(silver, [survey], as_of="2024-06-09") == []
+    out = compute_cross_series_features_pit(silver, [survey], as_of="2024-06-10")
+    assert out[0]["value"] == pytest.approx(0.6)
+
+
 @pytest.mark.parametrize("legs, op", [(["A", "B", "C"], "spread"),
                                       (["A", "B", "C"], "ratio")])
 def test_spread_ratio_require_two_legs(legs, op):
@@ -116,6 +167,47 @@ def test_composite_weighted_sum():
                                                     [("A", 0.5), ("B", 0.25)])])
     assert out == [{"feature_name": "c", "op": "composite",
                     "observation_date": "2024-03-01", "value": 100.0}]  # 0.5*100+0.25*200
+
+
+def test_four_quarter_change_requires_same_quarter_prior_year():
+    definition = _def("credit_delta", "four_quarter_change", "q", [("DR", 1.0)])
+    rows = [_row("DR", "2023-01-01", 1.2),
+            _row("DR", "2023-04-01", 1.3),
+            _row("DR", "2024-01-01", 1.8),
+            _row("DR", "2024-07-01", 2.0)]
+    out = compute_cross_series_features(rows, [definition])
+    assert [(r["observation_date"], r["value"]) for r in out] == [
+        ("2024-01-01", pytest.approx(0.6))]
+
+
+def test_four_quarter_change_uses_known_vintages_as_of_date():
+    definition = _def("credit_delta", "four_quarter_change", "q", [("DR", 1.0)])
+    silver = [_srow("DR", "2023-01-01", 1.2, "2023-05-01"),
+              _srow("DR", "2024-01-01", 1.8, "2024-05-01"),
+              _srow("DR", "2024-01-01", 2.0, "2024-08-01")]
+    assert compute_cross_series_features_pit(silver, [definition], as_of="2024-04-30") == []
+    early = compute_cross_series_features_pit(silver, [definition], as_of="2024-06-01")
+    late = compute_cross_series_features_pit(silver, [definition], as_of="2024-09-01")
+    assert early[0]["value"] == pytest.approx(0.6)
+    assert late[0]["value"] == pytest.approx(0.8)
+
+
+def test_credit_deterioration_config_uses_quarterly_rate_levels():
+    defs = {d.name: d for d in load_cross_series_defs()}
+    assert defs["business_loan_delinquency_4q_change"].legs == (("DRBLACBN", 1.0),)
+    assert defs["credit_card_delinquency_4q_change"].legs == (("DRCCLACBS", 1.0),)
+    assert defs["mortgage_delinquency_4q_change"].legs == (("DRSFRMACBS", 1.0),)
+    assert all(defs[name].op == "four_quarter_change" and defs[name].frequency == "q"
+               for name in ("business_loan_delinquency_4q_change",
+                            "credit_card_delinquency_4q_change",
+                            "mortgage_delinquency_4q_change"))
+
+
+def test_four_quarter_change_rejects_nonquarterly_or_multiple_legs():
+    with pytest.raises(CrossSeriesConfigError):
+        _def("bad", "four_quarter_change", "m", [("DR", 1.0)])
+    with pytest.raises(CrossSeriesConfigError):
+        _def("bad", "four_quarter_change", "q", [("A", 1.0), ("B", 1.0)])
 
 
 def test_cross_frequency_asof_downsample():

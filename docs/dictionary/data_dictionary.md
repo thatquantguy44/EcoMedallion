@@ -245,19 +245,30 @@ short leg is nonzero). Columns: `spread_name`, `observation_date`,
 feature's target `frequency` (the last observation within each period), so legs
 of different cadence and different **sources** can be combined — e.g. daily
 Treasury debt ÷ quarterly BEA GDP. Ops: `spread` (a−b), `ratio` (a/b, guarded),
-`composite` (Σ weightᵢ·legᵢ). A period is emitted only when every leg has an
-aligned value. Both backends compute it via the one shared Python engine
+`composite` (Σ weightᵢ·legᵢ), `four_quarter_change` (quarterly level minus the
+same quarter one year earlier, in the source unit). A period is emitted only
+when every leg has an aligned value. Both backends compute it via the shared
+Python engine
 (`fred_pipeline.features.compute_cross_series_features`). Columns: `feature_name`,
 `op`, `observation_date`, `value`.
 
+The monthly inflation entries are `mich_cleveland_1y_inflation_gap`
+(`MICH - EXPINF1YR`) and `breakeven_30y_10y_slope`
+(`T30YIEM - T10YIEM`), both in percentage points. The breakeven legs are
+FRED's published monthly series, so the slope does not mix a monthly 30-year
+reading with a daily 10-year close. The `observation_date` is the month label,
+not the date either input was published.
+
 ### `gold.fred_cross_series_feature_pit`
 **Point-in-time (`realtime_start`-aligned)** version of the above: each leg
-contributes the value that was **actually known** (as-first-reported — the
-earliest vintage per observation) rather than latest-revised, so the feature
-series is **leak-free for backtests**. Reads raw Silver (all vintages) via
+contributes its as-first-reported value (the earliest vintage per observation)
+rather than latest-revised. Reads raw Silver (all vintages) via
 `fred_pipeline.features.compute_cross_series_features_pit`; the function also
 accepts an `as_of` date to reconstruct the series as it stood on any past date.
-For non-vintage series this equals the latest-revised feature. Columns:
+The stored first-report rows are keyed by **observation period**, not release
+date; backtests must use Silver `realtime_start` or an explicit `as_of` query
+before joining them to decision dates. For non-vintage series this equals the
+latest-revised feature. Columns:
 `feature_name`, `op`, `observation_date`, `value`, `basis` (`first_report` or the
 as-of date).
 
@@ -631,6 +642,16 @@ date; their gap is reinvested income); and `trailing_12m_dividend` /
 Tiingo's `adjClose`, so it can be rebuilt and diffed when a dividend is
 restated.
 
+#### `gold.equal_weight_participation_daily`
+Trailing 63 matched-session total return of equal-weight `RSP` minus cap-weight
+`SPY`, using `gold.equity_total_return_index`. Columns:
+`observation_date`, `window_sessions` (=63), `rsp_total_return_pct`,
+`spy_total_return_pct`, and `excess_return_pp` (RSP minus SPY, in percentage
+points). Requires 64 common observations; unmatched sessions are excluded from
+both legs. Rebuilt after the Tiingo total-return index by both local and Spark
+Gold pipelines. It measures two ETFs' relative performance, not constituent
+breadth.
+
 #### `gold.realized_volatility`
 Annualized realized volatility (`docs/handoffs/asset_class_expansion.md` item
 1a — the free half of the volatility gap; implied vol/options chains remain a
@@ -641,6 +662,16 @@ sample standard deviation of daily **log** returns over the window, scaled by
 returns in `gold.equity_return_daily`) because they're time-additive, which is
 what makes the square-root-of-time annualization scaling valid. A row is
 emitted only once its window is fully populated — no partial-window stats.
+
+#### `gold.implied_realized_vol_gap_daily`
+Same-date `VIXCLS` level minus SPY trailing 21-session annualized realized
+volatility from `gold.realized_volatility`, in percentage points. Columns:
+`observation_date`, `realized_window_sessions` (=21),
+`vix_implied_vol_pct`, `spy_realized_vol_pct`, and `gap_pp`. Missing dates on
+either leg produce no row. VIX reflects forward 30-calendar-day implied
+volatility while the SPY input is backward-looking; this is an
+implied/realized gap, not an ex-post risk premium. Rebuilt by local and Spark
+Gold pipelines after realized volatility.
 
 ### ECB eligible marketable assets (Spec 011)
 

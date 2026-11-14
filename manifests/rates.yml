@@ -185,6 +185,18 @@ series:
     max_value: 25
     tags: [rates, lending, mortgage]
 
+  - series_id: DFII5
+    title: 5-Year TIPS (Real) Yield
+    category: rates
+    frequency: d
+    expected_update_frequency: daily
+    units: Percent
+    active: true
+    vintage_enabled: true
+    downstream_use_case: yield_curve
+    priority: 2
+    tags: [rates, curve, treasury, tips, real]
+
   - series_id: DFII10
     title: 10-Year TIPS (Real) Yield
     category: rates

@@ -23,6 +23,9 @@ Sub-Plan"):
     asset_class_expansion.md item 1a) — the free, no-new-source half of the
     volatility gap; implied vol/options chains remain a separate, paid-vendor
     decision.
+  * :func:`compute_implied_realized_vol_gap` →
+    ``gold.implied_realized_vol_gap_daily``: VIX minus matched-date 21-session
+    SPY realized volatility, both annualized percent levels.
 
 **Source isolation.** Stooq and Tiingo both name a ``<ticker>:close`` series,
 so the callers pass **source-filtered** Silver rows rather than the merged
@@ -36,7 +39,7 @@ from __future__ import annotations
 from bisect import bisect_left
 from collections.abc import Iterable
 from datetime import date, timedelta
-from math import log, sqrt
+from math import isfinite, log, sqrt
 from typing import Any
 
 from fred_pipeline.equity_reconciliation_config import (
@@ -278,6 +281,46 @@ def compute_equity_total_return_index(
                 }
             )
             prev_close = close
+    return out
+
+
+def compute_equal_weight_participation(
+    total_return_rows: Iterable[dict[str, Any]], *, window_sessions: int = 63
+) -> list[dict[str, Any]]:
+    """RSP minus SPY trailing total return over matched trading sessions.
+
+    Both legs come from ``gold.equity_total_return_index`` so dividends and
+    splits are included. A row needs ``window_sessions + 1`` common dates;
+    unmatched dates never move just one leg's lookback window.
+    """
+    if window_sessions < 1:
+        raise ValueError("window_sessions must be positive")
+    by_ticker: dict[str, dict[str, float]] = {"RSP": {}, "SPY": {}}
+    for row in total_return_rows:
+        ticker = str(row.get("ticker", "")).upper()
+        if ticker not in by_ticker:
+            continue
+        value = row.get("total_return_index")
+        observation_date = _parse(row.get("observation_date"))
+        if value is None or observation_date is None:
+            continue
+        index = float(value)
+        if index > 0 and isfinite(index):
+            by_ticker[ticker][observation_date.isoformat()] = index
+
+    dates = sorted(set(by_ticker["RSP"]) & set(by_ticker["SPY"]))
+    out: list[dict[str, Any]] = []
+    for i in range(window_sessions, len(dates)):
+        current, prior = dates[i], dates[i - window_sessions]
+        rsp_return = (by_ticker["RSP"][current] / by_ticker["RSP"][prior] - 1) * 100
+        spy_return = (by_ticker["SPY"][current] / by_ticker["SPY"][prior] - 1) * 100
+        out.append({
+            "observation_date": current,
+            "window_sessions": window_sessions,
+            "rsp_total_return_pct": rsp_return,
+            "spy_total_return_pct": spy_return,
+            "excess_return_pp": rsp_return - spy_return,
+        })
     return out
 
 
@@ -531,3 +574,52 @@ def compute_realized_volatility(
                     }
                 )
     return out
+
+
+def compute_implied_realized_vol_gap(
+    vix_rows: Iterable[dict[str, Any]],
+    realized_rows: Iterable[dict[str, Any]],
+    *,
+    window_sessions: int = 21,
+) -> list[dict[str, Any]]:
+    """Same-date VIX minus trailing SPY realized volatility, in percentage points.
+
+    VIX represents forward 30-calendar-day implied volatility; the realized
+    leg is backward-looking over roughly one month of trading sessions. This
+    is an implied/realized *gap*, not an ex-post volatility risk premium.
+    Missing dates on either leg emit no row; neither leg is forward-filled.
+    """
+    vix_by_date: dict[str, float] = {}
+    for row in vix_rows:
+        if row.get("series_id") != "VIXCLS" or row.get("is_missing"):
+            continue
+        day = _parse(row.get("observation_date"))
+        value = row.get("value")
+        if day is None or value is None:
+            continue
+        vol = float(value)
+        if vol > 0 and isfinite(vol):
+            vix_by_date[day.isoformat()] = vol
+
+    realized_by_date: dict[str, float] = {}
+    for row in realized_rows:
+        if row.get("ticker") != "SPY" or row.get("window") != window_sessions:
+            continue
+        day = _parse(row.get("observation_date"))
+        value = row.get("realized_vol_pct")
+        if day is None or value is None:
+            continue
+        vol = float(value)
+        if vol >= 0 and isfinite(vol):
+            realized_by_date[day.isoformat()] = vol
+
+    return [
+        {
+            "observation_date": day,
+            "realized_window_sessions": window_sessions,
+            "vix_implied_vol_pct": vix_by_date[day],
+            "spy_realized_vol_pct": realized_by_date[day],
+            "gap_pp": vix_by_date[day] - realized_by_date[day],
+        }
+        for day in sorted(vix_by_date.keys() & realized_by_date.keys())
+    ]

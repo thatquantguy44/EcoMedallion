@@ -6,7 +6,7 @@ description: >
   and gold.curve_spread_daily (recession shading in Power BI); GDPNow is the
   Atlanta Fed's real-time GDP growth nowcast.
 
-  Verified against live FRED (2026-07-17): all ids below resolve.
+  Verified against live FRED (2026-07-17); SAHMREALTIME verified 2026-11-14.
 version: 1
 
 series:
@@ -52,3 +52,16 @@ series:
     downstream_use_case: growth_nowcast
     priority: 2
     tags: [regime, growth, nowcast]
+
+  - series_id: SAHMREALTIME
+    title: Real-Time Sahm Rule Recession Indicator
+    category: growth
+    frequency: m
+    expected_update_frequency: monthly
+    units: Percentage Points
+    active: true
+    vintage_enabled: true
+    validation_profile: standard
+    downstream_use_case: recession_overlay
+    priority: 2
+    tags: [regime, recession, labor, sahm]

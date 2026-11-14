@@ -5,6 +5,7 @@
 #   op: spread    -> leg0 - leg1        (exactly 2 legs)
 #   op: ratio     -> leg0 / leg1        (exactly 2 legs; denominator != 0)
 #   op: composite -> sum(weight_i * leg_i)   (1+ legs; weight defaults to 1.0)
+#   op: four_quarter_change -> level minus same quarter last year (1 quarterly leg)
 #
 # Legs may be a bare series_id (weight 1.0) or {series_id, weight}. A feature is
 # emitted for a period only when every leg has an aligned value. If a leg's
@@ -14,6 +15,49 @@
 # Review economic meaning before adding, like the manifests and spreads config.
 
 features:
+  # Positive values mean spot VIX is above the three-month VIX (inversion).
+  - name: vix_term_inversion
+    op: spread
+    frequency: d
+    legs: [VIXCLS, VXVCLS]
+    description: Spot minus three-month VIX, in index points; same observation date.
+
+  - name: real_yield_10y_5y
+    op: spread
+    frequency: d
+    legs: [DFII10, DFII5]
+    description: Ten-year minus five-year TIPS real yield, in percentage points.
+
+  - name: mich_cleveland_1y_inflation_gap
+    op: spread
+    frequency: m
+    legs: [MICH, EXPINF1YR]
+    description: Michigan survey minus Cleveland Fed model one-year inflation expectation, in percentage points; month labels are not release dates.
+
+  - name: breakeven_30y_10y_slope
+    op: spread
+    frequency: m
+    legs: [T30YIEM, T10YIEM]
+    description: Published monthly 30-year minus 10-year breakeven inflation rates, in percentage points; month labels are not release dates.
+
+  - name: business_loan_delinquency_4q_change
+    op: four_quarter_change
+    frequency: q
+    legs: [DRBLACBN]
+    description: Business loan delinquency rate change versus the same quarter last year, in percentage points (NSA source).
+
+  - name: credit_card_delinquency_4q_change
+    op: four_quarter_change
+    frequency: q
+    legs: [DRCCLACBS]
+    description: Credit card delinquency rate change versus the same quarter last year, in percentage points (SA source).
+
+  - name: mortgage_delinquency_4q_change
+    op: four_quarter_change
+    frequency: q
+    legs: [DRSFRMACBS]
+    description: Single-family mortgage delinquency rate change versus the same quarter last year, in percentage points (SA source).
+
   # Real 10y yield: nominal 10y Treasury minus 10y breakeven inflation (both
   # daily FRED series) — same-frequency spread, shown here for reference.
   - name: real_yield_10y

@@ -6,11 +6,26 @@ Upstream: Federal Reserve Economic Data API.
 
 Authentication: `FRED_API_KEY` is required for pipeline pulls.
 
-Current active FRED series: 2,570
+Current active FRED series: 2,581
 
 FRED is the broadest source in this project. The manifests ingest a large
 research universe, while `config/series_catalog.yml` selects a smaller set of
 series for terminal-facing Gold dimensions and dashboard aggregates.
+
+## MarketIndicators additions
+
+| Order | Series ID | Manifest | Gold category | Description |
+|---|---|---|---|---|
+| 1 | `VXVCLS` | `market_indices.yml` | CREDIT | Cboe three-month VIX; pair with `VIXCLS` on matching observation dates for a volatility term-structure feature. Cboe reuse rights need review before redistribution. |
+| 2 | `COMPOUT` | `money_banking.yml` | MONEY | Weekly commercial paper outstanding in billions of dollars; use growth rather than interpreting the stock as a spread. |
+| 3 | `DFII5` | `rates.yml` | RATES | Daily five-year TIPS real yield; complements `DFII10` for a real-yield curve slope. |
+| 4 | `DRBLACBN` | `money_banking.yml` | CREDIT | Quarterly business-loan delinquency rate, not seasonally adjusted; preserve release and revision timing in research features. |
+| 5 | `DRCCLACBS` | `money_banking.yml` | CREDIT | Quarterly credit-card delinquency rate, seasonally adjusted; preserve release and revision timing in research features. |
+| 6 | `DRSFRMACBS` | `money_banking.yml` | CREDIT | Quarterly single-family mortgage delinquency rate, seasonally adjusted; preserve release and revision timing. |
+| 7 | `MICH` | `inflation.yml` | INFLATION | Monthly University of Michigan survey inflation expectation; confirm survey reuse rights before redistribution. |
+| 8 | `SAHMREALTIME` | `macro_flags.yml` | GROWTH | Monthly real-time Sahm recession indicator in percentage points; use its release vintage, not observation month, in backtests. |
+| 9 | `T30YIEM` | `inflation.yml` | INFLATION | Monthly 30-year breakeven inflation rate; corrects the legacy `T30YIE` identifier. |
+| 10 | `T10YIEM` | `inflation.yml` | INFLATION | Published monthly 10-year breakeven inflation rate; pairs with `T30YIEM` without mixing monthly values and daily month-end closes. |
 
 ## Recently Added To Terminal Catalog
 

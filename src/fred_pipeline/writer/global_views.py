@@ -492,6 +492,14 @@ POWERBI_CATALOG: tuple[dict[str, Any], ...] = (
         "True total return from Tiingo raw close+dividend+split (reinvested), with price/total indices, trailing-12m dividend and yield.",
     ),
     _entry(
+        "equal_weight_participation_daily",
+        "fact",
+        "EQUITY",
+        "1 / matched trading date",
+        "line (RSP minus SPY trailing total return)",
+        "63-session dividend-reinvested RSP total return minus SPY total return, in percentage points; matched dates only.",
+    ),
+    _entry(
         "equity_price_reconciliation",
         "reference",
         "EQUITY",
@@ -509,6 +517,14 @@ POWERBI_CATALOG: tuple[dict[str, Any], ...] = (
         "21/63/126/252-day trailing windows, scaled by sqrt(252). The free half of the "
         "volatility gap (docs/handoffs/asset_class_expansion.md item 1a); implied vol/options "
         "chains remain a separate paid-vendor decision.",
+    ),
+    _entry(
+        "implied_realized_vol_gap_daily",
+        "fact",
+        "EQUITY",
+        "1 / matched trading date",
+        "line (VIX minus SPY realized volatility)",
+        "Same-date VIX level minus trailing 21-session annualized SPY realized volatility, in percentage points; forward implied versus trailing realized.",
     ),
     _entry(
         "equity_factor_attribution",
