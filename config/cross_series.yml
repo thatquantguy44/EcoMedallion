@@ -28,6 +28,18 @@ features:
     legs: [DFII10, DFII5]
     description: Ten-year minus five-year TIPS real yield, in percentage points.
 
+  - name: mich_cleveland_1y_inflation_gap
+    op: spread
+    frequency: m
+    legs: [MICH, EXPINF1YR]
+    description: Michigan survey minus Cleveland Fed model one-year inflation expectation, in percentage points; month labels are not release dates.
+
+  - name: breakeven_30y_10y_slope
+    op: spread
+    frequency: m
+    legs: [T30YIEM, T10YIEM]
+    description: Published monthly 30-year minus 10-year breakeven inflation rates, in percentage points; month labels are not release dates.
+
   - name: business_loan_delinquency_4q_change
     op: four_quarter_change
     frequency: q

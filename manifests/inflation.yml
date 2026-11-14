@@ -86,6 +86,19 @@ series:
     priority: 2
     tags: [inflation, breakeven, market]
 
+  - series_id: T10YIEM
+    title: 10-Year Breakeven Inflation Rate (Monthly)
+    category: inflation
+    frequency: m
+    expected_update_frequency: monthly
+    units: Percent
+    active: true
+    vintage_enabled: true
+    validation_profile: standard
+    downstream_use_case: market_implied_inflation
+    priority: 2
+    tags: [inflation, breakeven, market, monthly]
+
   - series_id: MICH
     title: 'University of Michigan: Inflation Expectation'
     category: inflation

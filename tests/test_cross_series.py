@@ -79,6 +79,43 @@ def test_marketindicators_configured_spreads_use_active_series_ids():
     assert values["real_yield_10y_5y"] == pytest.approx(0.3)
 
 
+def test_monthly_inflation_spreads_use_matching_horizons_and_cadence():
+    defs = {d.name: d for d in load_cross_series_defs()}
+    survey = defs["mich_cleveland_1y_inflation_gap"]
+    curve = defs["breakeven_30y_10y_slope"]
+    assert survey.op == curve.op == "spread"
+    assert survey.frequency == curve.frequency == "m"
+    assert survey.legs == (("MICH", 1.0), ("EXPINF1YR", 1.0))
+    assert curve.legs == (("T30YIEM", 1.0), ("T10YIEM", 1.0))
+
+    rows = [
+        _row("MICH", "2024-05-01", 3.3),
+        _row("EXPINF1YR", "2024-05-01", 2.7),
+        _row("T30YIEM", "2024-05-01", 2.5),
+        _row("T10YIEM", "2024-05-01", 2.2),
+        _row("T10YIE", "2024-05-31", 2.4),
+    ]
+    out = compute_cross_series_features(rows, [survey, curve])
+    values = {row["feature_name"]: row["value"] for row in out}
+    assert values == {
+        "mich_cleveland_1y_inflation_gap": pytest.approx(0.6),
+        "breakeven_30y_10y_slope": pytest.approx(0.3),
+    }
+
+
+def test_monthly_inflation_spread_waits_for_both_release_vintages():
+    survey = {d.name: d for d in load_cross_series_defs()}[
+        "mich_cleveland_1y_inflation_gap"
+    ]
+    silver = [
+        _srow("MICH", "2024-05-01", 3.3, "2024-05-24"),
+        _srow("EXPINF1YR", "2024-05-01", 2.7, "2024-06-10"),
+    ]
+    assert compute_cross_series_features_pit(silver, [survey], as_of="2024-06-09") == []
+    out = compute_cross_series_features_pit(silver, [survey], as_of="2024-06-10")
+    assert out[0]["value"] == pytest.approx(0.6)
+
+
 @pytest.mark.parametrize("legs, op", [(["A", "B", "C"], "spread"),
                                       (["A", "B", "C"], "ratio")])
 def test_spread_ratio_require_two_legs(legs, op):
