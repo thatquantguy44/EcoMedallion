@@ -252,6 +252,13 @@ Python engine
 (`fred_pipeline.features.compute_cross_series_features`). Columns: `feature_name`,
 `op`, `observation_date`, `value`.
 
+The monthly inflation entries are `mich_cleveland_1y_inflation_gap`
+(`MICH - EXPINF1YR`) and `breakeven_30y_10y_slope`
+(`T30YIEM - T10YIEM`), both in percentage points. The breakeven legs are
+FRED's published monthly series, so the slope does not mix a monthly 30-year
+reading with a daily 10-year close. The `observation_date` is the month label,
+not the date either input was published.
+
 ### `gold.fred_cross_series_feature_pit`
 **Point-in-time (`realtime_start`-aligned)** version of the above: each leg
 contributes its as-first-reported value (the earliest vintage per observation)

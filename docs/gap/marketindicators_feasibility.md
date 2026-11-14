@@ -17,7 +17,7 @@ The VIX term structure is a fast feature prototype. SOFR minus IORB is already c
 
 ## Engineered feature status
 
-The inputs below are active on this branch. Priorities 1–5 are configured or built in Gold; no live warehouse rows or predictive value have been verified.
+The inputs below are active on this branch. Priorities 1–7 are configured or built in Gold; no live warehouse rows or predictive value have been verified.
 
 | Priority | Feature | Definition and implementation path | Main check |
 | --- | --- | --- | --- |
@@ -26,8 +26,11 @@ The inputs below are active on this branch. Priorities 1–5 are configured or b
 | 3 | Bank-credit deterioration | `business_loan_delinquency_4q_change`, `credit_card_delinquency_4q_change`, and `mortgage_delinquency_4q_change` in `gold.fred_cross_series_feature`, with first-report variants in `gold.fred_cross_series_feature_pit`. Values are four-quarter changes in percentage points. | PIT rows are quarter-labelled; align to Silver release dates before a backtest. Do not blend the NSA business and SA consumer levels without normalization. |
 | 4 | Equal-weight participation | `gold.equal_weight_participation_daily`: trailing 63 matched-session total return of `RSP` minus `SPY`, in percentage points, using `gold.equity_total_return_index`. | Dividend-adjusted continuity, ETF history, and matching sessions. |
 | 5 | Implied versus trailing realized volatility | `gold.implied_realized_vol_gap_daily`: same-date `VIXCLS` minus 21-session annualized SPY realized volatility from `gold.realized_volatility`, in volatility percentage points. | VIX is forward-looking while the realized input is trailing; label it an implied/realized gap, not a realized future risk premium. |
+| 6 | Survey–model inflation gap | `mich_cleveland_1y_inflation_gap` in `gold.fred_cross_series_feature`: monthly `MICH - EXPINF1YR`, in percentage points; first-report values in the PIT twin. | Check preliminary/final survey releases and both legs' vintage availability before a backtest. |
+| 7 | Long-end breakeven slope | `breakeven_30y_10y_slope` in `gold.fred_cross_series_feature`: monthly `T30YIEM - T10YIEM`, in percentage points; first-report values in the PIT twin. | Both legs are published monthly averages; month labels are not publication dates. |
 
 `COMPOUT` already has a year-over-year percent-change presentation transform in `config/series_catalog.yml`. A separate four- or thirteen-week funding pulse is only useful after checking that the shorter window adds value beyond that generic transform.
+The next feature candidates are a release-aligned breadth count of rising quarterly delinquency rates, then a smoothed 13-week `COMPOUT` funding pulse.
 
 ## All 21 FRED-designated legacy IDs
 
@@ -76,7 +79,7 @@ The inputs below are active on this branch. Priorities 1–5 are configured or b
 ## Next implementation slice
 
 1. Verify warehouse rows and source entitlements for `SOFR`, `IORB`, `VIXCLS`, `VXVCLS`, `DFII5`, `DFII10`, `RSP`, and `SPY`. Review the newly built Gold features and the existing SOFR–IORB funding spread.
-2. `VXVCLS`, `COMPOUT`, `DFII5`, `DRBLACBN`, `DRCCLACBS`, `DRSFRMACBS`, `MICH`, `SAHMREALTIME`, and `T30YIEM` are active in EcoMedallion manifests and the terminal catalog. `TDSP` is a low-priority freshness variant of an existing series. Check warehouse coverage and run a source-key dry run before using any newly ingested series in research.
+2. `VXVCLS`, `COMPOUT`, `DFII5`, `DRBLACBN`, `DRCCLACBS`, `DRSFRMACBS`, `MICH`, `SAHMREALTIME`, `T30YIEM`, and the published monthly 10-year companion `T10YIEM` are active in EcoMedallion manifests and the terminal catalog. `TDSP` is a low-priority freshness variant of an existing series. Check warehouse coverage and run a source-key dry run before using any newly ingested series in research.
 3. Measure incremental value with walk-forward, point-in-time tests against existing EcoMedallion curve, funding, and recession features. Report coverage, staleness, correlation and out-of-sample stability; do not rank by in-sample fit alone.
 4. For securities-finance research, evaluate a read-only exchange from MarketMedallion's existing SEC FTD and Reg SHO publications before building another provider collector. CFTC COT remains a separate new-connector candidate.
 
