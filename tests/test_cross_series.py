@@ -159,9 +159,11 @@ def test_credit_deterioration_config_uses_quarterly_rate_levels():
     defs = {d.name: d for d in load_cross_series_defs()}
     assert defs["business_loan_delinquency_4q_change"].legs == (("DRBLACBN", 1.0),)
     assert defs["credit_card_delinquency_4q_change"].legs == (("DRCCLACBS", 1.0),)
+    assert defs["mortgage_delinquency_4q_change"].legs == (("DRSFRMACBS", 1.0),)
     assert all(defs[name].op == "four_quarter_change" and defs[name].frequency == "q"
                for name in ("business_loan_delinquency_4q_change",
-                            "credit_card_delinquency_4q_change"))
+                            "credit_card_delinquency_4q_change",
+                            "mortgage_delinquency_4q_change"))
 
 
 def test_four_quarter_change_rejects_nonquarterly_or_multiple_legs():

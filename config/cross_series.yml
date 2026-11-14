@@ -40,6 +40,12 @@ features:
     legs: [DRCCLACBS]
     description: Credit card delinquency rate change versus the same quarter last year, in percentage points (SA source).
 
+  - name: mortgage_delinquency_4q_change
+    op: four_quarter_change
+    frequency: q
+    legs: [DRSFRMACBS]
+    description: Single-family mortgage delinquency rate change versus the same quarter last year, in percentage points (SA source).
+
   # Real 10y yield: nominal 10y Treasury minus 10y breakeven inflation (both
   # daily FRED series) — same-frequency spread, shown here for reference.
   - name: real_yield_10y
