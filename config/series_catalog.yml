@@ -139,6 +139,7 @@ series:
   - {series_id: DRTSCILM, econ_category: CREDIT, polarity: -1, default_transform: level, surprise_window: 8, notes: SLOOS % tightening C&I (large/mid)}
   - {series_id: BUSLOANS, econ_category: CREDIT, polarity: 1,  default_transform: pc1,   notes: Bank C&I loans}
   - {series_id: DRBLACBN, econ_category: CREDIT, polarity: -1, default_transform: level, notes: Business loan delinquency rate (quarterly, NSA)}
+  - {series_id: DRCCLACBS, econ_category: CREDIT, polarity: -1, default_transform: level, notes: Credit card loan delinquency rate (quarterly, SA)}
   - {series_id: KCFSI,    econ_category: CREDIT, polarity: -1, default_transform: level, notes: Kansas City financial stress index}
   - {series_id: BAMLC0A0CM,   econ_category: CREDIT, polarity: -1, default_transform: level, notes: IG corporate OAS}
   - {series_id: BAMLH0A0HYM2, econ_category: CREDIT, polarity: -1, default_transform: level, notes: HY corporate OAS}

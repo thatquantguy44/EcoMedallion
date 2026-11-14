@@ -20,6 +20,7 @@ series for terminal-facing Gold dimensions and dashboard aggregates.
 | 2 | `COMPOUT` | `money_banking.yml` | MONEY | Weekly commercial paper outstanding in billions of dollars; use growth rather than interpreting the stock as a spread. |
 | 3 | `DFII5` | `rates.yml` | RATES | Daily five-year TIPS real yield; complements `DFII10` for a real-yield curve slope. |
 | 4 | `DRBLACBN` | `money_banking.yml` | CREDIT | Quarterly business-loan delinquency rate, not seasonally adjusted; preserve release and revision timing in research features. |
+| 5 | `DRCCLACBS` | `money_banking.yml` | CREDIT | Quarterly credit-card delinquency rate, seasonally adjusted; preserve release and revision timing in research features. |
 
 ## Recently Added To Terminal Catalog
 
