@@ -25,6 +25,20 @@ series:
     min_value: 0
     tags: [market, volatility, vix]
 
+  - series_id: VXVCLS
+    title: CBOE S&P 500 3-Month Volatility Index
+    category: market_indices
+    frequency: d
+    expected_update_frequency: daily
+    units: Index
+    active: true
+    vintage_enabled: false
+    validation_profile: standard
+    downstream_use_case: market_regime
+    priority: 1
+    min_value: 0
+    tags: [market, volatility, vix, term_structure]
+
   - series_id: SP500
     title: S&P 500
     category: market_indices

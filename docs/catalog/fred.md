@@ -12,6 +12,12 @@ FRED is the broadest source in this project. The manifests ingest a large
 research universe, while `config/series_catalog.yml` selects a smaller set of
 series for terminal-facing Gold dimensions and dashboard aggregates.
 
+## MarketIndicators additions
+
+| Order | Series ID | Manifest | Gold category | Description |
+|---|---|---|---|---|
+| 1 | `VXVCLS` | `market_indices.yml` | CREDIT | Cboe three-month VIX; pair with `VIXCLS` on matching observation dates for a volatility term-structure feature. Cboe reuse rights need review before redistribution. |
+
 ## Recently Added To Terminal Catalog
 
 These active FRED series were present in manifests and local base Gold latest

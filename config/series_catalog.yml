@@ -147,6 +147,7 @@ series:
   - {series_id: BAA10Y,   econ_category: CREDIT, polarity: -1, default_transform: level, notes: Baa spread over 10y Treasury}
   - {series_id: AAA10Y,   econ_category: CREDIT, polarity: -1, default_transform: level, notes: Aaa spread over 10y Treasury}
   - {series_id: VIXCLS,   econ_category: CREDIT, polarity: -1, default_transform: level, notes: VIX (equity implied vol)}
+  - {series_id: VXVCLS,   econ_category: CREDIT, polarity: -1, default_transform: level, notes: 3-month VIX (equity implied vol)}
 
   # ---- HOUSING ---------------------------------------------------------------
   - {series_id: HOUST,    econ_category: HOUSING, polarity: 1,  default_transform: level, notes: Housing starts}
