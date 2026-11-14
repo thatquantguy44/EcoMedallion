@@ -101,6 +101,7 @@ series:
   - {series_id: DCPF3M,   econ_category: RATES, polarity: 0, default_transform: level, notes: 90-day AA financial commercial paper rate}
   - {series_id: REAINTRATREARAT10Y, econ_category: RATES, polarity: 0, default_transform: level, notes: 10y real rate}
   - {series_id: DFII10,   econ_category: RATES, polarity: 0, default_transform: level, notes: 10y TIPS real yield}
+  - {series_id: DFII5,    econ_category: RATES, polarity: 0, default_transform: level, notes: 5y TIPS real yield}
   - {series_id: DGS1MO,   econ_category: RATES, polarity: 0, default_transform: level, notes: 1M Treasury}
   - {series_id: DTB4WK,   econ_category: RATES, polarity: 0, default_transform: level, notes: 4-week Treasury bill discount rate}
   - {series_id: DTB3,     econ_category: RATES, polarity: 0, default_transform: level, notes: 3-month Treasury bill discount rate}

@@ -18,6 +18,7 @@ series for terminal-facing Gold dimensions and dashboard aggregates.
 |---|---|---|---|---|
 | 1 | `VXVCLS` | `market_indices.yml` | CREDIT | Cboe three-month VIX; pair with `VIXCLS` on matching observation dates for a volatility term-structure feature. Cboe reuse rights need review before redistribution. |
 | 2 | `COMPOUT` | `money_banking.yml` | MONEY | Weekly commercial paper outstanding in billions of dollars; use growth rather than interpreting the stock as a spread. |
+| 3 | `DFII5` | `rates.yml` | RATES | Daily five-year TIPS real yield; complements `DFII10` for a real-yield curve slope. |
 
 ## Recently Added To Terminal Catalog
 
