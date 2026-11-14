@@ -7103,3 +7103,18 @@ series:
   priority: 2
   min_value: 0
   tags: [money_banking, funding, commercial_paper]
+- series_id: DRBLACBN
+  title: Delinquency Rate on Business Loans, All Commercial Banks
+  frequency: q
+  category: money_banking
+  units: Percent
+  active: true
+  load_type: incremental
+  expected_update_frequency: quarterly
+  vintage_enabled: true
+  validation_profile: standard
+  downstream_use_case: credit_cycle
+  priority: 2
+  min_value: 0
+  max_value: 100
+  tags: [money_banking, credit, delinquency, business_loans]
