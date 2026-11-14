@@ -656,6 +656,16 @@ returns in `gold.equity_return_daily`) because they're time-additive, which is
 what makes the square-root-of-time annualization scaling valid. A row is
 emitted only once its window is fully populated — no partial-window stats.
 
+#### `gold.implied_realized_vol_gap_daily`
+Same-date `VIXCLS` level minus SPY trailing 21-session annualized realized
+volatility from `gold.realized_volatility`, in percentage points. Columns:
+`observation_date`, `realized_window_sessions` (=21),
+`vix_implied_vol_pct`, `spy_realized_vol_pct`, and `gap_pp`. Missing dates on
+either leg produce no row. VIX reflects forward 30-calendar-day implied
+volatility while the SPY input is backward-looking; this is an
+implied/realized gap, not an ex-post risk premium. Rebuilt by local and Spark
+Gold pipelines after realized volatility.
+
 ### ECB eligible marketable assets (Spec 011)
 
 This is a dedicated security-universe model rather than a FRED observation

@@ -519,6 +519,14 @@ POWERBI_CATALOG: tuple[dict[str, Any], ...] = (
         "chains remain a separate paid-vendor decision.",
     ),
     _entry(
+        "implied_realized_vol_gap_daily",
+        "fact",
+        "EQUITY",
+        "1 / matched trading date",
+        "line (VIX minus SPY realized volatility)",
+        "Same-date VIX level minus trailing 21-session annualized SPY realized volatility, in percentage points; forward implied versus trailing realized.",
+    ),
+    _entry(
         "equity_factor_attribution",
         "fact",
         "EQUITY",

@@ -23,6 +23,9 @@ Sub-Plan"):
     asset_class_expansion.md item 1a) — the free, no-new-source half of the
     volatility gap; implied vol/options chains remain a separate, paid-vendor
     decision.
+  * :func:`compute_implied_realized_vol_gap` →
+    ``gold.implied_realized_vol_gap_daily``: VIX minus matched-date 21-session
+    SPY realized volatility, both annualized percent levels.
 
 **Source isolation.** Stooq and Tiingo both name a ``<ticker>:close`` series,
 so the callers pass **source-filtered** Silver rows rather than the merged
@@ -571,3 +574,52 @@ def compute_realized_volatility(
                     }
                 )
     return out
+
+
+def compute_implied_realized_vol_gap(
+    vix_rows: Iterable[dict[str, Any]],
+    realized_rows: Iterable[dict[str, Any]],
+    *,
+    window_sessions: int = 21,
+) -> list[dict[str, Any]]:
+    """Same-date VIX minus trailing SPY realized volatility, in percentage points.
+
+    VIX represents forward 30-calendar-day implied volatility; the realized
+    leg is backward-looking over roughly one month of trading sessions. This
+    is an implied/realized *gap*, not an ex-post volatility risk premium.
+    Missing dates on either leg emit no row; neither leg is forward-filled.
+    """
+    vix_by_date: dict[str, float] = {}
+    for row in vix_rows:
+        if row.get("series_id") != "VIXCLS" or row.get("is_missing"):
+            continue
+        day = _parse(row.get("observation_date"))
+        value = row.get("value")
+        if day is None or value is None:
+            continue
+        vol = float(value)
+        if vol > 0 and isfinite(vol):
+            vix_by_date[day.isoformat()] = vol
+
+    realized_by_date: dict[str, float] = {}
+    for row in realized_rows:
+        if row.get("ticker") != "SPY" or row.get("window") != window_sessions:
+            continue
+        day = _parse(row.get("observation_date"))
+        value = row.get("realized_vol_pct")
+        if day is None or value is None:
+            continue
+        vol = float(value)
+        if vol >= 0 and isfinite(vol):
+            realized_by_date[day.isoformat()] = vol
+
+    return [
+        {
+            "observation_date": day,
+            "realized_window_sessions": window_sessions,
+            "vix_implied_vol_pct": vix_by_date[day],
+            "spy_realized_vol_pct": realized_by_date[day],
+            "gap_pp": vix_by_date[day] - realized_by_date[day],
+        }
+        for day in sorted(vix_by_date.keys() & realized_by_date.keys())
+    ]

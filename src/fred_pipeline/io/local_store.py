@@ -634,6 +634,10 @@ CREATE TABLE IF NOT EXISTS gold_equity_price_reconciliation (
 CREATE TABLE IF NOT EXISTS gold_realized_volatility (
     ticker TEXT, observation_date TEXT, window INTEGER, realized_vol_pct REAL
 );
+CREATE TABLE IF NOT EXISTS gold_implied_realized_vol_gap_daily (
+    observation_date TEXT, realized_window_sessions INTEGER,
+    vix_implied_vol_pct REAL, spy_realized_vol_pct REAL, gap_pp REAL
+);
 
 -- ML pipeline (handoff.md "ML Extensions Sub-Plan"):
 -- ML-0 feature matrix, ML-2 PCA factor scores/loadings, ML-4 anomaly scores.
@@ -2969,6 +2973,7 @@ class LocalWarehouse:
         from fred_pipeline.equity_views import (
             compute_equity_price_reconciliation,
             compute_equity_return_daily,
+            compute_implied_realized_vol_gap,
             compute_index_constituents,
             compute_realized_volatility,
             select_canonical_equity_price_rows,
@@ -3011,6 +3016,21 @@ class LocalWarehouse:
             _stage_timed("realized_volatility")(compute_realized_volatility)(
                 canonical_price_rows
             ),
+        )
+        vix_rows = [dict(row) for row in self.conn.execute(
+            "SELECT series_id, observation_date, value, is_missing "
+            "FROM gold_fred_latest_observation WHERE series_id = 'VIXCLS'"
+        ).fetchall()]
+        spy_vol_rows = [dict(row) for row in self.conn.execute(
+            "SELECT ticker, observation_date, window, realized_vol_pct "
+            "FROM gold_realized_volatility WHERE ticker = 'SPY' AND window = 21"
+        ).fetchall()]
+        self.conn.execute("DELETE FROM gold_implied_realized_vol_gap_daily")
+        self._insert(
+            "gold_implied_realized_vol_gap_daily",
+            _stage_timed("implied_realized_vol_gap")(
+                compute_implied_realized_vol_gap
+            )(vix_rows, spy_vol_rows),
         )
         del canonical_price_rows
         del tiingo_price_rows
@@ -3208,6 +3228,7 @@ class LocalWarehouse:
                 "equal_weight_participation_daily",
                 "equity_price_reconciliation",
                 "realized_volatility",
+                "implied_realized_vol_gap_daily",
                 "ml_feature_matrix",
                 "macro_factor_scores",
                 "macro_factor_loadings",

@@ -19,6 +19,7 @@ from fred_pipeline.sources.stooq import (
 )
 from fred_pipeline.equity_views import (
     compute_equal_weight_participation,
+    compute_implied_realized_vol_gap,
     compute_equity_price_reconciliation,
     compute_equity_return_daily,
     compute_index_constituents,
@@ -693,6 +694,69 @@ def test_realized_volatility_isolates_tickers():
     ]
     out = compute_realized_volatility(rows, windows=(2,))
     assert {r["ticker"] for r in out} == {"AAPL"}
+
+
+def test_implied_realized_gap_requires_matching_spy_21_session_print():
+    vix = [
+        {"series_id": "VIXCLS", "observation_date": "2024-01-02", "value": 20.0},
+        {"series_id": "VIXCLS", "observation_date": "2024-01-03", "value": 21.0},
+    ]
+    realized = [
+        {"ticker": "SPY", "observation_date": "2024-01-02", "window": 21,
+         "realized_vol_pct": 14.0},
+        {"ticker": "SPY", "observation_date": "2024-01-03", "window": 63,
+         "realized_vol_pct": 15.0},
+        {"ticker": "AAPL", "observation_date": "2024-01-03", "window": 21,
+         "realized_vol_pct": 16.0},
+    ]
+    out = compute_implied_realized_vol_gap(vix, realized)
+    assert out == [{
+        "observation_date": "2024-01-02", "realized_window_sessions": 21,
+        "vix_implied_vol_pct": 20.0, "spy_realized_vol_pct": 14.0,
+        "gap_pp": 6.0,
+    }]
+
+
+def test_implied_realized_gap_local_gold_build(tmp_path):
+    import datetime as dt
+
+    from fred_pipeline.config import Environment, PipelineConfig
+    from fred_pipeline.local_store import LocalWarehouse
+
+    wh = LocalWarehouse(
+        PipelineConfig(environment=Environment.DEV, fred_api_key="k"),
+        db_path=str(tmp_path / "vol_gap.db"),
+    )
+    silver = []
+    start = dt.date(2024, 1, 2)
+    price = 100.0
+    for i in range(22):
+        day = start + dt.timedelta(days=i)
+        price *= 1.01 if i % 2 == 0 else 0.99
+        silver.append({
+            "source": "tiingo", "series_id": "SPY:adjClose",
+            "observation_date": day.isoformat(), "realtime_start": "",
+            "realtime_end": "", "value": price, "raw_value": str(price),
+            "is_missing": False, "row_hash": f"spy-{i}",
+            "revision_number": 1, "ingested_at": "2024-02-01T00:00:00",
+            "run_id": "r1",
+        })
+    silver.append({
+        "source": "fred", "series_id": "VIXCLS",
+        "observation_date": day.isoformat(), "realtime_start": "",
+        "realtime_end": "", "value": 20.0, "raw_value": "20",
+        "is_missing": False, "row_hash": "vix", "revision_number": 1,
+        "ingested_at": "2024-02-01T00:00:00", "run_id": "r1",
+    })
+    wh.merge_silver(silver)
+    result = wh.build_gold()
+    assert result["implied_realized_vol_gap_daily"] == "ok"
+    rows = wh.query("SELECT * FROM gold_implied_realized_vol_gap_daily")
+    realized = wh.query("SELECT * FROM gold_realized_volatility WHERE ticker = 'SPY' AND window = 21")
+    assert len(rows) == len(realized) == 1
+    assert rows[0]["observation_date"] == day.isoformat()
+    assert rows[0]["gap_pp"] == pytest.approx(20.0 - realized[0]["realized_vol_pct"])
+    wh.close()
 
 
 def test_equity_local_build_gold_writes_realized_volatility(tmp_path):
