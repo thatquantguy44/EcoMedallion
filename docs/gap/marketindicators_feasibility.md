@@ -13,7 +13,21 @@ Reviewed 2026-11-14. This follows [the inventory](marketindicators_opportunities
 | 5 | RSP versus SPY trailing total return | Market participation signal with no new source | Both already in Tiingo manifest and equity return layer | ETF launch/history and relative return window; no claim of broad constituent breadth |
 | 6 | Real 5-year yield (`DFII5`) | Complements ingested 10-year real yield, gives real-curve slope | Existing FRED connector; one manifest entry | Check any extra information beyond nominal and breakeven components |
 
-The first two are fast feature prototypes. Credit deterioration and commercial paper are the best raw-series additions. This ranking prioritizes distinct information and a tractable data path; it is not a backtested alpha ranking.
+The VIX term structure is a fast feature prototype. SOFR minus IORB is already configured as `SOFR_IORB` in `config/funding.yml`; the benchmark board already configures `MORTGAGE30US` versus `DGS10` in `config/benchmark_rates.yml`. Credit deterioration and commercial paper were the best raw-series additions. This ranking prioritizes distinct information and a tractable data path; it is not a backtested alpha ranking.
+
+## Engineered features to explore next
+
+The inputs below are already active on this branch. These are research definitions, not claims that the features have been backtested or deployed.
+
+| Priority | Feature | Definition and implementation path | Main check |
+| --- | --- | --- | --- |
+| 1 | VIX term inversion | Same-date `VIXCLS - VXVCLS` in index points; `config/cross_series.yml` supports a two-leg spread. Positive values mean spot VIX is above three-month VIX. | Common market close/calendar, missing days, and Cboe reuse rights. |
+| 2 | Real-yield curve slope | Same-date `DFII10 - DFII5` in percentage points; another two-leg cross-series spread. | Real-yield coverage and incremental value beyond nominal yield and breakeven slopes. |
+| 3 | Bank-credit deterioration | For `DRBLACBN` and `DRCCLACBS`, calculate the change from four quarters earlier, in percentage points; include `DRSFRMACBS` after ingestion. This needs a lagged transform beyond the current cross-series operators. | Preserve release/vintage timestamps; do not blend the NSA business and SA consumer levels without normalization. |
+| 4 | Equal-weight participation | Same-date 63-trading-day total return of `RSP` minus `SPY`, using `gold.equity_total_return_index` rather than raw prices. This needs a trailing-return join. | Dividend-adjusted continuity, ETF history, and matching sessions. |
+| 5 | Implied versus trailing realized volatility | `VIXCLS` minus 21-session annualized SPY realized volatility from `gold.realized_volatility`, in volatility percentage points. This needs a cross-source, same-date join. | VIX is forward-looking while the realized input is trailing; label it an implied/realized gap, not a realized future risk premium. |
+
+`COMPOUT` already has a year-over-year percent-change presentation transform in `config/series_catalog.yml`. A separate four- or thirteen-week funding pulse is only useful after checking that the shorter window adds value beyond that generic transform.
 
 ## All 21 FRED-designated legacy IDs
 
