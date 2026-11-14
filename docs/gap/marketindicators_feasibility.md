@@ -64,6 +64,21 @@ The first two are fast feature prototypes. Credit deterioration and commercial p
 1. Verify warehouse rows and source entitlements for `SOFR`, `IORB`, `VIXCLS`, `RSP`, and `SPY`. Prototype same-date SOFR–IORB and VIX/VXV after adding `VXVCLS`.
 2. Add `COMPOUT`, `DFII5`, and the four verified credit/debt-service series with correct frequency, units, vintage settings and release timing. Do a dry run against real source data.
 3. Measure incremental value with walk-forward, point-in-time tests against existing EcoMedallion curve, funding, and recession features. Report coverage, staleness, correlation and out-of-sample stability; do not rank by in-sample fit alone.
-4. For a first new publisher feed, compare SEC FTD and CFTC COT. Both have official archives. Choose the one matching the intended securities-finance use case and its publication lag.
+4. For securities-finance research, evaluate a read-only exchange from MarketMedallion's existing SEC FTD and Reg SHO publications before building another provider collector. CFTC COT remains a separate new-connector candidate.
 
 Sources linked above establish availability and definitions as of review date. They do not establish permission to redistribute third-party index or survey data.
+
+## MarketMedallion overlap (checked 2026-11-14)
+
+MarketMedallion is the separate `market-medallion` repository, inspected at main tree `ac4d52094fefa2e9f5f55cb7c82bfee804aa0492`. Its [master pipeline register](https://github.com/thatquantguy44/market-medallion/blob/main/docs/pipelines.md) distinguishes implemented pipelines from proposed source contracts.
+
+| Candidate from this review | MarketMedallion status | Implication |
+| --- | --- | --- |
+| AAII bull–bear spread | Implemented in [AAII Gold](https://github.com/thatquantguy44/market-medallion/blob/main/src/market_data_pipeline/pipelines/aaii/data/gold.py) as `bull_bear_spread_pp`; authorized local data exists, recurring acquisition remains gated | Prefer its attributed output over a second AAII collector. |
+| SEC fails to deliver | Implemented in [SEC FTD pipeline](https://github.com/thatquantguy44/market-medallion/tree/main/src/market_data_pipeline/pipelines/sec_fails_to_deliver), with bounded real-source acceptance and a [research export](https://github.com/thatquantguy44/market-medallion/blob/main/src/market_data_pipeline/pipelines/sec_fails_to_deliver/research_export.py) | Prefer the exported observations and coverage, with publication basis intact. Broader history and scheduled refresh remain gated. |
+| Reg SHO threshold membership | Implemented for Nasdaq/NYSE in [threshold pipeline](https://github.com/thatquantguy44/market-medallion/tree/main/src/market_data_pipeline/pipelines/reg_sho_thresholds), with [membership/coverage/episode export](https://github.com/thatquantguy44/market-medallion/blob/main/src/market_data_pipeline/pipelines/reg_sho_thresholds/research_export.py) | A scope-labelled count can be derived after checking complete-date and market coverage. |
+| FINRA daily short-sale volume | Local source/parser, SQLite research and typed Parquet publication implemented; acquisition/replay/export/jobs remain open in [Spec012](https://github.com/thatquantguy44/market-medallion/blob/main/specs/spec012/README.md) | This is **trading flow**, not the legacy `SHORT_INTEREST` outstanding-position series. Do not mark short interest covered. |
+| CFTC COT, Cboe put/call, Nasdaq breadth | Draft contracts only; connectors absent per [register](https://github.com/thatquantguy44/market-medallion/blob/main/docs/pipelines.md) | Do not treat a spec or proposed package as data coverage. |
+| FRED macro candidates, VIX term structure, Tiingo ETF return features | No corresponding pipeline or manifest in MarketMedallion's main tree | EcoMedallion remains the appropriate owner of these source series and transforms. MarketMedallion need not duplicate the FRED/Tiingo ingestion merely to serve a downstream comparison. |
+
+This comparison checks repository code, manifests, acceptance records and the stated local-data status; it does not query either live warehouse. If EcoMedallion consumes a MarketMedallion research export, preserve dataset scope, source dates, capture/publication knowledge and coverage. The repositories' current contracts keep their runtime state and history independent.
