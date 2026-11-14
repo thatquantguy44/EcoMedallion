@@ -7,8 +7,9 @@ dashboards, optimizer inputs, and **point-in-time** macro features.
 
 Started FRED-only; the source layer is now pluggable, so a series declares its
 upstream API (`source:` in the manifest) and flows through the same path.
-**Thirteen sources are wired**: FRED, BLS, EIA, ECB, US Treasury, World Bank,
-BIS, BEA, Census, SEC (company financials), Tiingo, Stooq, and iShares — see
+**Sixteen sources are wired**: FRED, BLS, EIA, ECB, OECD, IMF, US Treasury,
+World Bank, BIS, BEA, Census, SEC (company financials), Tiingo, Stooq, iShares,
+and Kenneth French Data Library — see
 [Data sources](#data-sources).
 
 > 📄 The original product spec / engineering handoff lives in
@@ -527,17 +528,17 @@ on the CLI, use the config file, `FRED_API_KEY`, or a Databricks secret scope.
 ## Data sources
 
 A series' `source:` selects its upstream API and its client; every source lands
-in the same tables, tagged by `source` in the natural key. **Thirteen source
-clients are wired**, twelve of which have active series today.
+in the same tables, tagged by `source` in the natural key. **Sixteen source
+clients are wired**, thirteen of which have active series today.
 
 Counts below are the currently-active series per source
-(`active: true` in `manifests/*.yml`) — **2,840 active of 2,941 declared**.
+(`active: true` in `manifests/*.yml`) — **2,900 active of 3,012 declared**.
 
 | Source | `source:` | API key | Active series | Manifests |
 |---|---|---|---|---|
-| FRED | `fred` | required | **2,570** | the domain manifests |
+| FRED | `fred` | required | **2,576** | the domain manifests |
 | Tiingo | `tiingo` | **required** | 85 | `equity_tiingo.yml` |
-| BLS | `bls` | optional (keyless) | 60 | `bls_cpi_basket.yml`, `bls_cpi_basket_sa.yml`, `bls_labor.yml` |
+| BLS | `bls` | optional (keyless) | 79 | the `bls_*.yml` manifests |
 | World Bank | `worldbank` | none | 37 | `worldbank_global.yml` |
 | BIS | `bis` | none | 36 | `bis_policy_rates.yml` |
 | BEA | `bea` | **required** | 23 | `bea_pce_items.yml`, `bea_national_accounts.yml` |
@@ -546,11 +547,15 @@ Counts below are the currently-active series per source
 | US Treasury | `treasury` | none | 2 | `treasury_fiscal.yml` |
 | Census | `census` | optional (keyless) | 1 | `census_indicators.yml` |
 | iShares | `ishares` | none | 1 | `etf_holdings.yml` |
-| ECB | `ecb` | none | 20 | `ecb_rates.yml` |
+| ECB | `ecb` | none | 45 | `ecb_rates.yml`, `ecb_*_candidates.yml` |
+| OECD | `oecd` | none | 10 | `oecd_cli.yml` |
+| Kenneth French Data Library | `french` | none | 0 (manifest inactive) | `french_factors.yml` |
+| IMF | `imf` | none | 0 (no manifest) | — |
 | Stooq | `stooq` | none | **0** (manifest inactive) | `equity_stooq.yml` |
 
 SEC is the one that exercises the point-in-time machinery — each filing's `filed`
-date becomes a vintage. ECB ships with 20 verified active FX and rates series.
+date becomes a vintage. ECB has 45 active series across its rates and candidate
+manifests.
 Stooq ships inactive: its 89 entries are the price-return counterpart to the
 Tiingo total-return series, activated when you want the cross-source price
 reconciliation (`gold.equity_price_reconciliation`).
@@ -564,7 +569,7 @@ for keys, egress, and activation decisions see the register in
 
 ## The series universe
 
-The FRED universe spans **2,570 active series** across the domain manifests
+The FRED universe spans **2,576 active series** across the domain manifests
 (rates, inflation, labor, growth, money/banking, prices, production/housing,
 international, national accounts, regional/state). It grew from the handoff's
 27-series seed via **API-driven discovery** (below). It is a deliberate,
@@ -573,7 +578,7 @@ reviewed set — not all of FRED (~800k series). Grow it three ways:
 > **Ingestion and presentation are separate layers.** A manifest entry decides
 > what gets *pulled*; [`config/series_catalog.yml`](config/series_catalog.yml)
 > decides what gets *presentation semantics* (`econ_category`, `polarity`,
-> `default_transform`, `geo`). The catalog currently covers **290** of the
+> `default_transform`, `geo`). The catalog currently covers **295** of the
 > active series — those are the ones `gold.dim_series`,
 > `gold.macro_indicator_dashboard`, and `gold.macro_category_summary` are built
 > from. Everything else is still fully queryable via
@@ -764,8 +769,8 @@ checkboxed decision register in
 ## Status
 
 Implemented and tested (**984 non-Spark tests + a Spark/Delta integration suite in
-CI**, green on the latest commit). Highlights: **thirteen pluggable sources**
-(twelve with active series; Stooq ships inactive) with
+CI**, green on the latest commit). Highlights: **sixteen pluggable sources**
+(thirteen with active series; Stooq and French ship inactive, IMF has no manifest) with
 `source` in the natural key and source-aware Bronze lineage + replay;
 **API-driven FRED discovery**; **metadata governance** (drift + lifecycle vs.
 live FRED); **incremental loads** (full-on-first-run, then restate last N);

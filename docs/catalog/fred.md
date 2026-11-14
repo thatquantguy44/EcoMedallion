@@ -6,7 +6,7 @@ Upstream: Federal Reserve Economic Data API.
 
 Authentication: `FRED_API_KEY` is required for pipeline pulls.
 
-Current active FRED series: 2,570
+Current active FRED series: 2,576
 
 FRED is the broadest source in this project. The manifests ingest a large
 research universe, while `config/series_catalog.yml` selects a smaller set of
