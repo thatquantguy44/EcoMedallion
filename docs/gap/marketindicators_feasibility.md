@@ -61,8 +61,8 @@ The first two are fast feature prototypes. Credit deterioration and commercial p
 
 ## Next implementation slice
 
-1. Verify warehouse rows and source entitlements for `SOFR`, `IORB`, `VIXCLS`, `RSP`, and `SPY`. Prototype same-date SOFR–IORB and VIX/VXV after adding `VXVCLS`.
-2. Add `COMPOUT`, `DFII5`, and the four verified credit/debt-service series with correct frequency, units, vintage settings and release timing. Do a dry run against real source data.
+1. Verify warehouse rows and source entitlements for `SOFR`, `IORB`, `VIXCLS`, `VXVCLS`, `RSP`, and `SPY`. Prototype same-date VIX/VXV; review the existing SOFR–IORB funding spread.
+2. `VXVCLS`, `COMPOUT`, `DFII5`, `DRBLACBN`, and `DRCCLACBS` are active in EcoMedallion manifests and the terminal catalog. `DRSFRMACBS` and `TDSP` remain proposed. Check warehouse coverage and run a source-key dry run before using any newly ingested series in research.
 3. Measure incremental value with walk-forward, point-in-time tests against existing EcoMedallion curve, funding, and recession features. Report coverage, staleness, correlation and out-of-sample stability; do not rank by in-sample fit alone.
 4. For securities-finance research, evaluate a read-only exchange from MarketMedallion's existing SEC FTD and Reg SHO publications before building another provider collector. CFTC COT remains a separate new-connector candidate.
 
