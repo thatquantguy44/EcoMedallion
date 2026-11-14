@@ -10,18 +10,18 @@ MarketIndicators' `scripts/generate_samples.py` explicitly creates deterministic
 
 ## Exact raw-series gaps
 
-The following 21 FRED IDs appear in the legacy universe but in no EcoMedallion manifest. They are **candidates**: source metadata, availability, units, revisions, license, and overlap with alternate series still need verification before activation.
+The following 21 FRED-designated IDs appear in the legacy universe but in no EcoMedallion manifest. They are **candidates**, not 21 confirmed usable FRED series: several legacy identifiers or labels are wrong. See [the feasibility review](marketindicators_feasibility.md) for corrections, source checks, and ranking.
 
 | Theme | Missing FRED IDs | Suggested first use |
 | --- | --- | --- |
-| Money and funding | `MTSDS133FMS`, `M2V`, `COMPOUT` | Bill supply growth, velocity, wholesale funding growth |
+| Money and funding | `MTSDS133FMS`, `M2V`, `COMPOUT` | Monthly federal balance, velocity, wholesale funding growth |
 | Rates and inflation | `DFII5`, `T30YIE`, `MICH`, `CPIHOSSL`, `PCETRIM12M656SFRBDAL`, `CPIFOOD` | Real-rate and inflation breadth; confirm the food CPI identifier |
 | Labor and recession | `SAHMREALTIME`, `FRBATLWGT12MMM`, `RECPROUSM156N` | Wage and recession context; verify the published definition and lag |
 | Bank and household credit | `DRBLACBN`, `DRCCLACBS`, `DRSFRMACBS`, `DRAACBS`, `TDSP` | Delinquency and debt-service cycle |
-| International and fiscal | `FDHBFRBN`, `FYFSGDA188S`, `GFDEGDQ188S` | Foreign Treasury holdings, deficit and debt ratios |
+| Federal debt and fiscal | `FDHBFRBN`, `FYFSGDA188S`, `GFDEGDQ188S` | Federal Reserve Bank Treasury holdings, deficit and debt ratios |
 | Housing | `CSUSHPISA` | National home-price growth |
 
-The six yfinance symbols without an exact EcoMedallion manifest ID are `IEI`, `LUMBER=F`, `HG=F`, `^VIX`, `^VIX3M`, and `BTC-USD`. EcoMedallion already ingests FRED `VIXCLS`, so spot VIX has an alternate path. The futures, crypto, and three-month VIX symbols need source and continuity review. `IEI` is a relatively simple ETF candidate through the existing Tiingo path; check its use against existing `IEF` before adding it.
+The six yfinance symbols without an exact EcoMedallion manifest ID are `IEI`, `LUMBER=F`, `HG=F`, `^VIX`, `^VIX3M`, and `BTC-USD`. EcoMedallion already ingests FRED `VIXCLS`, so spot VIX has an alternate path. The futures and crypto symbols need source and continuity review. FRED hosts the three-month VIX equivalent `VXVCLS`, absent from EcoMedallion's manifests. `IEI` is a relatively simple ETF candidate through the existing Tiingo path; check its use against existing `IEF` before adding it.
 
 ## Feature engineering opportunities
 
@@ -41,7 +41,7 @@ MarketIndicators' `vix_implied_realized.py` contains a forward 21-bar SPY return
 
 ## Recommended sequence
 
-1. Add source metadata checks for the 21 FRED candidates, reconcile alternate definitions, and rank by current availability. Start with the five delinquency/debt-service IDs, `M2V`, `DFII5`, and `T30YIE`.
+1. Add source metadata checks for the 21 FRED candidates, reconcile alternate definitions, and rank by current availability. Start with the verified delinquency/debt-service IDs, `M2V`, `DFII5`, and FRED's `VXVCLS`. Resolve the legacy `T30YIE` ID before considering a 30-year breakeven.
 2. Prototype the three signals from existing inputs: SOFR–IORB, mortgage–Treasury, and RSP–SPY. Inspect actual warehouse coverage and publication timing first.
 3. Prototype constituent breadth using point-in-time membership and adjusted price history. Reject a breadth history built from today's constituent list.
 4. Treat publisher-driven securities-finance and sentiment series as separate ingestion projects. The legacy synthetic samples provide formulas and interface examples, not reusable source data.
