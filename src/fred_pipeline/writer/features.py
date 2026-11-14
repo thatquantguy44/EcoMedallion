@@ -305,6 +305,12 @@ def _combine_cross_series(
                 if vals[1] == 0:
                     continue
                 value = vals[0] / vals[1]
+            elif cd.op == "four_quarter_change":
+                current = date.fromisoformat(period)
+                prior = date(current.year - 1, current.month, 1).isoformat()
+                if prior not in aligned[0][1]:
+                    continue
+                value = vals[0] - aligned[0][1][prior]
             else:  # composite: weighted sum
                 value = sum(w * v for (w, _m), v in zip(aligned, vals))
             row = {
@@ -328,7 +334,9 @@ def compute_cross_series_features(
     ``defs`` defaults to ``config/cross_series.yml`` (see
     :func:`fred_pipeline.cross_series_config.load_cross_series_defs`). Each leg is
     aligned as-of to the feature's target frequency, then combined by ``op``
-    (``spread`` = a−b, ``ratio`` = a/b, ``composite`` = Σ wᵢ·legᵢ). A period is
+    (``spread`` = a−b, ``ratio`` = a/b, ``composite`` = Σ wᵢ·legᵢ,
+    ``four_quarter_change`` = quarterly level minus the same quarter last year).
+    A period is
     emitted only when *every* leg has an aligned value (ratio also requires a
     nonzero denominator). Uses **latest-revised** values. Returns rows
     ``(feature_name, op, observation_date, value)``.

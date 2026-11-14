@@ -132,6 +132,45 @@ def test_composite_weighted_sum():
                     "observation_date": "2024-03-01", "value": 100.0}]  # 0.5*100+0.25*200
 
 
+def test_four_quarter_change_requires_same_quarter_prior_year():
+    definition = _def("credit_delta", "four_quarter_change", "q", [("DR", 1.0)])
+    rows = [_row("DR", "2023-01-01", 1.2),
+            _row("DR", "2023-04-01", 1.3),
+            _row("DR", "2024-01-01", 1.8),
+            _row("DR", "2024-07-01", 2.0)]
+    out = compute_cross_series_features(rows, [definition])
+    assert [(r["observation_date"], r["value"]) for r in out] == [
+        ("2024-01-01", pytest.approx(0.6))]
+
+
+def test_four_quarter_change_uses_known_vintages_as_of_date():
+    definition = _def("credit_delta", "four_quarter_change", "q", [("DR", 1.0)])
+    silver = [_srow("DR", "2023-01-01", 1.2, "2023-05-01"),
+              _srow("DR", "2024-01-01", 1.8, "2024-05-01"),
+              _srow("DR", "2024-01-01", 2.0, "2024-08-01")]
+    assert compute_cross_series_features_pit(silver, [definition], as_of="2024-04-30") == []
+    early = compute_cross_series_features_pit(silver, [definition], as_of="2024-06-01")
+    late = compute_cross_series_features_pit(silver, [definition], as_of="2024-09-01")
+    assert early[0]["value"] == pytest.approx(0.6)
+    assert late[0]["value"] == pytest.approx(0.8)
+
+
+def test_credit_deterioration_config_uses_quarterly_rate_levels():
+    defs = {d.name: d for d in load_cross_series_defs()}
+    assert defs["business_loan_delinquency_4q_change"].legs == (("DRBLACBN", 1.0),)
+    assert defs["credit_card_delinquency_4q_change"].legs == (("DRCCLACBS", 1.0),)
+    assert all(defs[name].op == "four_quarter_change" and defs[name].frequency == "q"
+               for name in ("business_loan_delinquency_4q_change",
+                            "credit_card_delinquency_4q_change"))
+
+
+def test_four_quarter_change_rejects_nonquarterly_or_multiple_legs():
+    with pytest.raises(CrossSeriesConfigError):
+        _def("bad", "four_quarter_change", "m", [("DR", 1.0)])
+    with pytest.raises(CrossSeriesConfigError):
+        _def("bad", "four_quarter_change", "q", [("A", 1.0), ("B", 1.0)])
+
+
 def test_cross_frequency_asof_downsample():
     # daily A downsampled to quarterly = last obs in each quarter
     rows = [

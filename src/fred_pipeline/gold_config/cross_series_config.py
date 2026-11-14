@@ -12,6 +12,7 @@ a coarser target), then combined:
 * ``spread``    — ``leg0 - leg1``      (exactly 2 legs)
 * ``ratio``     — ``leg0 / leg1``      (exactly 2 legs; short leg ≠ 0)
 * ``composite`` — ``Σ weightᵢ · legᵢ`` (1+ legs, weights default 1.0)
+* ``four_quarter_change`` — quarterly leg minus the same quarter one year ago
 
 Defined in a reviewable YAML file so features are added without code changes —
 the same pattern as manifests and ``spreads.yml``.
@@ -27,7 +28,7 @@ import yaml
 
 DEFAULT_CROSS_SERIES_PATH = "config/cross_series.yml"
 
-VALID_OPS = {"spread", "ratio", "composite"}
+VALID_OPS = {"spread", "ratio", "composite", "four_quarter_change"}
 
 # Target frequencies for alignment, normalized to short codes.
 _FREQ_ALIASES = {
@@ -72,6 +73,12 @@ class CrossSeriesDef:
             raise CrossSeriesConfigError(
                 f"Feature {self.name!r} op {self.op!r} needs exactly 2 legs, "
                 f"got {len(self.legs)}"
+            )
+        if self.op == "four_quarter_change" and (
+            self.frequency != "q" or len(self.legs) != 1
+        ):
+            raise CrossSeriesConfigError(
+                f"Feature {self.name!r} four_quarter_change needs one quarterly leg"
             )
 
 

@@ -5,6 +5,7 @@
 #   op: spread    -> leg0 - leg1        (exactly 2 legs)
 #   op: ratio     -> leg0 / leg1        (exactly 2 legs; denominator != 0)
 #   op: composite -> sum(weight_i * leg_i)   (1+ legs; weight defaults to 1.0)
+#   op: four_quarter_change -> level minus same quarter last year (1 quarterly leg)
 #
 # Legs may be a bare series_id (weight 1.0) or {series_id, weight}. A feature is
 # emitted for a period only when every leg has an aligned value. If a leg's
@@ -26,6 +27,18 @@ features:
     frequency: d
     legs: [DFII10, DFII5]
     description: Ten-year minus five-year TIPS real yield, in percentage points.
+
+  - name: business_loan_delinquency_4q_change
+    op: four_quarter_change
+    frequency: q
+    legs: [DRBLACBN]
+    description: Business loan delinquency rate change versus the same quarter last year, in percentage points (NSA source).
+
+  - name: credit_card_delinquency_4q_change
+    op: four_quarter_change
+    frequency: q
+    legs: [DRCCLACBS]
+    description: Credit card delinquency rate change versus the same quarter last year, in percentage points (SA source).
 
   # Real 10y yield: nominal 10y Treasury minus 10y breakeven inflation (both
   # daily FRED series) — same-frequency spread, shown here for reference.
