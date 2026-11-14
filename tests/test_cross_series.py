@@ -65,6 +65,20 @@ def test_loader_missing_file_is_empty():
     assert load_cross_series_defs("does-not-exist.yml") == []
 
 
+def test_marketindicators_configured_spreads_use_active_series_ids():
+    defs = {d.name: d for d in load_cross_series_defs()}
+    assert defs["vix_term_inversion"].legs == (("VIXCLS", 1.0), ("VXVCLS", 1.0))
+    assert defs["real_yield_10y_5y"].legs == (("DFII10", 1.0), ("DFII5", 1.0))
+    rows = [_row("VIXCLS", "2024-01-02", 18.0),
+            _row("VXVCLS", "2024-01-02", 16.0),
+            _row("DFII10", "2024-01-02", 2.1),
+            _row("DFII5", "2024-01-02", 1.8)]
+    out = compute_cross_series_features(rows, list(defs.values()))
+    values = {r["feature_name"]: r["value"] for r in out if r["observation_date"] == "2024-01-02"}
+    assert values["vix_term_inversion"] == pytest.approx(2.0)
+    assert values["real_yield_10y_5y"] == pytest.approx(0.3)
+
+
 @pytest.mark.parametrize("legs, op", [(["A", "B", "C"], "spread"),
                                       (["A", "B", "C"], "ratio")])
 def test_spread_ratio_require_two_legs(legs, op):
