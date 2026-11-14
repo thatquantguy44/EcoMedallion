@@ -181,6 +181,7 @@ series:
   - {series_id: WTREGEN,  econ_category: MONEY, polarity: 0, default_transform: chg, scale: $B, notes: Treasury General Account}
   - {series_id: TOTRESNS, econ_category: MONEY, polarity: 0, default_transform: pc1, notes: Total reserves}
   - {series_id: DPSACBW027SBOG, econ_category: MONEY, polarity: 0, default_transform: pc1, notes: Commercial bank deposits}
+  - {series_id: COMPOUT, econ_category: MONEY, polarity: 0, default_transform: pc1, notes: Commercial paper outstanding (weekly stock)}
 
   # ---- FX --------------------------------------------------------------------
   - {series_id: DTWEXBGS, econ_category: FX, polarity: 0, default_transform: level, notes: Broad dollar index}

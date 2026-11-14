@@ -7089,3 +7089,17 @@ series:
   max_value: null
   tags:
   - money_banking
+- series_id: COMPOUT
+  title: Commercial Paper Outstanding
+  frequency: w
+  category: money_banking
+  units: Billions of Dollars
+  active: true
+  load_type: incremental
+  expected_update_frequency: weekly
+  vintage_enabled: true
+  validation_profile: standard
+  downstream_use_case: financial_conditions
+  priority: 2
+  min_value: 0
+  tags: [money_banking, funding, commercial_paper]
