@@ -245,19 +245,23 @@ short leg is nonzero). Columns: `spread_name`, `observation_date`,
 feature's target `frequency` (the last observation within each period), so legs
 of different cadence and different **sources** can be combined — e.g. daily
 Treasury debt ÷ quarterly BEA GDP. Ops: `spread` (a−b), `ratio` (a/b, guarded),
-`composite` (Σ weightᵢ·legᵢ). A period is emitted only when every leg has an
-aligned value. Both backends compute it via the one shared Python engine
+`composite` (Σ weightᵢ·legᵢ), `four_quarter_change` (quarterly level minus the
+same quarter one year earlier, in the source unit). A period is emitted only
+when every leg has an aligned value. Both backends compute it via the shared
+Python engine
 (`fred_pipeline.features.compute_cross_series_features`). Columns: `feature_name`,
 `op`, `observation_date`, `value`.
 
 ### `gold.fred_cross_series_feature_pit`
 **Point-in-time (`realtime_start`-aligned)** version of the above: each leg
-contributes the value that was **actually known** (as-first-reported — the
-earliest vintage per observation) rather than latest-revised, so the feature
-series is **leak-free for backtests**. Reads raw Silver (all vintages) via
+contributes its as-first-reported value (the earliest vintage per observation)
+rather than latest-revised. Reads raw Silver (all vintages) via
 `fred_pipeline.features.compute_cross_series_features_pit`; the function also
 accepts an `as_of` date to reconstruct the series as it stood on any past date.
-For non-vintage series this equals the latest-revised feature. Columns:
+The stored first-report rows are keyed by **observation period**, not release
+date; backtests must use Silver `realtime_start` or an explicit `as_of` query
+before joining them to decision dates. For non-vintage series this equals the
+latest-revised feature. Columns:
 `feature_name`, `op`, `observation_date`, `value`, `basis` (`first_report` or the
 as-of date).
 
@@ -630,6 +634,16 @@ date; their gap is reinvested income); and `trailing_12m_dividend` /
 `dividend_yield_pct`. Reconstructed from the **raw** inputs rather than
 Tiingo's `adjClose`, so it can be rebuilt and diffed when a dividend is
 restated.
+
+#### `gold.equal_weight_participation_daily`
+Trailing 63 matched-session total return of equal-weight `RSP` minus cap-weight
+`SPY`, using `gold.equity_total_return_index`. Columns:
+`observation_date`, `window_sessions` (=63), `rsp_total_return_pct`,
+`spy_total_return_pct`, and `excess_return_pp` (RSP minus SPY, in percentage
+points). Requires 64 common observations; unmatched sessions are excluded from
+both legs. Rebuilt after the Tiingo total-return index by both local and Spark
+Gold pipelines. It measures two ETFs' relative performance, not constituent
+breadth.
 
 #### `gold.realized_volatility`
 Annualized realized volatility (`docs/handoffs/asset_class_expansion.md` item

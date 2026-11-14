@@ -36,7 +36,7 @@ from __future__ import annotations
 from bisect import bisect_left
 from collections.abc import Iterable
 from datetime import date, timedelta
-from math import log, sqrt
+from math import isfinite, log, sqrt
 from typing import Any
 
 from fred_pipeline.equity_reconciliation_config import (
@@ -278,6 +278,46 @@ def compute_equity_total_return_index(
                 }
             )
             prev_close = close
+    return out
+
+
+def compute_equal_weight_participation(
+    total_return_rows: Iterable[dict[str, Any]], *, window_sessions: int = 63
+) -> list[dict[str, Any]]:
+    """RSP minus SPY trailing total return over matched trading sessions.
+
+    Both legs come from ``gold.equity_total_return_index`` so dividends and
+    splits are included. A row needs ``window_sessions + 1`` common dates;
+    unmatched dates never move just one leg's lookback window.
+    """
+    if window_sessions < 1:
+        raise ValueError("window_sessions must be positive")
+    by_ticker: dict[str, dict[str, float]] = {"RSP": {}, "SPY": {}}
+    for row in total_return_rows:
+        ticker = str(row.get("ticker", "")).upper()
+        if ticker not in by_ticker:
+            continue
+        value = row.get("total_return_index")
+        observation_date = _parse(row.get("observation_date"))
+        if value is None or observation_date is None:
+            continue
+        index = float(value)
+        if index > 0 and isfinite(index):
+            by_ticker[ticker][observation_date.isoformat()] = index
+
+    dates = sorted(set(by_ticker["RSP"]) & set(by_ticker["SPY"]))
+    out: list[dict[str, Any]] = []
+    for i in range(window_sessions, len(dates)):
+        current, prior = dates[i], dates[i - window_sessions]
+        rsp_return = (by_ticker["RSP"][current] / by_ticker["RSP"][prior] - 1) * 100
+        spy_return = (by_ticker["SPY"][current] / by_ticker["SPY"][prior] - 1) * 100
+        out.append({
+            "observation_date": current,
+            "window_sessions": window_sessions,
+            "rsp_total_return_pct": rsp_return,
+            "spy_total_return_pct": spy_return,
+            "excess_return_pp": rsp_return - spy_return,
+        })
     return out
 
 

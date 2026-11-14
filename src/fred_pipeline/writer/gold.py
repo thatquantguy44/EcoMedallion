@@ -1875,6 +1875,7 @@ def _build_equity_views(config: PipelineConfig, spark: Any) -> None:
     )
 
     from fred_pipeline.equity_views import (
+        compute_equal_weight_participation,
         compute_equity_price_reconciliation,
         compute_equity_return_daily,
         compute_equity_total_return_index,
@@ -1950,8 +1951,9 @@ def _build_equity_views(config: PipelineConfig, spark: Any) -> None:
         "overwriteSchema", "true"
     ).saveAsTable(config.table("gold", "index_constituents"))
 
+    total_return_rows = compute_equity_total_return_index(tiingo_rows)
     spark.createDataFrame(
-        compute_equity_total_return_index(tiingo_rows),
+        total_return_rows,
         schema=StructType(
             [
                 StructField("ticker", StringType()),
@@ -1982,6 +1984,29 @@ def _build_equity_views(config: PipelineConfig, spark: Any) -> None:
     ).write.format("delta").mode("overwrite").option(
         "overwriteSchema", "true"
     ).saveAsTable(config.table("gold", "equity_total_return_index"))
+
+    participation_rows = compute_equal_weight_participation(total_return_rows)
+    del total_return_rows
+    spark.createDataFrame(
+        participation_rows,
+        schema=StructType(
+            [
+                StructField("observation_date", StringType()),
+                StructField("window_sessions", IntegerType()),
+                StructField("rsp_total_return_pct", DoubleType()),
+                StructField("spy_total_return_pct", DoubleType()),
+                StructField("excess_return_pp", DoubleType()),
+            ]
+        ),
+    ).selectExpr(
+        "CAST(observation_date AS DATE) AS observation_date",
+        "window_sessions",
+        "rsp_total_return_pct",
+        "spy_total_return_pct",
+        "excess_return_pp",
+    ).write.format("delta").mode("overwrite").option(
+        "overwriteSchema", "true"
+    ).saveAsTable(config.table("gold", "equal_weight_participation_daily"))
 
     spark.createDataFrame(
         compute_equity_price_reconciliation(stooq_rows, tiingo_rows),
@@ -2570,6 +2595,7 @@ def build_gold(
         "equity_return_daily",
         "index_constituents",
         "equity_total_return_index",
+        "equal_weight_participation_daily",
         "equity_price_reconciliation",
         "realized_volatility",
     ):

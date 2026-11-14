@@ -621,6 +621,11 @@ CREATE TABLE IF NOT EXISTS gold_equity_total_return_index (
     price_return_index REAL, total_return_index REAL,
     trailing_12m_dividend REAL, dividend_yield_pct REAL
 );
+CREATE TABLE IF NOT EXISTS gold_equal_weight_participation_daily (
+    observation_date TEXT, window_sessions INTEGER,
+    rsp_total_return_pct REAL, spy_total_return_pct REAL,
+    excess_return_pp REAL
+);
 CREATE TABLE IF NOT EXISTS gold_equity_price_reconciliation (
     ticker TEXT, observation_date TEXT,
     stooq_close REAL, tiingo_adj_close REAL,
@@ -3031,6 +3036,20 @@ class LocalWarehouse:
         )(tiingo_total_return_rows, touched, full)
         del tiingo_total_return_rows
 
+        from fred_pipeline.equity_views import compute_equal_weight_participation
+
+        pair_rows = [dict(row) for row in self.conn.execute(
+            "SELECT ticker, observation_date, total_return_index "
+            "FROM gold_equity_total_return_index WHERE ticker IN ('RSP', 'SPY')"
+        ).fetchall()]
+        self.conn.execute("DELETE FROM gold_equal_weight_participation_daily")
+        self._insert(
+            "gold_equal_weight_participation_daily",
+            _stage_timed("equal_weight_participation")(
+                compute_equal_weight_participation
+            )(pair_rows),
+        )
+
         # ML pipeline: ML-0 feature matrix → ML-2 PCA scores/loadings → ML-4 anomaly.
         from fred_pipeline.anomaly import compute_macro_anomaly_scores
         from fred_pipeline.macro_pca import compute_macro_factor_scores
@@ -3186,6 +3205,7 @@ class LocalWarehouse:
                 "equity_return_daily",
                 "index_constituents",
                 "equity_total_return_index",
+                "equal_weight_participation_daily",
                 "equity_price_reconciliation",
                 "realized_volatility",
                 "ml_feature_matrix",

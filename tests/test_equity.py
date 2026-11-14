@@ -18,12 +18,32 @@ from fred_pipeline.sources.stooq import (
     normalize_stooq_observations,
 )
 from fred_pipeline.equity_views import (
+    compute_equal_weight_participation,
     compute_equity_price_reconciliation,
     compute_equity_return_daily,
     compute_index_constituents,
     compute_realized_volatility,
     select_canonical_equity_price_rows,
 )
+
+
+def test_equal_weight_participation_uses_matched_total_return_sessions():
+    rows = [
+        {"ticker": "RSP", "observation_date": "2024-01-02", "total_return_index": 100.0},
+        {"ticker": "SPY", "observation_date": "2024-01-02", "total_return_index": 100.0},
+        {"ticker": "RSP", "observation_date": "2024-01-03", "total_return_index": 103.0},
+        # SPY's missing January 3 session must not enter either return window.
+        {"ticker": "RSP", "observation_date": "2024-01-04", "total_return_index": 106.0},
+        {"ticker": "SPY", "observation_date": "2024-01-04", "total_return_index": 102.0},
+        {"ticker": "RSP", "observation_date": "2024-01-05", "total_return_index": 110.0},
+        {"ticker": "SPY", "observation_date": "2024-01-05", "total_return_index": 104.0},
+    ]
+    out = compute_equal_weight_participation(rows, window_sessions=2)
+    assert len(out) == 1
+    assert out[0]["observation_date"] == "2024-01-05"
+    assert out[0]["rsp_total_return_pct"] == pytest.approx(10.0)
+    assert out[0]["spy_total_return_pct"] == pytest.approx(4.0)
+    assert out[0]["excess_return_pp"] == pytest.approx(6.0)
 from fred_pipeline.equity_reconciliation_config import (
     EquityReconciliationConfig,
     EquityReconciliationConfigError,
@@ -593,6 +613,42 @@ def test_equity_local_build_gold_uses_tiingo_when_stooq_absent(tmp_path):
     assert ret[0]["close"] == pytest.approx(100.0)
     assert ret[1]["close"] == pytest.approx(102.0)
     assert ret[1]["price_return"] == pytest.approx(0.02)
+    wh.close()
+
+
+def test_equal_weight_participation_local_gold_build(tmp_path):
+    from datetime import date, timedelta
+
+    from fred_pipeline.config import Environment, PipelineConfig
+    from fred_pipeline.local_store import LocalWarehouse
+
+    wh = LocalWarehouse(
+        PipelineConfig(environment=Environment.DEV, fred_api_key="k"),
+        db_path=str(tmp_path / "participation.db"),
+    )
+    sessions = [date(2024, 1, 1) + timedelta(days=i) for i in range(90)]
+    sessions = [d for d in sessions if d.weekday() < 5][:64]
+    silver = []
+    for i, day in enumerate(sessions):
+        for ticker, daily_step in (("RSP", 0.001), ("SPY", 0.0005)):
+            for field, value in (("close", 100 * (1 + daily_step * i)),
+                                 ("divCash", 0.0), ("splitFactor", 1.0)):
+                silver.append({
+                    "source": "tiingo", "series_id": f"{ticker}:{field}",
+                    "observation_date": day.isoformat(), "realtime_start": "",
+                    "realtime_end": "", "value": value, "raw_value": str(value),
+                    "is_missing": False, "row_hash": f"{ticker}-{field}-{i}",
+                    "revision_number": 1, "ingested_at": "2024-06-01T00:00:00",
+                    "run_id": "r1",
+                })
+    wh.merge_silver(silver)
+    result = wh.build_gold()
+    assert result["equal_weight_participation_daily"] == "ok"
+    rows = wh.query("SELECT * FROM gold_equal_weight_participation_daily")
+    assert len(rows) == 1
+    assert rows[0]["observation_date"] == sessions[-1].isoformat()
+    assert rows[0]["window_sessions"] == 63
+    assert rows[0]["excess_return_pp"] == pytest.approx(3.15)
     wh.close()
 
 

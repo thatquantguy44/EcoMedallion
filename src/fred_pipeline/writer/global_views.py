@@ -492,6 +492,14 @@ POWERBI_CATALOG: tuple[dict[str, Any], ...] = (
         "True total return from Tiingo raw close+dividend+split (reinvested), with price/total indices, trailing-12m dividend and yield.",
     ),
     _entry(
+        "equal_weight_participation_daily",
+        "fact",
+        "EQUITY",
+        "1 / matched trading date",
+        "line (RSP minus SPY trailing total return)",
+        "63-session dividend-reinvested RSP total return minus SPY total return, in percentage points; matched dates only.",
+    ),
+    _entry(
         "equity_price_reconciliation",
         "reference",
         "EQUITY",
